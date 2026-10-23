@@ -103,14 +103,9 @@ class LiveSessionManager:
                 "Puck" if (partner and partner.gender == "男性") else "Aoede"
             )
 
-            # テレビ・周囲音カットモード時は、発話開始検知（StartSensitivity）をLOWにして背景音での誤反応を防止しつつ、
-            # 発話終了検知（EndSensitivity）はHIGHにして話し終えた瞬間に高速返答させる
+            # テレビ・周囲音カットはフロントエンドの近接ノイズゲート＋プリバッファで精密遮断するため、
+            # Gemini側のVADは常に最高感度（HIGH）＆ 無音判定 300ms に設定して返答レスポンスを最速化する
             noise_mode = getattr(self.profile, "noise_gate_mode", "tv_cut") or "tv_cut"
-            start_sens = (
-                types.StartSensitivity.START_SENSITIVITY_HIGH
-                if noise_mode == "normal"
-                else types.StartSensitivity.START_SENSITIVITY_LOW
-            )
 
             config = types.LiveConnectConfig(
                 response_modalities=["AUDIO"],
@@ -125,14 +120,14 @@ class LiveSessionManager:
                 thinking_config=types.ThinkingConfig(
                     thinking_budget=0
                 ),
-                # 音声区間検出（VAD）：テレビ等の遠方雑音に反応しにくく、かつ話し終わりは即座に検知
+                # 音声区間検出（VAD）：最高感度＋300ms無音判定で、話し終えた瞬間に即座に返答開始
                 realtime_input_config=types.RealtimeInputConfig(
                     automatic_activity_detection=types.AutomaticActivityDetection(
                         disabled=False,
-                        start_of_speech_sensitivity=start_sens,
+                        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
                         end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
-                        prefix_padding_ms=120,
-                        silence_duration_ms=480
+                        prefix_padding_ms=80,
+                        silence_duration_ms=300
                     )
                 ),
                 system_instruction=system_instruction,
@@ -220,6 +215,13 @@ class LiveSessionManager:
                                 mime_type="image/jpeg"
                             )
                         )
+
+                    elif msg_type == "eos":
+                        # クライアント側VADが発話終了を検知した瞬間、Geminiへ即座に音声ストリーム区切りを通知して爆速返答させる
+                        try:
+                            await session.send_realtime_input(audio_stream_end=True)
+                        except Exception as eos_err:
+                            logger.debug(f"audio_stream_end notice: {eos_err}")
 
                     elif msg_type == "user_transcript":
                         # スマホ等でブラウザ音声認識またはテキスト送信された発話のフォールバック処理

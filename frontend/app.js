@@ -20,11 +20,11 @@
   const SAMPLE_RATE_IN = 16000;   // マイク入力サンプリングレート
   const SAMPLE_RATE_OUT = 24000;  // Gemini返答音声サンプリングレート
 
-  // 周囲音・テレビ音声カットモード別のRMSしきい値設定（距離減衰フィルタ）
+  // 周囲音・テレビ音声カットモード別のRMSしきい値設定（スマホマイク最適チューニング版）
   const NOISE_GATE_PRESETS = {
-    normal: { rms: 0.006, attackChunks: 1, holdChunks: 7, label: '標準感度' },
-    tv_cut: { rms: 0.018, attackChunks: 2, holdChunks: 6, label: 'テレビ・周囲音カット' },
-    strict: { rms: 0.032, attackChunks: 2, holdChunks: 5, label: '強めカット' }
+    normal: { rms: 0.0022, hangoverChunks: 7, eosSilenceChunks: 6, label: '標準感度' },
+    tv_cut: { rms: 0.0055, hangoverChunks: 7, eosSilenceChunks: 6, label: 'テレビ・周囲音カット' },
+    strict: { rms: 0.0120, hangoverChunks: 6, eosSilenceChunks: 5, label: '強めカット' }
   };
 
   const state = {
@@ -32,6 +32,7 @@
     isSessionActive: false,
     isSimulation: false,
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
+    aiSpeechEndTimer: null,         // AI発話終了判定タイマー
     noiseGateMode: 'tv_cut',        // 現在のテレビ・周囲音カットモード
     lastVoiceActiveTime: 0,         // 近接音声がゲートを通過した最終時刻（Web Speech API連動用）
     speechDebounceTimer: null,      // 発話終了待ちデバウンスタイマー
@@ -186,7 +187,7 @@
 
     // VUメーター上のしきい値マーカー位置を更新
     const preset = NOISE_GATE_PRESETS[validMode];
-    const thresholdPercent = Math.min(95, Math.round(preset.rms * 650));
+    const thresholdPercent = Math.min(95, Math.round(preset.rms * 1400));
     if (dom.vuMeterThreshold) {
       dom.vuMeterThreshold.style.left = `${thresholdPercent}%`;
     }
@@ -401,12 +402,24 @@
     const bufferSize = 1024;
     const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
 
-    let silenceChunks = 0;
-    let attackChunks = 0;
-    let isUserCurrentlySpeaking = false;
+    let vadSilenceChunks = 0;
+    let voiceHangoverChunks = 0;
+    let isSpeakingUtterance = false;
+    let chunksSentInUtterance = 0;
+    let preSpeechRingBuffer = []; // 話し始めの最初の子音（「し」「か」等）が欠けないよう直前3チャンクを保持
 
     processor.onaudioprocess = (e) => {
       if (!state.isSessionActive || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
+
+      // AI発話中はエコー防止のためバッファをクリアして送信しない
+      if (state.isAiSpeaking) {
+        preSpeechRingBuffer = [];
+        voiceHangoverChunks = 0;
+        isSpeakingUtterance = false;
+        chunksSentInUtterance = 0;
+        vadSilenceChunks = 0;
+        return;
+      }
 
       const inputData = e.inputBuffer.getChannelData(0);
 
@@ -422,40 +435,58 @@
         }
       }
 
-      // 音量（RMS）計測による近接優先ノイズゲート処理（テレビ音声・遠方雑音の遮断）
+      // Int16 Little-Endian PCM へ変換
+      const pcm16 = new Int16Array(downsampledData.length);
       let sumSq = 0;
       for (let i = 0; i < downsampledData.length; i++) {
-        sumSq += downsampledData[i] * downsampledData[i];
+        const s = Math.max(-1, Math.min(1, downsampledData[i]));
+        sumSq += s * s;
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
       const rms = Math.sqrt(sumSq / downsampledData.length);
       const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.tv_cut;
 
       if (rms > preset.rms) {
-        attackChunks++;
-        silenceChunks = 0;
-        if (attackChunks >= preset.attackChunks) {
-          isUserCurrentlySpeaking = true;
-          state.lastVoiceActiveTime = Date.now();
+        // 発話開始時、直前3チャンク（約120ms）のプリバッファを先に送信して語頭欠けを完全防止
+        if (voiceHangoverChunks <= 0 && preSpeechRingBuffer.length > 0) {
+          for (const preBuf of preSpeechRingBuffer) {
+            state.socket.send(preBuf);
+            chunksSentInUtterance++;
+          }
+          preSpeechRingBuffer = [];
         }
+        voiceHangoverChunks = preset.hangoverChunks;
+        isSpeakingUtterance = true;
+        vadSilenceChunks = 0;
+        state.lastVoiceActiveTime = Date.now();
+
+        state.socket.send(pcm16.buffer);
+        chunksSentInUtterance++;
+      } else if (voiceHangoverChunks > 0) {
+        // 語尾（「〜ですね。」等）が途切れないよう余韻フレームをそのまま送信
+        voiceHangoverChunks--;
+        state.socket.send(pcm16.buffer);
+        chunksSentInUtterance++;
       } else {
-        attackChunks = 0;
-        silenceChunks++;
-        if (silenceChunks > preset.holdChunks) {
-          isUserCurrentlySpeaking = false;
+        // しきい値未満（無音または遠くのテレビ音）：サーバーへ送らずプリバッファに直近3チャンクだけ保持
+        preSpeechRingBuffer.push(pcm16.buffer);
+        if (preSpeechRingBuffer.length > 3) {
+          preSpeechRingBuffer.shift();
+        }
+
+        // ユーザーが話し終えた直後の沈黙を検知したら、即座に EOS (audio_stream_end) を送ってAIに爆速返答させる
+        if (isSpeakingUtterance) {
+          vadSilenceChunks++;
+          if (vadSilenceChunks >= preset.eosSilenceChunks) {
+            isSpeakingUtterance = false;
+            vadSilenceChunks = 0;
+            if (chunksSentInUtterance >= 3) {
+              state.socket.send(JSON.stringify({ type: 'eos' }));
+            }
+            chunksSentInUtterance = 0;
+          }
         }
       }
-
-      // Float32 (-1.0 ~ 1.0) を Int16 (-32768 ~ 32767) の Little-Endian PCM に変換
-      // AIが発話中、またはテレビ音等の遠方ノイズ（しきい値未満）の時は完全なゼロ（無音）を送信
-      const pcm16 = new Int16Array(downsampledData.length);
-      if (!state.isAiSpeaking && isUserCurrentlySpeaking) {
-        for (let i = 0; i < downsampledData.length; i++) {
-          const s = Math.max(-1, Math.min(1, downsampledData[i]));
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-        }
-      }
-
-      state.socket.send(pcm16.buffer);
     };
 
     // マイクスルー（ハウリング）防止用の無音GainNodeを介してdestinationへ接続
@@ -529,9 +560,9 @@
       ctx.stroke();
 
       // 3. VU音量レベルメーターの計算と反映（テレビ・周囲音カットしきい値連動）
-      const volumePercent = Math.min(100, Math.round(rms * 650)); // スマホ向けに感度向上
+      const volumePercent = Math.min(100, Math.round(rms * 1400)); // スマホ向けに感度向上
       const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.tv_cut;
-      const thresholdPercent = Math.min(95, Math.round(preset.rms * 650));
+      const thresholdPercent = Math.min(95, Math.round(preset.rms * 1400));
 
       dom.vuMeterFill.style.width = `${volumePercent}%`;
 
@@ -777,15 +808,14 @@
     state.isAiSpeaking = true;
     setAvatarState('speaking');
 
-    source.onended = () => {
-      if (ctx.currentTime >= state.nextPlaybackTime - 0.05) {
-        // スピーカーからの残響が消えるまで300ms待ってからマイクを即再開（レスポンス向上）
-        setTimeout(() => {
-          state.isAiSpeaking = false;
-          setAvatarState('listening');
-        }, 300);
-      }
-    };
+    if (state.aiSpeechEndTimer) {
+      clearTimeout(state.aiSpeechEndTimer);
+    }
+    const remainingMs = Math.max(150, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 180);
+    state.aiSpeechEndTimer = setTimeout(() => {
+      state.isAiSpeaking = false;
+      setAvatarState('listening');
+    }, remainingMs);
   }
 
   // ============================================================================
