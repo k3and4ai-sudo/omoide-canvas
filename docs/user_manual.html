@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>おもいでキャンバス (omoide-canvas) 取扱説明書・操作マニュアル</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #2c5e4f;
+      --primary-light: #3b7a67;
+      --primary-bg: #eef6f3;
+      --accent: #e07a5f;
+      --callout-red: #d93025;
+      --text-main: #22252a;
+      --text-muted: #5f6368;
+      --border: #dadce0;
+      --bg-warm: #faf8f5;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Noto Sans JP', sans-serif;
+      color: var(--text-main);
+      background: #f0ede6;
+      line-height: 1.55;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+
+    /* A4 ページ固定レイアウト */
+    .page {
+      width: 210mm;
+      height: 296mm;
+      margin: 12px auto;
+      padding: 9mm 14mm;
+      background: #ffffff;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.12);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+      page-break-after: always;
+      break-after: page;
+    }
+
+    .page:last-child {
+      page-break-after: auto;
+      break-after: auto;
+    }
+
+    @page {
+      size: A4 portrait;
+      margin: 0;
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+      }
+      .page {
+        margin: 0;
+        box-shadow: none;
+        width: 210mm;
+        height: 296mm;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+
+    /* ヘッダー */
+    .doc-header {
+      border-bottom: 2.5px solid var(--primary);
+      padding-bottom: 5px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+
+    .doc-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .doc-badge {
+      background: var(--primary);
+      color: #fff;
+      font-size: 10.5px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 99px;
+    }
+
+    .doc-title-main {
+      font-family: 'Zen Maru Gothic', sans-serif;
+      font-size: 18px;
+      color: var(--primary);
+      font-weight: 700;
+    }
+
+    .doc-page-num {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    /* ヒーローバナー */
+    .hero-banner {
+      background: linear-gradient(135deg, #2c5e4f, #3b7a67);
+      color: #fff;
+      border-radius: 10px;
+      padding: 10px 16px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .hero-banner h1 {
+      font-family: 'Zen Maru Gothic', sans-serif;
+      font-size: 19px;
+      margin-bottom: 3px;
+    }
+
+    .hero-banner p {
+      font-size: 11px;
+      opacity: 0.95;
+    }
+
+    .hero-url-pill {
+      background: rgba(255,255,255,0.16);
+      border: 1px solid rgba(255,255,255,0.4);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 10.5px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .hero-url-pill code {
+      font-size: 11px;
+      font-weight: 700;
+      color: #fff;
+      display: block;
+    }
+
+    /* セクション見出し */
+    .section-heading {
+      background: var(--primary-bg);
+      border-left: 5px solid var(--primary);
+      padding: 5px 12px;
+      border-radius: 0 6px 6px 0;
+      margin-bottom: 7px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .section-heading h2 {
+      font-size: 14px;
+      color: var(--primary);
+      font-weight: 700;
+    }
+
+    .section-heading span {
+      font-size: 10.5px;
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    /* キャプチャー＆解説カード */
+    .manual-card {
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 12px;
+      margin-bottom: 8px;
+      background: #ffffff;
+    }
+
+    .manual-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+
+    .tag-pill {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 900;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 5px;
+      flex-shrink: 0;
+    }
+
+    .manual-card-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .card-grid-2 {
+      display: grid;
+      grid-template-columns: 1.08fr 0.92fr;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .card-grid-wide-img {
+      display: grid;
+      grid-template-columns: 1.22fr 0.78fr;
+      gap: 12px;
+      align-items: center;
+    }
+
+    /* キャプチャー画像ラッパー（番号ピン付き） */
+    .capture-wrap {
+      position: relative;
+      border: 2px solid #cbd5e1;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #f8fafc;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    .capture-wrap img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .pin {
+      position: absolute;
+      width: 21px;
+      height: 21px;
+      background: var(--callout-red);
+      color: #fff;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      font-size: 11.5px;
+      font-weight: 900;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+      z-index: 10;
+    }
+
+    .num-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      background: var(--callout-red);
+      color: #ffffff;
+      font-weight: 900;
+      font-size: 10.5px;
+      border-radius: 50%;
+      margin-right: 4px;
+      vertical-align: middle;
+    }
+
+    .desc-list {
+      list-style: none;
+      font-size: 11.2px;
+    }
+
+    .desc-list li {
+      margin-bottom: 5px;
+      padding-left: 2px;
+    }
+
+    .feature-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      margin-top: 4px;
+    }
+
+    .feature-table th,
+    .feature-table td {
+      border: 1px solid var(--border);
+      padding: 4px 8px;
+      text-align: left;
+    }
+
+    .feature-table th {
+      background: var(--primary-bg);
+      color: var(--primary);
+      font-weight: 700;
+      width: 28%;
+    }
+
+    .tip-box {
+      background: #fff8e6;
+      border: 1.5px solid #f5c563;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 11px;
+    }
+
+    .tip-box strong {
+      color: #b06000;
+    }
+
+    /* フッター */
+    .doc-footer {
+      border-top: 1px solid var(--border);
+      padding-top: 6px;
+      font-size: 10.5px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .print-toolbar {
+      max-width: 210mm;
+      margin: 12px auto 0;
+      background: #2c5e4f;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .print-toolbar button {
+      background: #fff;
+      color: #2c5e4f;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="print-toolbar no-print">
+    <span>📘 <strong>おもいでキャンバス (omoide-canvas v2.0)</strong> 公式取扱説明書（全3ページ）</span>
+    <button onclick="window.print()">🖨️ PDFとして保存・印刷する</button>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Page 1: 概要・起動時のログイン画面・基本画面の見方 -->
+  <!-- ===================================================================== -->
+  <div class="page">
+    <div>
+      <header class="doc-header">
+        <div class="doc-header-left">
+          <span class="doc-badge">公式取扱説明書</span>
+          <span class="doc-title-main">🎨 おもいでキャンバス ご利用ガイド（基本操作編）</span>
+        </div>
+        <span class="doc-page-num">Page 1 / 3</span>
+      </header>
+
+      <div class="hero-banner">
+        <div>
+          <h1>おもいでキャンバス (omoide-canvas) 取扱説明書</h1>
+          <p>
+            AIパートナーと楽しく声でおしゃべりしながら、懐かしい思い出や故郷の風景をその場で<strong>水彩画</strong>として描き出す、回想法・見守り対話システムです。
+          </p>
+        </div>
+        <div class="hero-url-pill">
+          <span>🌐 スマホ・PC共通 公開アドレス</span>
+          <code>https://k3and4ai-sudo.github.io/omoide-canvas/</code>
+        </div>
+      </div>
+
+      <!-- 1. 起動時のログイン画面 -->
+      <div class="section-heading">
+        <h2>1. 起動時のログイン画面（APIキーの設定）</h2>
+        <span>※初回または別端末からアクセスした際に表示されます</span>
+      </div>
+
+      <div class="manual-card">
+        <div class="manual-card-header">
+          <span class="tag-pill">画面 1</span>
+          <span class="manual-card-title">ご自身の Gemini APIキーで安全にログインする</span>
+        </div>
+        <div class="card-grid-wide-img">
+          <div class="capture-wrap">
+            <img src="../static/manual/screenshots/cap_01_login.png" alt="ログイン画面キャプチャー">
+            <span class="pin" style="top: 43%; left: 32%;">1</span>
+            <span class="pin" style="top: 52%; left: 30%;">2</span>
+            <span class="pin" style="top: 62%; left: 48%;">3</span>
+            <span class="pin" style="top: 71%; left: 36%;">4</span>
+          </div>
+          <div>
+            <ul class="desc-list">
+              <li><span class="num-badge">1</span><strong>Gemini APIキー入力欄</strong>：<br>Google AI Studioで取得した <code>AIzaSy...</code> で始まるキーを入力します（右の「👁️」で文字確認可能）。</li>
+              <li><span class="num-badge">2</span><strong>端末ブラウザへの記憶チェック</strong>：<br>チェックを入れると、お使いのスマホ・PCのブラウザにのみ記憶され、次回から入力不要になります。</li>
+              <li><span class="num-badge">3</span><strong>このAPIキーでログインして開始</strong>：<br>キーの有効性を即時確認し、そのセッション専用キーとして対話を開始します。</li>
+              <li><span class="num-badge">4</span><strong>デモ体験 / 保存キー消去</strong>：<br>APIキーなしで画面の動きを試す場合や、端末に保存したキーを消去したい時に使います。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. メイン画面（待機中）の見方 -->
+      <div class="section-heading">
+        <h2>2. メイン画面（ご本人用キャンバス）の各部名称と機能</h2>
+        <span>※ご本人が迷わず使える「認知負荷ゼロ」のシンプル設計です</span>
+      </div>
+
+      <div class="manual-card">
+        <div class="manual-card-header">
+          <span class="tag-pill">画面 2</span>
+          <span class="manual-card-title">対話開始前のメイン画面（PC・タブレット横画面 / スマホ縦画面対応）</span>
+        </div>
+        <div class="card-grid-wide-img">
+          <div class="capture-wrap">
+            <img src="../static/manual/screenshots/cap_02_main_idle.png" alt="メイン待機画面キャプチャー">
+            <span class="pin" style="top: 5%; right: 16%;">1</span>
+            <span class="pin" style="top: 5%; right: 4%;">2</span>
+            <span class="pin" style="top: 28%; left: 16%;">3</span>
+            <span class="pin" style="top: 62%; left: 16%;">4</span>
+            <span class="pin" style="top: 80%; left: 16%;">5</span>
+            <span class="pin" style="top: 40%; left: 64%;">6</span>
+          </div>
+          <div>
+            <ul class="desc-list">
+              <li><span class="num-badge">1</span><strong>🔑 APIキー状態ボタン</strong>：現在ログイン中のキーの確認・変更・消去ができます。</li>
+              <li><span class="num-badge">2</span><strong>⚙️ 介護者設定・日報ボタン</strong>：プロフィール設定や日報、メモリーブックを開きます。</li>
+              <li><span class="num-badge">3</span><strong>AIパートナー表示</strong>：待機・傾聴・発話・お絵描きの4つの表情で温かく寄り添います（男性/女性切替対応）。</li>
+              <li><span class="num-badge">4</span><strong>🎙️ マイク音量・波形 ＆ 📺 周囲音対策</strong>：声の大きさを波形表示し、赤い縦線（しきい値）より小さいテレビ音や遠くの雑音を自動カットします。</li>
+              <li><span class="num-badge">5</span><strong>🎙️ お話をはじめるボタン</strong>：1回タップするだけでAIパートナーから挨拶が始まります。</li>
+              <li><span class="num-badge">6</span><strong>思い出キャンバス ＆ 特大字幕バー</strong>：描かれた水彩画と、お互いの会話字幕が大きく表示されます。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="doc-footer">
+      <span>おもいでキャンバス (omoide-canvas v2.0) 取扱説明書</span>
+      <span>1 / 3 ページ（次は「おしゃべりと水彩画の楽しみ方」）</span>
+    </footer>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Page 2: 対話中の画面・テレビ音カット・スマートフォン画面 -->
+  <!-- ===================================================================== -->
+  <div class="page">
+    <div>
+      <header class="doc-header">
+        <div class="doc-header-left">
+          <span class="doc-badge">対話・水彩画・スマホ操作</span>
+          <span class="doc-title-main">🎙️ おしゃべりと水彩画の楽しみ方・周囲音カット機能</span>
+        </div>
+        <span class="doc-page-num">Page 2 / 3</span>
+      </header>
+
+      <!-- 3. 対話中と水彩画生成 -->
+      <div class="section-heading">
+        <h2>3. おしゃべり中の画面と「思い出の水彩画」自動描画</h2>
+        <span>※会話を止めずにバックグラウンドで水彩画が描かれます</span>
+      </div>
+
+      <div class="manual-card">
+        <div class="manual-card-header">
+          <span class="tag-pill">画面 3</span>
+          <span class="manual-card-title">お話し中の様子（リアルタイム字幕・水彩画表示・環境音再生）</span>
+        </div>
+        <div class="card-grid-wide-img">
+          <div class="capture-wrap">
+            <img src="../static/manual/screenshots/cap_03_main_talking_art.png" alt="対話中・水彩画表示キャプチャー">
+            <span class="pin" style="top: 32%; left: 16%;">1</span>
+            <span class="pin" style="top: 66%; left: 22%;">2</span>
+            <span class="pin" style="top: 80%; left: 16%;">3</span>
+            <span class="pin" style="top: 38%; left: 65%;">4</span>
+            <span class="pin" style="top: 75%; left: 65%;">5</span>
+          </div>
+          <div>
+            <ul class="desc-list">
+              <li><span class="num-badge">1</span><strong>パートナーから温かい第一声</strong>：<br>「お話をはじめる」を押すと、設定したお名前（「お父さん」など）でAIから優しく話しかけます。</li>
+              <li><span class="num-badge">2</span><strong>高速レスポンス＆周囲音遮断</strong>：<br>話し終えると即座にAIが返答します。バーの<strong>赤い縦線</strong>より左側のテレビ音は送信されません。</li>
+              <li><span class="num-badge">3</span><strong>⏹️ お話を終了するボタン</strong>：<br>赤くなったボタンを押すといつでも対話を終了し、その日の「心のコンディション日報」を自動保存します。</li>
+              <li><span class="num-badge">4</span><strong>思い出の水彩画と環境音（♪）</strong>：<br>懐かしい風景や夢のお話が出ると、自動的に温かい水彩画を描き、秋の虫の声などの環境音を添えます。「もっと夕焼けにして」と伝えると描き直しもできます。</li>
+              <li><span class="num-badge">5</span><strong>リアルタイム特大字幕</strong>：<br>「🎤 あなた」と「🤖 パートナー」の言葉が文字でも表示されるため、耳が遠い方でも安心です。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- 4. テレビ・周囲音カットの使い分けとスマホ画面 -->
+      <div class="section-heading">
+        <h2>4. スマートフォンでの表示と「📺 周囲音対策（テレビ音カット）」の調整</h2>
+        <span>※リビング等でテレビがついている環境でも快適にお使いいただけます</span>
+      </div>
+
+      <div class="manual-card">
+        <div class="manual-card-header">
+          <span class="tag-pill">画面 4</span>
+          <span class="manual-card-title">スマートフォン縦画面レイアウト ＆ 周囲音対策モードの選び方</span>
+        </div>
+        <div style="display: grid; grid-template-columns: 0.42fr 1.58fr; gap: 14px; align-items: center;">
+          <div class="capture-wrap" style="max-width: 175px; margin: 0 auto;">
+            <img src="../static/manual/screenshots/cap_08_mobile_view.png" alt="スマホ縦画面キャプチャー">
+            <span class="pin" style="top: 38%; left: 50%;">1</span>
+            <span class="pin" style="top: 50%; left: 50%;">2</span>
+          </div>
+          <div>
+            <p style="font-size: 11.5px; margin-bottom: 6px;">
+              スマートフォンでアクセスすると、自動的に<strong>縦スクロール1列の見やすい画面</strong>に切り替わります（<span class="num-badge">1</span>で周囲音カット切替、<span class="num-badge">2</span>で対話開始・終了）。
+            </p>
+            <table class="feature-table">
+              <thead>
+                <tr>
+                  <th>周囲音対策モード</th>
+                  <th>おすすめの環境・特徴</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>テレビ・周囲音カット<br>（推奨・初期設定）</strong></td>
+                  <td>リビングでテレビがついている時におすすめです。スマホの近く（30〜50cm以内）で話す声だけを通し、離れたテレビの音声やBGMを遮断します。</td>
+                </tr>
+                <tr>
+                  <td><strong>強めカット<br>（テレビ大音量時）</strong></td>
+                  <td>テレビの音量が大きい時や、周囲でご家族が会話している時に選びます。マイクに向かってハッキリ話した声のみに反応します。</td>
+                </tr>
+                <tr>
+                  <td><strong>標準（静かなお部屋）</strong></td>
+                  <td>テレビを消した静かなお部屋で、小さな声やボソッとした呟きまでしっかり拾いたい時に選びます。</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="tip-box" style="margin-top: 8px;">
+              <strong>💡 スマホでより快適にお話しするためのコツ</strong><br>
+              ・話し始めの最初の言葉（「あのね」など）も欠けずに届くよう、<strong>0.3秒さかのぼり録音機能（プリバッファ）</strong>を搭載しています。普段通りの自然なペースでお話しください。
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="doc-footer">
+      <span>おもいでキャンバス (omoide-canvas v2.0) 取扱説明書</span>
+      <span>2 / 3 ページ（次は「ご家族・介護者用ダッシュボード編」）</span>
+    </footer>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- Page 3: 介護者・ご家族用ダッシュボード（プロフィール・パートナー・日報・絵本・テスト） -->
+  <!-- ===================================================================== -->
+  <div class="page">
+    <div>
+      <header class="doc-header">
+        <div class="doc-header-left">
+          <span class="doc-badge">ご家族・介護者向け機能</span>
+          <span class="doc-title-main">⚙️ 介護者設定・AIパートナー設定・日報・メモリーブック</span>
+        </div>
+        <span class="doc-page-num">Page 3 / 3</span>
+      </header>
+
+      <!-- 5. プロフィール・パートナー設定 -->
+      <div class="section-heading">
+        <h2>5. ご本人プロフィール設定 ＆ AIパートナー（名前・性別・性格・声）のカスタマイズ</h2>
+        <span>※画面右上の「⚙️ 介護者設定・日報」ボタンから開きます</span>
+      </div>
+
+      <div class="manual-card">
+        <div class="manual-card-header">
+          <span class="tag-pill">画面 5</span>
+          <span class="manual-card-title">👤 ご本人プロフィール設定タブ（会話相手・AIパートナー・緊急連絡先）</span>
+        </div>
+        <div class="card-grid-wide-img">
+          <div class="capture-wrap">
+            <img src="../static/manual/screenshots/cap_04_profile_settings.png" alt="プロフィール設定画面キャプチャー">
+            <span class="pin" style="top: 32%; left: 25%;">1</span>
+            <span class="pin" style="top: 66%; left: 25%;">2</span>
+            <span class="pin" style="top: 90%; left: 25%;">3</span>
+          </div>
+          <div>
+            <ul class="desc-list">
+              <li><span class="num-badge">1</span><strong>👴👵 会話相手（ご本人）の設定</strong>：<br>
+                ・<strong>お名前（呼び方）</strong>：「お父さん」「お母さん」「太郎さん」など、AIから呼んでほしい名前を設定します。<br>
+                ・<strong>年齢 / 性別 / 性格 / 進行度レベル</strong>：MCI・軽度・中等度に合わせて質問の仕方や水彩画のタッチを自動調整します。<br>
+                ・<strong>昔の仕事・故郷・趣味・思い出キーワード・NG話題</strong>：会話に自然に織り交ぜる話題と、絶対に触れない話題を指定できます。
+              </li>
+              <li><span class="num-badge">2</span><strong>🤖 AIパートナー（話し相手）の設定</strong>：<br>
+                ・パートナーの<strong>名前・年齢・性別（女性/男性）・性格・声質（5種類）</strong>を自由に変更できます。男性を選ぶとアバターも落ち着いた紺色テーマに変わります。
+              </li>
+              <li><span class="num-badge">3</span><strong>🚨 緊急連絡先設定（SOS通報）</strong>：<br>
+                対話中にご本人が体調不良や痛みを訴え、確認が取れた際にご家族へ自動通知する連絡先を設定します。
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. 日報・メモリーブック・動作診断 -->
+      <div class="section-heading">
+        <h2>6. 心のコンディション日報・メモリーブック（絵本）・動作確認ツール</h2>
+        <span>※離れたご家族とも毎日の様子や思い出の絵を共有できます</span>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 6px;">
+        <!-- 日報 -->
+        <div class="manual-card" style="margin-bottom: 0; padding: 7px 9px;">
+          <div class="manual-card-header">
+            <span class="tag-pill">画面 6</span>
+            <span class="manual-card-title" style="font-size:12px;">📋 心のコンディション日報</span>
+          </div>
+          <div class="capture-wrap" style="margin-bottom: 6px;">
+            <img src="../static/manual/screenshots/cap_05_daily_reports.png" alt="心のコンディション日報キャプチャー">
+          </div>
+          <p style="font-size: 10.5px; color: var(--text-main);">
+            対話終了ごとに、<strong>対話時間・笑顔やご様子・話題になった思い出・描いた水彩画の要約</strong>が日報として自動記録されます。
+          </p>
+        </div>
+
+        <!-- メモリーブック -->
+        <div class="manual-card" style="margin-bottom: 0; padding: 7px 9px;">
+          <div class="manual-card-header">
+            <span class="tag-pill">画面 7</span>
+            <span class="manual-card-title" style="font-size:12px;">🖼️ メモリーブック（絵本）</span>
+          </div>
+          <div class="capture-wrap" style="margin-bottom: 6px;">
+            <img src="../static/manual/screenshots/cap_06_memory_gallery.png" alt="メモリーブックキャプチャー">
+          </div>
+          <p style="font-size: 10.5px; color: var(--text-main);">
+            これまでの会話の中で描かれた<strong>思い出の水彩画がアルバム形式で一覧保存</strong>されます。ご家族団らんの話題づくりに最適です。
+          </p>
+        </div>
+
+        <!-- 動作確認・テスト -->
+        <div class="manual-card" style="margin-bottom: 0; padding: 7px 9px;">
+          <div class="manual-card-header">
+            <span class="tag-pill">画面 8</span>
+            <span class="manual-card-title" style="font-size:12px;">🛠️ 動作確認・テスト</span>
+          </div>
+          <div class="capture-wrap" style="margin-bottom: 6px;">
+            <img src="../static/manual/screenshots/cap_07_diagnostics.png" alt="動作確認テストキャプチャー">
+          </div>
+          <p style="font-size: 10.5px; color: var(--text-main);">
+            マイクを使わずに<strong>「サンプル水彩画の描画テスト」「緊急通報テスト」「アバター表情切替テスト」</strong>をワンタップで確認できます。
+          </p>
+        </div>
+      </div>
+
+      <div class="tip-box">
+        <strong>📌 トラブルシューティング（困ったときは）</strong><br>
+        ・<strong>声に反応しない場合</strong>：画面左下の「📺 周囲音対策」が「強めカット」になっている場合は「テレビ・周囲音カット」または「標準」に切り替えてみてください。<br>
+        ・<strong>スマホで音が出ない場合</strong>：スマホのマナーモード（消音）を解除し、メディア音量を上げてから「🎙️ お話をはじめる」をタップしてください。
+      </div>
+    </div>
+
+    <footer class="doc-footer">
+      <span>おもいでキャンバス (omoide-canvas v2.0) 取扱説明書</span>
+      <span>3 / 3 ページ</span>
+    </footer>
+  </div>
+
+</body>
+</html>
