@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>『おもいでキャンバス v2.0』プロジェクト仕様説明資料</title>
+<style>
+  :root {
+    --primary: #2c5e4f;
+    --secondary: #e07a5f;
+    --bg-warm: #fdfbf7;
+    --card-bg: #ffffff;
+    --text-main: #2b2d42;
+    --text-muted: #5c6479;
+    --border: #e6e1d6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+    background: #dcd7cc;
+    color: var(--text-main);
+    line-height: 1.6;
+  }
+  .toolbar {
+    position: sticky; top: 0; z-index: 100;
+    background: var(--primary); color: #fff;
+    padding: 12px 24px; display: flex; justify-content: space-between; align-items: center;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+  }
+  .toolbar button {
+    background: var(--secondary); color: #fff; border: none;
+    padding: 8px 18px; border-radius: 6px; font-weight: bold; cursor: pointer;
+    font-size: 14px;
+  }
+  .slide {
+    width: 297mm; height: 210mm;
+    background: var(--bg-warm);
+    margin: 20px auto; padding: 18mm 22mm;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+    display: flex; flex-direction: column; justify-content: space-between;
+    page-break-after: always; position: relative; overflow: hidden;
+  }
+  .slide-header {
+    border-bottom: 3px solid var(--primary);
+    padding-bottom: 10px; margin-bottom: 18px;
+    display: flex; justify-content: space-between; align-items: flex-end;
+  }
+  .slide-header h2 { font-size: 26px; color: var(--primary); }
+  .slide-header span { font-size: 13px; color: var(--text-muted); font-weight: bold; }
+  .slide-footer {
+    border-top: 1px solid var(--border); padding-top: 8px;
+    display: flex; justify-content: space-between; font-size: 12px; color: var(--text-muted);
+  }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; flex: 1; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; flex: 1; }
+  .card {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+  }
+  .card h3 { color: var(--primary); font-size: 18px; margin-bottom: 10px; border-left: 4px solid var(--secondary); padding-left: 10px; }
+  .badge {
+    display: inline-block; background: var(--secondary); color: #fff;
+    padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: bold; margin-bottom: 8px;
+  }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; font-size: 14px; }
+  th { background: var(--primary); color: #fff; padding: 10px 12px; text-align: left; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .flow-box {
+    background: #eef5f2; border: 2px dashed var(--primary);
+    border-radius: 10px; padding: 14px; text-align: center; font-weight: bold;
+  }
+  @media print {
+    body { background: none; }
+    .toolbar { display: none; }
+    .slide { margin: 0; box-shadow: none; width: 100%; height: 100vh; }
+    @page { size: A4 landscape; margin: 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <div><strong>おもいでキャンバス (omoide-canvas) v2.0</strong> — 仕様説明スライド資料（全5ページ）</div>
+  <button onclick="window.print()">🖨️ PDFとして保存 / 印刷（A4横推奨）</button>
+</div>
+
+<!-- Slide 1: 表紙 & コンセプト -->
+<div class="slide">
+  <div style="margin: auto 0; text-align: center;">
+    <span class="badge" style="font-size: 15px; padding: 6px 18px;">Gemini 4 Argon × マルチモーダル回想法システム</span>
+    <h1 style="font-size: 46px; color: var(--primary); margin: 16px 0 10px;">おもいでキャンバス</h1>
+    <p style="font-size: 20px; color: var(--text-muted); margin-bottom: 36px;">〜 言葉にした思い出や夢が、その場で温かい水彩画と音になって蘇る対話パートナー 〜</p>
+    
+    <div class="grid-3" style="text-align: left; max-width: 920px; margin: 0 auto;">
+      <div class="card">
+        <h3>1. 否定しない優しい傾聴</h3>
+        <p style="font-size: 14px;">同じ話を何度繰り返しても、AIが毎回初めて聞くように新鮮な驚きと共感で受け止め、ご本人の自尊心と安心感を守ります。</p>
+      </div>
+      <div class="card">
+        <h3>2. 思い出のリアルタイム絵画化</h3>
+        <p style="font-size: 14px;">写真が残っていない昔の記憶や、これから叶えたい夢を、会話しながらその場で「水彩画・映像・環境音」として画面に描きます。</p>
+      </div>
+      <div class="card">
+        <h3>3. 表情の見守りと緊急通報</h3>
+        <p style="font-size: 14px;">カメラで笑顔や困惑、疲労を読み取って会話のペースを調整。万が一のSOS時には誤検知を防ぎながらご家族へ即座に連絡します。</p>
+      </div>
+    </div>
+  </div>
+  <div class="slide-footer">
+    <span>Project: omoide-canvas Specification v2.0</span>
+    <span>Page 1 / 5</span>
+  </div>
+</div>
+
+<!-- Slide 2: 解決する課題と4つの臨床アプローチ -->
+<div class="slide">
+  <div class="slide-header">
+    <h2>1. なぜ「おもいでキャンバス」なのか？（背景と臨床的根拠）</h2>
+    <span>Clinical Approach & Value</span>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <h3>従来の回想法・認知症ケアの課題</h3>
+      <ul style="padding-left: 20px; font-size: 14.5px; line-height: 1.9;">
+        <li><strong>家族・介護スタッフの傾聴疲労：</strong> 同じ話を何度もゆっくり聞き続けることは人間にとって精神的・時間的負荷が高い。</li>
+        <li><strong>「写真がない記憶」の限界：</strong> 従来の回想法は手元の古い写真に頼るため、写真が残っていない思い出や「未来の夢」を視覚化できない。</li>
+        <li><strong>一般向けAIの不適合：</strong> 通常のAIは「長文で話す」「事実の間違いを訂正する」ため、認知症の方を混乱・疲弊させてしまう。</li>
+      </ul>
+      <div class="flow-box" style="margin-top: 16px; font-size: 14px;">
+        💡 <strong>解決策：</strong> 認知症ケアの4大手法（非薬物療法）をシステムプロンプトとマルチモーダル機能に完全統合
+      </div>
+    </div>
+    <div>
+      <table>
+        <thead>
+          <tr><th>臨床手法</th><th>ねらい</th><th>システムでの実現方法</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>① 回想法</strong></td>
+            <td>長期記憶の刺激・脳活性化</td>
+            <td>昔の仕事や故郷を尋ね、語られた情景を<strong>水彩画＋環境音</strong>で再現。共同描画で修正も行う。</td>
+          </tr>
+          <tr>
+            <td><strong>② バリデーション</strong></td>
+            <td>感情の受容・BPSD（不安）緩和</td>
+            <td><strong>否定・訂正の完全禁止</strong>。オウム返し（復唱）と優しいアバター表情で安心感を提供。</td>
+          </tr>
+          <tr>
+            <td><strong>③ 見当識訓練(RO)</strong></td>
+            <td>時間・季節の感覚維持</td>
+            <td>会話の始まりに「今日の日付・季節・天気」をテストにならない自然な挨拶として織り交ぜる。</td>
+          </tr>
+          <tr>
+            <td><strong>④ 認知刺激(CST)</strong></td>
+            <td>言語機能・前頭葉の賦活</td>
+            <td>ご本人を「人生の先生」として敬い、昔の料理の手順や仕事のコツを順序立てて教えてもらう。</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="slide-footer">
+    <span>Project: omoide-canvas Specification v2.0</span>
+    <span>Page 2 / 5</span>
+  </div>
+</div>
+
+<!-- Slide 3: 進行度別パーソナライズと視覚的ガードレール -->
+<div class="slide">
+  <div class="slide-header">
+    <h2>2. 進行度に応じた「対話の自動調整」と「医療安全ガードレール」</h2>
+    <span>Personalization & Safety Guardrails</span>
+  </div>
+  <div style="flex: 1; display: flex; flex-direction: column; gap: 16px;">
+    <table>
+      <thead>
+        <tr>
+          <th>進行度設定</th>
+          <th>対象者の状態イメージ</th>
+          <th>AIの1回の発話長</th>
+          <th>質問・対話のスタイル</th>
+          <th>生成ビジュアルの制限</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>予防・MCI</strong><br>(軽度認知障害)</td>
+          <td>自立しているが物忘れが増え、会話が億劫になり始める時期</td>
+          <td><strong>2〜3文</strong><br>(60〜80文字)</td>
+          <td><strong>オープンクエスチョン中心</strong><br>手順の説明要求、季節の連想ゲーム</td>
+          <td>ノスタルジックな絵画調<br>または昭和レトロ写真風</td>
+        </tr>
+        <tr>
+          <td><strong>軽度</strong><br>(Mild)</td>
+          <td>最近の記憶は抜けやすいが、昔の記憶や日常会話は保たれている</td>
+          <td><strong>1〜2文</strong><br>(40〜50文字)</td>
+          <td><strong>ヒント提示 ＋ 二択質問</strong><br>言葉が出にくい負担を減らす選択式</td>
+          <td><strong>温かい水彩画・色鉛筆画風に固定</strong><br>（実写の人物顔は生成禁止）</td>
+        </tr>
+        <tr>
+          <td><strong>中等度</strong><br>(Moderate)</td>
+          <td>長文理解が難しく見当識が曖昧だが、感情の察知能力は鋭敏</td>
+          <td><strong>1文のみ</strong><br>(20〜30文字)</td>
+          <td><strong>復唱（オウム返し）＋ 共感が8割</strong><br>複雑な質問はせず「今ここの快感情」を共有</td>
+          <td><strong>やさしい絵本・ちぎり絵風に固定</strong><br>（抽象度を高め、混乱や幻覚を防止）</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="grid-2">
+      <div class="card" style="background: #fff8f6; border-color: #f4c2b5;">
+        <h3>⚠️ なぜ「実写の人物」を禁止するのか？（テレビサイン対策）</h3>
+        <p style="font-size: 13.5px;">中等度以上の認知症では、画面に映るリアルな架空の人物を「家の中に知らない人がいる」と錯覚し、不安や妄想（BPSD）を引き起こすリスクがあります。そのため、システム側で自動的に<strong>「水彩画・絵本風」「人物は後ろ姿やシルエット、優しいイラスト調」</strong>にプロンプトを強制変換する安全フィルタを搭載しています。</p>
+      </div>
+      <div class="card">
+        <h3>🎨 AIパートナーの表情アバター表示（不気味の谷の回避）</h3>
+        <p style="font-size: 13.5px;">画面左側には、リアルな3DCGではなく<strong>優しいイラスト4種（待機・傾聴・発話笑顔・お絵描き中）</strong>を表示。AIが話を聞いている時は頷き、絵を生成している待ち時間はスケッチブックに描く姿へふわっと切り替わることで、沈黙や待ち時間の不安を解消します。</p>
+      </div>
+    </div>
+  </div>
+  <div class="slide-footer">
+    <span>Project: omoide-canvas Specification v2.0</span>
+    <span>Page 3 / 5</span>
+  </div>
+</div>
+
+<!-- Slide 4: マルチモーダル機能（カメラ・環境音・SOS緊急通報） -->
+<div class="slide">
+  <div class="slide-header">
+    <h2>3. カメラ見守り・五感刺激・緊急SOS通報の仕組み</h2>
+    <span>Multimodal Sensing & Emergency Alert</span>
+  </div>
+  <div class="grid-3">
+    <div class="card">
+      <span class="badge">視覚・感情センシング</span>
+      <h3>📷 カメラによる表情＆実物認識</h3>
+      <p style="font-size: 13.5px; margin-bottom: 10px;">タブレット等のカメラから1秒に1コマの映像を取得し、2つの用途に活用します。</p>
+      <ul style="padding-left: 18px; font-size: 13.5px;">
+        <li><strong>表情・声色の統合観察：</strong> 眉をひそめる（困惑）やあくび（疲労）を検知したら、即座に質問を止めて「ゆっくりで大丈夫ですよ」「お茶にしましょうか」とケア。</li>
+        <li><strong>実物アルバムの認識：</strong> 手元の昔の写真や道具をカメラにかざすと、AIがそれを認識して会話を広げる。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <span class="badge">五感・自己効力感の刺激</span>
+      <h3>🖌️ 段階的共同描画 ＆ 環境音</h3>
+      <p style="font-size: 13.5px; margin-bottom: 10px;">一方的に絵を見せるだけでなく、ご本人と一緒に作品を仕上げます。</p>
+      <ul style="padding-left: 18px; font-size: 13.5px;">
+        <li><strong>対話による描き直し：</strong> 生成された絵を見て「もっと赤い屋根だったよ」と話すと、その言葉を反映して絵をリアルタイムに修正。</li>
+        <li><strong>懐かしの環境音：</strong> 絵に合わせて「風鈴の音」「波の音」「お祭りの賑わい」などの穏やかな環境音を小さく重ね、五感で記憶を呼び覚ます。</li>
+      </ul>
+    </div>
+    <div class="card" style="border: 2px solid var(--secondary);">
+      <span class="badge">安心・安全ネットワーク</span>
+      <h3>🚨 誤検知防止付きSOS緊急通報</h3>
+      <p style="font-size: 13.5px; margin-bottom: 10px;">会話中に「助けて」「苦しい」「連絡して」といった言葉を検知した際の安全機構です。</p>
+      <ol style="padding-left: 18px; font-size: 13.5px;">
+        <li><strong>文脈判定（暴発防止）：</strong> テレビの話題や昔話の中の「助けて」では誤作動しない。</li>
+        <li><strong>本人への二段階確認：</strong> 必ず一度「ご家族に連絡を入れましょうか？」と優しく確認。</li>
+        <li><strong>即時発信：</strong> 本人が同意した瞬間、バックエンドから<strong>メール・LINE・電話（Twilio）</strong>で家族へ緊急通知。</li>
+      </ol>
+    </div>
+  </div>
+  <div class="slide-footer">
+    <span>Project: omoide-canvas Specification v2.0</span>
+    <span>Page 4 / 5</span>
+  </div>
+</div>
+
+<!-- Slide 5: システム構成と画面イメージ -->
+<div class="slide">
+  <div class="slide-header">
+    <h2>4. 画面レイアウトとシステムアーキテクチャ（Antigravity実装構成）</h2>
+    <span>UI Layout & System Architecture</span>
+  </div>
+  <div class="grid-2">
+    <div class="card" style="display: flex; flex-direction: column; justify-content: space-between;">
+      <h3>🖥️ 高齢者に優しい「認知負荷ゼロ」の2画面構成</h3>
+      <div style="border: 3px solid var(--primary); border-radius: 10px; padding: 14px; background: #f9f6f0; flex: 1; margin: 10px 0; display: flex; flex-direction: column; justify-content: space-between;">
+        <div style="text-align: center; font-weight: bold; color: var(--primary); border-bottom: 1px solid #ccc; padding-bottom: 6px;">おもいでキャンバス（ご本人用フルスクリーン画面）</div>
+        <div style="display: grid; grid-template-columns: 40% 58%; gap: 2%; flex: 1; margin: 12px 0;">
+          <div style="background: #fff; border-radius: 8px; padding: 12px; text-align: center; border: 1px solid #ddd;">
+            <div style="font-size: 38px; margin: 10px 0;">😊 🎨</div>
+            <div style="font-weight: bold; font-size: 14px;">AIパートナー表示</div>
+            <div style="font-size: 12px; color: #666; margin-top: 6px;">発話・傾聴・お絵描き中に合わせて優しいイラストが変化</div>
+          </div>
+          <div style="background: #eef5f2; border-radius: 8px; padding: 12px; text-align: center; border: 1px solid #b8d4c8;">
+            <div style="font-size: 38px; margin: 10px 0;">🍎 🌄</div>
+            <div style="font-weight: bold; font-size: 14px;">思い出キャンバス</div>
+            <div style="font-size: 12px; color: #444; margin-top: 6px;">水彩画・シネマグラフ動画がふわっと浮かび上がる<br>「秋のりんご畑と夕焼け」</div>
+          </div>
+        </div>
+        <div style="background: var(--primary); color: #fff; text-align: center; padding: 6px; border-radius: 6px; font-size: 13px;">● お話を聞いています...（特大ステータス表示・複雑なボタンなし）</div>
+      </div>
+      <p style="font-size: 12.5px; color: var(--text-muted);">※セッション終了後には、ご家族向けに「今日の笑顔・盛り上がった話題・描いた絵」をまとめた<strong>『心のコンディション日報』</strong>を自動生成します。</p>
+    </div>
+
+    <div class="card">
+      <h3>⚙️ バックエンド非同期アーキテクチャ</h3>
+      <ul style="padding-left: 18px; font-size: 13.5px; line-height: 1.8; margin-bottom: 14px;">
+        <li><strong>フロントエンド（HTML5 / JS）：</strong> WebAudio APIによる双方向PCM音声入出力、WebRTCカメラ1FPSキャプチャ、500msクロスフェード描画。</li>
+        <li><strong>バックエンドサーバー（Python / FastAPI）：</strong> APIキーの秘匿、プロフィールに応じた動的プロンプト生成、WebSocketストリーム中継。</li>
+        <li><strong>会話を止めない非同期処理（Asyncio）：</strong> 画像・動画生成（Imagen 3 / Veo）に10秒以上かかる間も、裏側（バックグラウンドタスク）で処理を実行し、表のGemini Liveの音声対話は一切途切れさせない設計。</li>
+      </ul>
+      <div class="flow-box" style="text-align: left; font-size: 13px; line-height: 1.7;">
+        <strong>📁 実装モジュール構成（<code>omoide-canvas/</code>）</strong><br>
+        ・<code>backend/models.py</code> : プロフィール・日報データモデル<br>
+        ・<code>backend/prompt_builder.py</code> : 進行度別制御・安全フィルタ<br>
+        ・<code>backend/live_session.py</code> : Gemini 4 Argon 双方向通信管理<br>
+        ・<code>backend/media_generator.py</code> : 水彩画・動画の非同期生成<br>
+        ・<code>backend/emergency_tool.py</code> : 二段階確認付きSOS通報処理
+      </div>
+    </div>
+  </div>
+  <div class="slide-footer">
+    <span>Project: omoide-canvas Specification v2.0</span>
+    <span>Page 5 / 5</span>
+  </div>
+</div>
+
+</body>
+</html>

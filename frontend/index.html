@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>おもいでキャンバス (omoide-canvas) 〜 認知症ケア・回想法対話システム 〜</title>
+  <meta name="description" content="Gemini Liveと画像生成AIを活用した、認知症予防・回想法・見守り対話パートナーシステム">
+  <!-- Google Fonts: 優しい和モダン丸ゴシック -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/app/styles.css">
+</head>
+<body>
+
+  <!-- ======================================================================= -->
+  <!-- ヘッダーバー（ご本人への認知負荷を抑えたミニマル構成） -->
+  <!-- ======================================================================= -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-icon">🎨</span>
+      <h1 class="brand-title">おもいでキャンバス</h1>
+      <span class="user-greeting" id="userGreeting">読み込み中...</span>
+    </div>
+    <div class="header-controls">
+      <button id="btnToggleCaregiver" class="btn-subtle" title="介護者・ご家族用設定" aria-label="介護者用ダッシュボード">
+        ⚙️ 介護者設定・日報
+      </button>
+    </div>
+  </header>
+
+  <!-- ======================================================================= -->
+  <!-- メイン領域：ご本人用「認知負荷ゼロ」2画面レイアウト -->
+  <!-- ======================================================================= -->
+  <main class="canvas-main">
+    
+    <!-- 左パネル: AIパートナー アバター（不気味の谷を避けた温かいイラスト） -->
+    <section class="partner-panel" aria-label="AIパートナー">
+      <div class="avatar-card">
+        <div class="avatar-container" id="avatarContainer" data-state="idle">
+          <!-- 待機中 (idle) アバター SVG -->
+          <svg class="avatar-svg state-idle" viewBox="0 0 200 200" aria-hidden="true">
+            <circle cx="100" cy="100" r="85" fill="#fefae0" stroke="#2c5e4f" stroke-width="4"/>
+            <!-- 髪・帽子 -->
+            <path d="M 40 90 Q 100 20 160 90 Q 140 40 100 40 Q 60 40 40 90 Z" fill="#2c5e4f"/>
+            <!-- 目 (穏やかな微笑み) -->
+            <path class="eye left" d="M 65 95 Q 75 88 85 95" stroke="#2c5e4f" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <path class="eye right" d="M 115 95 Q 125 88 135 95" stroke="#2c5e4f" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <!-- ほっぺ -->
+            <ellipse cx="65" cy="110" rx="10" ry="6" fill="#f4a261" opacity="0.6"/>
+            <ellipse cx="135" cy="110" rx="10" ry="6" fill="#f4a261" opacity="0.6"/>
+            <!-- 口 (微笑み) -->
+            <path d="M 85 125 Q 100 138 115 125" stroke="#e07a5f" stroke-width="4" fill="none" stroke-linecap="round"/>
+          </svg>
+
+          <!-- 傾聴中 (listening) アバター SVG -->
+          <svg class="avatar-svg state-listening" viewBox="0 0 200 200" aria-hidden="true">
+            <circle cx="100" cy="100" r="85" fill="#fefae0" stroke="#2c5e4f" stroke-width="4"/>
+            <path d="M 40 90 Q 100 20 160 90 Q 140 40 100 40 Q 60 40 40 90 Z" fill="#2c5e4f"/>
+            <!-- 目 (大きく開いて傾聴) -->
+            <circle cx="75" cy="95" r="7" fill="#2c5e4f"/>
+            <circle cx="125" cy="95" r="7" fill="#2c5e4f"/>
+            <circle cx="77" cy="93" r="2.5" fill="#fff"/>
+            <circle cx="127" cy="93" r="2.5" fill="#fff"/>
+            <ellipse cx="65" cy="112" rx="10" ry="6" fill="#f4a261" opacity="0.6"/>
+            <ellipse cx="135" cy="112" rx="10" ry="6" fill="#f4a261" opacity="0.6"/>
+            <!-- 口 (うんうんと頷き) -->
+            <path d="M 90 128 Q 100 135 110 128" stroke="#e07a5f" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <!-- 手 (耳に添える仕草) -->
+            <path d="M 145 105 Q 165 95 160 115" stroke="#2c5e4f" stroke-width="4" fill="none" stroke-linecap="round"/>
+          </svg>
+
+          <!-- 発話中 (speaking) アバター SVG -->
+          <svg class="avatar-svg state-speaking" viewBox="0 0 200 200" aria-hidden="true">
+            <circle cx="100" cy="100" r="85" fill="#fefae0" stroke="#2c5e4f" stroke-width="4"/>
+            <path d="M 40 90 Q 100 20 160 90 Q 140 40 100 40 Q 60 40 40 90 Z" fill="#2c5e4f"/>
+            <!-- 目 (三日月の笑顔) -->
+            <path d="M 65 95 Q 75 80 85 95" stroke="#2c5e4f" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <path d="M 115 95 Q 125 80 135 95" stroke="#2c5e4f" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <ellipse cx="65" cy="110" rx="12" ry="7" fill="#f4a261" opacity="0.7"/>
+            <ellipse cx="135" cy="110" rx="12" ry="7" fill="#f4a261" opacity="0.7"/>
+            <!-- 口 (開いて発話) -->
+            <ellipse class="speaking-mouth" cx="100" cy="128" rx="14" ry="12" fill="#e07a5f"/>
+            <path d="M 90 122 Q 100 124 110 122" stroke="#fff" stroke-width="2" fill="none"/>
+          </svg>
+
+          <!-- お絵描き中 (drawing) アバター SVG -->
+          <svg class="avatar-svg state-drawing" viewBox="0 0 200 200" aria-hidden="true">
+            <circle cx="100" cy="100" r="85" fill="#fefae0" stroke="#2c5e4f" stroke-width="4"/>
+            <path d="M 40 90 Q 100 20 160 90 Q 140 40 100 40 Q 60 40 40 90 Z" fill="#2c5e4f"/>
+            <!-- 目 (下を向いて集中) -->
+            <path d="M 68 98 Q 75 106 82 98" stroke="#2c5e4f" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <path d="M 118 98 Q 125 106 132 98" stroke="#2c5e4f" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <!-- スケッチブックと絵筆 -->
+            <rect x="70" y="125" width="60" height="40" rx="4" fill="#fff" stroke="#2c5e4f" stroke-width="3"/>
+            <line x1="80" y1="135" x2="110" y2="135" stroke="#e07a5f" stroke-width="2"/>
+            <line x1="80" y1="145" x2="120" y2="145" stroke="#81b29a" stroke-width="2"/>
+            <!-- 絵筆 -->
+            <path class="brush-motion" d="M 125 120 L 140 100" stroke="#3d405b" stroke-width="4" stroke-linecap="round"/>
+            <circle cx="125" cy="120" r="3" fill="#e07a5f"/>
+          </svg>
+        </div>
+
+        <div class="partner-name-badge">
+          <span class="badge-dot"></span>
+          <span id="partnerStatusText">パートナー：準備完了</span>
+        </div>
+      </div>
+
+      <!-- マイク音量レベル ＆ リアルタイムオシロスコープ波形 -->
+      <div class="audio-monitor-card" id="audioMonitorCard">
+        <div class="monitor-header">
+          <span class="monitor-label">🎙️ マイク音量・オシロ波形</span>
+          <span class="vu-level-text" id="vuLevelText">待機中</span>
+        </div>
+        <!-- オシロスコープ波形キャンバス -->
+        <canvas id="oscilloscopeCanvas" class="oscilloscope-canvas" width="280" height="46"></canvas>
+        <!-- VU音量レベルメーター -->
+        <div class="vu-meter-track">
+          <div class="vu-meter-fill" id="vuMeterFill"></div>
+        </div>
+      </div>
+
+      <!-- 対話開始・終了ボタン（ご本人でも直感的に押せる特大デザイン） -->
+      <div class="session-trigger-area">
+        <button id="btnSessionToggle" class="btn-primary-large" aria-pressed="false">
+          <span class="btn-icon">🎙️</span>
+          <span class="btn-text">お話をはじめる</span>
+        </button>
+        <p class="session-hint" id="sessionHint">ボタンを押して、マイクに向かってゆっくりお話しください</p>
+      </div>
+    </section>
+
+    <!-- 右パネル: 思い出キャンバス（水彩画・動画クロスフェード表示 ＆ 文字起こし字幕） -->
+    <section class="memory-canvas-panel" aria-label="思い出キャンバス">
+      <div class="canvas-frame">
+        <div class="media-display-area" id="mediaDisplayArea">
+          <!-- 初期表示：プレースホルダー（穏やかな風景） -->
+          <div class="canvas-placeholder" id="canvasPlaceholder">
+            <div class="placeholder-art">
+              <span class="art-icon">🏞️</span>
+              <h2>あなたの思い出をここに描きます</h2>
+              <p>「昔よく行った場所」や「懐かしいお仕事」「これからの夢」を<br>のんびり教えてくださいね。</p>
+            </div>
+          </div>
+
+          <!-- 生成メディア画像（フェードイン表示） -->
+          <img id="memoryImage" class="memory-visual hidden" alt="生成された思い出の風景" src="">
+          
+          <!-- 動画メディア（シネマグラフ表示） -->
+          <video id="memoryVideo" class="memory-visual hidden" autoplay loop muted playsinline></video>
+
+          <!-- 描画中ローディング演出（水彩がにじむエフェクト） -->
+          <div id="drawingOverlay" class="drawing-overlay hidden">
+            <div class="watercolor-spinner"></div>
+            <p class="drawing-text">絵の具をといて、情景を描いています...</p>
+          </div>
+        </div>
+
+        <!-- リアルタイム文字起こし・字幕バー（耳が遠い方やご家族にも優しい特大字幕） -->
+        <div class="subtitles-panel" id="subtitlesPanel">
+          <div class="subtitle-row user-row">
+            <span class="speaker-tag user-tag">🎤 あなた</span>
+            <span class="subtitle-text" id="userTranscriptText">「お話をはじめる」を押して、声を出してみてください</span>
+          </div>
+          <div class="subtitle-row ai-row">
+            <span class="speaker-tag ai-tag">🤖 パートナー</span>
+            <span class="subtitle-text" id="aiTranscriptText">こんにちは！今日もよろしくお願いします。</span>
+          </div>
+        </div>
+
+        <!-- 絵のキャプションバー -->
+        <div class="canvas-caption-bar" id="canvasCaptionBar">
+          <div class="caption-content">
+            <span class="caption-tag" id="captionTag">思い出</span>
+            <h2 class="caption-title" id="captionTitle">秋の信州松本とりんご畑</h2>
+          </div>
+          <div class="caption-sound-indicator hidden" id="soundIndicator">
+            <span class="sound-wave">♪</span>
+            <span id="soundName">秋の虫の声</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ======================================================================= -->
+  <!-- フッターステータスバー（特大表示・穏やかな波形アニメーション） -->
+  <!-- ======================================================================= -->
+  <footer class="app-status-bar" id="appStatusBar">
+    <div class="status-indicator">
+      <span class="status-dot" id="statusDot"></span>
+      <span class="status-message" id="statusMessage">マイク接続の準備ができました</span>
+    </div>
+    <div class="visualizer-container" id="visualizerContainer">
+      <div class="wave-bar"></div>
+      <div class="wave-bar"></div>
+      <div class="wave-bar"></div>
+      <div class="wave-bar"></div>
+      <div class="wave-bar"></div>
+    </div>
+    <!-- 1FPS見守りカメラ用不可視キャンバス・ビデオ要素 -->
+    <div class="hidden-vision-elements" aria-hidden="true">
+      <video id="visionCamera" autoplay playsinline muted></video>
+      <canvas id="visionCanvas" width="320" height="240"></canvas>
+    </div>
+  </footer>
+
+  <!-- ======================================================================= -->
+  <!-- 介護者・ご家族用モーダル（設定・日報・メモリーブック） -->
+  <!-- ======================================================================= -->
+  <div class="modal-backdrop hidden" id="caregiverModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2 id="modalTitle">⚙️ 介護者・ご家族用ダッシュボード</h2>
+        <button id="btnCloseModal" class="btn-close" aria-label="閉じる">&times;</button>
+      </div>
+
+      <!-- モーダルタブ切り替え -->
+      <div class="modal-tabs">
+        <button class="tab-btn active" data-tab="tabProfile">👤 ご本人プロフィール設定</button>
+        <button class="tab-btn" data-tab="tabReports">📋 心のコンディション日報</button>
+        <button class="tab-btn" data-tab="tabGallery">🖼️ メモリーブック（絵本）</button>
+        <button class="tab-btn" data-tab="tabDiagnostic">🛠️ 動作確認・テスト</button>
+      </div>
+
+      <div class="modal-body">
+        
+        <!-- タブ1: プロフィール・進行度設定 -->
+        <div class="tab-pane active" id="tabProfile">
+          <form id="profileForm" class="settings-form">
+            
+            <!-- ① 会話相手（ご本人・お父さん等）の設定 -->
+            <fieldset class="form-fieldset" style="border-color: var(--primary); background: #f9fcfa; margin-top: 0; margin-bottom: 18px;">
+              <legend style="color: var(--primary);">👴👵 会話相手（ご本人）のプロフィール・性格設定</legend>
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="inputCallName">お名前（パートナーからの呼び方）</label>
+                  <input type="text" id="inputCallName" name="call_name" required placeholder="例: お父さん、太郎さん、お母さん">
+                </div>
+                <div class="form-group">
+                  <label for="inputAgeGroup">年齢・年代</label>
+                  <input type="text" id="inputAgeGroup" name="age_group" placeholder="例: 82歳、80代、75歳">
+                </div>
+                <div class="form-group">
+                  <label for="selectUserGender">性別</label>
+                  <select id="selectUserGender" name="user_gender">
+                    <option value="男性" selected>男性</option>
+                    <option value="女性">女性</option>
+                    <option value="その他">その他</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="selectDementiaLevel">進行度レベル（対話・画風の自動調整）</label>
+                  <select id="selectDementiaLevel" name="dementia_level">
+                    <option value="mci">MCI（予防・軽度認知障害）：段取り質問・連想</option>
+                    <option value="mild" selected>軽度（Mild）：ヒント付き二択・水彩画風固定</option>
+                    <option value="moderate">中等度（Moderate）：復唱と共感8割・絵本調固定</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="inputOccupation">昔の仕事・得意だったこと</label>
+                  <input type="text" id="inputOccupation" name="former_occupation" placeholder="例: 小学校の先生、大工、料理人">
+                </div>
+                <div class="form-group">
+                  <label for="inputHometown">ゆかりの土地（故郷）</label>
+                  <input type="text" id="inputHometown" name="hometown" placeholder="例: 長野県松本市">
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="inputUserPersonality">ご本人の性格・人柄（AIが配慮して接します）</label>
+                <input type="text" id="inputUserPersonality" name="user_personality" placeholder="例: 温厚で家族思い、昔の仕事に誇りを持っている、少し照れ屋">
+              </div>
+
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="inputHobbies">好きなこと・趣味（カンマ区切り）</label>
+                  <input type="text" id="inputHobbies" name="hobbies" placeholder="例: 園芸, 将棋, 釣り">
+                </div>
+                <div class="form-group">
+                  <label for="inputTriggerWords">思い出のキーワード（会話に織り交ぜる話題）</label>
+                  <input type="text" id="inputTriggerWords" name="trigger_words" placeholder="例: リンゴ畑, 北アルプス, 運動会">
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 0;">
+                <label for="inputNgTopics" class="text-danger">絶対に触れてはいけないNG話題</label>
+                <input type="text" id="inputNgTopics" name="ng_topics" placeholder="例: 最近のニュース, 配偶者の他界, 物忘れの指摘">
+              </div>
+            </fieldset>
+
+            <!-- ② AIパートナー（話し相手）の設定 -->
+            <fieldset class="form-fieldset" style="border-color: #81b29a; background: #fdfaf5; margin-bottom: 18px;">
+              <legend style="color: #2c5e4f;">🤖 AIパートナー（話し相手）の名前・性別・性格・声の設定</legend>
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="inputPartnerName">パートナーの名前</label>
+                  <input type="text" id="inputPartnerName" name="partner_name" placeholder="例: さくら、けんじ、みまもり">
+                </div>
+                <div class="form-group">
+                  <label for="inputPartnerAge">パートナーの年齢設定</label>
+                  <input type="text" id="inputPartnerAge" name="partner_age" placeholder="例: 20代、30代、お孫さん世代">
+                </div>
+                <div class="form-group">
+                  <label for="selectPartnerGender">パートナーの性別</label>
+                  <select id="selectPartnerGender" name="partner_gender">
+                    <option value="女性" selected>女性</option>
+                    <option value="男性">男性</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="selectPartnerVoice">パートナーの声質（Gemini Live 音声）</label>
+                  <select id="selectPartnerVoice" name="partner_voice">
+                    <option value="Aoede" selected>Aoede（女性：穏やかで優しい声）</option>
+                    <option value="Kore">Kore（女性：明るくハキハキした声）</option>
+                    <option value="Puck">Puck（男性：親しみやすく温かい声）</option>
+                    <option value="Charon">Charon（男性：落ち着いた深みのある声）</option>
+                    <option value="Fenrir">Fenrir（男性：元気で頼もしい声）</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-group" style="margin-bottom: 0;">
+                <label for="inputPartnerPersonality">パートナーの性格・話し方の特徴</label>
+                <input type="text" id="inputPartnerPersonality" name="partner_personality" placeholder="例: 優しく穏やかで聞き上手、いつも笑顔で褒め上手、孫のように親しみやすい">
+              </div>
+            </fieldset>
+
+            <fieldset class="form-fieldset">
+              <legend>🚨 緊急連絡先設定（SOS通報用）</legend>
+              <div class="form-grid">
+                <div class="form-group">
+                  <label for="inputFamilyName">ご家族氏名</label>
+                  <input type="text" id="inputFamilyName" name="family_name" placeholder="例: 田中 太郎">
+                </div>
+                <div class="form-group">
+                  <label for="inputRelationship">続柄</label>
+                  <input type="text" id="inputRelationship" name="relationship" placeholder="例: 長男">
+                </div>
+                <div class="form-group">
+                  <label for="inputPhoneNumber">電話番号（Twilio自動架電）</label>
+                  <input type="tel" id="inputPhoneNumber" name="phone_number" placeholder="例: 090-1234-5678">
+                </div>
+                <div class="form-group">
+                  <label for="inputEmail">メールアドレス</label>
+                  <input type="email" id="inputEmail" name="email" placeholder="例: family@example.com">
+                </div>
+              </div>
+            </fieldset>
+
+            <div class="modal-footer">
+              <button type="submit" class="btn-primary">💾 設定を保存する</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- タブ2: 心のコンディション日報 -->
+        <div class="tab-pane" id="tabReports">
+          <div class="reports-container" id="reportsContainer">
+            <p class="empty-hint">日報を読み込み中...</p>
+          </div>
+        </div>
+
+        <!-- タブ3: メモリーブック（絵本） -->
+        <div class="tab-pane" id="tabGallery">
+          <div class="gallery-grid" id="galleryGrid">
+            <p class="empty-hint">生成された思い出の絵画を読み込み中...</p>
+          </div>
+        </div>
+
+        <!-- タブ4: 動作確認・テスト -->
+        <div class="tab-pane" id="tabDiagnostic">
+          <div class="diagnostic-box">
+            <h3>🛠️ 動作確認ツール</h3>
+            <p>マイク入力なしでも、画面や生成パイプラインの動作をテストできます。</p>
+            <div class="diag-buttons">
+              <button id="btnDiagImage" class="btn-secondary">🎨 サンプル水彩画を描く（Imagen 3 テスト）</button>
+              <button id="btnDiagEmergency" class="btn-secondary text-danger">🚨 緊急通報テスト（疎通確認）</button>
+              <button id="btnDiagAvatar" class="btn-secondary">😊 アバター表情切り替えテスト</button>
+            </div>
+            <pre class="diag-log" id="diagLog">システム診断ログ待機中...</pre>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- アプリケーションスクリプト -->
+  <script src="/app/app.js"></script>
+</body>
+</html>

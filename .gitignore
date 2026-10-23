@@ -1,0 +1,33 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Environment Variables & Secrets
+.env
+.env.local
+docs/*API*
+docs/.~lock*
+*.pem
+*.key
+
+# Project Generated Media / Outputs
+static/memories/
+static/memories~/
+static/reports/
+static/profile.json
+
+# References & Links
+references
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store

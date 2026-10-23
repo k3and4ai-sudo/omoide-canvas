@@ -1,0 +1,56 @@
+name: Deploy to Cloud Run & Hugging Face Spaces
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Hugging Face Spaces への自動同期デプロイ（HF_TOKEN 設定時に自動実行）
+  # ---------------------------------------------------------------------------
+  sync-to-huggingface:
+    runs-on: ubuntu-latest
+    if: ${{ vars.ENABLE_HF_SYNC == 'true' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to Hugging Face Spaces
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_USERNAME: ${{ vars.HF_USERNAME }}
+          HF_SPACE_NAME: ${{ vars.HF_SPACE_NAME || 'omoide-canvas' }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git push --force https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/spaces/${HF_USERNAME}/${HF_SPACE_NAME} HEAD:main
+
+  # ---------------------------------------------------------------------------
+  # 2. Google Cloud Run への自動デプロイ（GCP_SA_KEY 設定時に自動実行）
+  # ---------------------------------------------------------------------------
+  deploy-to-cloud-run:
+    runs-on: ubuntu-latest
+    if: ${{ vars.ENABLE_CLOUD_RUN == 'true' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: omoide-canvas
+          region: asia-northeast1
+          source: .
+          flags: --allow-unauthenticated --session-affinity
+          env_vars: |
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
