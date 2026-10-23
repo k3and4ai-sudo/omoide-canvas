@@ -107,17 +107,27 @@
         </div>
       </div>
 
-      <!-- マイク音量レベル ＆ リアルタイムオシロスコープ波形 -->
+      <!-- マイク音量レベル ＆ リアルタイムオシロスコープ波形 ＆ テレビ音カット切替 -->
       <div class="audio-monitor-card" id="audioMonitorCard">
         <div class="monitor-header">
-          <span class="monitor-label">🎙️ マイク音量・オシロ波形</span>
+          <span class="monitor-label">🎙️ マイク音量・波形</span>
           <span class="vu-level-text" id="vuLevelText">待機中</span>
         </div>
         <!-- オシロスコープ波形キャンバス -->
         <canvas id="oscilloscopeCanvas" class="oscilloscope-canvas" width="280" height="46"></canvas>
-        <!-- VU音量レベルメーター -->
+        <!-- VU音量レベルメーター（しきい値マーカー付き） -->
         <div class="vu-meter-track">
+          <div class="vu-meter-threshold" id="vuMeterThreshold" title="周囲音カットしきい値"></div>
           <div class="vu-meter-fill" id="vuMeterFill"></div>
+        </div>
+        <!-- テレビ・周囲音カット（近接マイクモード）ワンタップ切替 -->
+        <div class="noise-gate-bar">
+          <label for="selectNoiseGateQuick" class="noise-gate-label">📺 周囲音対策:</label>
+          <select id="selectNoiseGateQuick" class="noise-gate-select" aria-label="テレビ・周囲音カット設定">
+            <option value="tv_cut" selected>テレビ・周囲音カット（推奨・近接優先）</option>
+            <option value="strict">強めカット（テレビ大音量・賑やか）</option>
+            <option value="normal">標準（静かなお部屋）</option>
+          </select>
         </div>
       </div>
 
@@ -320,9 +330,19 @@
                   </select>
                 </div>
               </div>
-              <div class="form-group" style="margin-bottom: 0;">
-                <label for="inputPartnerPersonality">パートナーの性格・話し方の特徴</label>
-                <input type="text" id="inputPartnerPersonality" name="partner_personality" placeholder="例: 優しく穏やかで聞き上手、いつも笑顔で褒め上手、孫のように親しみやすい">
+              <div class="form-grid" style="margin-bottom: 0;">
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label for="inputPartnerPersonality">パートナーの性格・話し方の特徴</label>
+                  <input type="text" id="inputPartnerPersonality" name="partner_personality" placeholder="例: 優しく穏やかで聞き上手、いつも笑顔で褒め上手、孫のように親しみやすい">
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                  <label for="selectNoiseGateMode">📺 テレビ・周囲音カット設定（マイク感度）</label>
+                  <select id="selectNoiseGateMode" name="noise_gate_mode">
+                    <option value="tv_cut" selected>テレビ・周囲音カット（推奨：近くの声のみ反応）</option>
+                    <option value="strict">強めカット（テレビが大きい・周囲が賑やかな時）</option>
+                    <option value="normal">標準感度（テレビを消した静かなお部屋）</option>
+                  </select>
+                </div>
               </div>
             </fieldset>
 

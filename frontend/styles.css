@@ -183,6 +183,14 @@ body {
   pointer-events: auto;
 }
 
+/* パートナー性別に応じたカラーテーマ切り替え（男性設定時は爽やかな紺青色） */
+.avatar-container[data-gender="男性"] .avatar-svg > circle:first-of-type {
+  stroke: #3d5a80;
+}
+.avatar-container[data-gender="男性"] .avatar-svg > path:first-of-type {
+  fill: #3d5a80;
+}
+
 /* アバターアニメーション */
 .avatar-container[data-state="idle"] {
   animation: gentle-breath 4s ease-in-out infinite;
@@ -287,10 +295,22 @@ body {
 
 .vu-meter-track {
   width: 100%;
-  height: 6px;
+  height: 7px;
   background: #e8e2d5;
   border-radius: var(--radius-full);
   overflow: hidden;
+  position: relative;
+}
+
+.vu-meter-threshold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: #d62828;
+  z-index: 2;
+  opacity: 0.75;
+  transition: left 0.2s ease;
 }
 
 .vu-meter-fill {
@@ -299,6 +319,36 @@ body {
   background: linear-gradient(90deg, #81b29a, #f4a261, #e07a5f);
   border-radius: var(--radius-full);
   transition: width 0.08s ease-out;
+}
+
+.noise-gate-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.noise-gate-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.noise-gate-select {
+  flex: 1;
+  font-size: 11.5px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: #f9fcfa;
+  color: var(--primary);
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
 }
 
 /* 特大対話開始ボタン */

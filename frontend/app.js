@@ -20,11 +20,20 @@
   const SAMPLE_RATE_IN = 16000;   // マイク入力サンプリングレート
   const SAMPLE_RATE_OUT = 24000;  // Gemini返答音声サンプリングレート
 
+  // 周囲音・テレビ音声カットモード別のRMSしきい値設定（距離減衰フィルタ）
+  const NOISE_GATE_PRESETS = {
+    normal: { rms: 0.006, attackChunks: 1, holdChunks: 7, label: '標準感度' },
+    tv_cut: { rms: 0.018, attackChunks: 2, holdChunks: 6, label: 'テレビ・周囲音カット' },
+    strict: { rms: 0.032, attackChunks: 2, holdChunks: 5, label: '強めカット' }
+  };
+
   const state = {
     isConnected: false,
     isSessionActive: false,
     isSimulation: false,
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
+    noiseGateMode: 'tv_cut',        // 現在のテレビ・周囲音カットモード
+    lastVoiceActiveTime: 0,         // 近接音声がゲートを通過した最終時刻（Web Speech API連動用）
     speechDebounceTimer: null,      // 発話終了待ちデバウンスタイマー
     pendingUserTranscript: '',      // 送信待ちの発話テキスト
     audioContextIn: null,
@@ -55,10 +64,12 @@
     btnSessionToggle: document.getElementById('btnSessionToggle'),
     sessionHint: document.getElementById('sessionHint'),
 
-    // オシロスコープ ＆ VU音量メーター
+    // オシロスコープ ＆ VU音量メーター ＆ テレビ音カット切替
     oscilloscopeCanvas: document.getElementById('oscilloscopeCanvas'),
     vuMeterFill: document.getElementById('vuMeterFill'),
+    vuMeterThreshold: document.getElementById('vuMeterThreshold'),
     vuLevelText: document.getElementById('vuLevelText'),
+    selectNoiseGateQuick: document.getElementById('selectNoiseGateQuick'),
 
     // キャンバス ＆ 字幕
     mediaDisplayArea: document.getElementById('mediaDisplayArea'),
@@ -147,10 +158,39 @@
       });
     }
 
+    // テレビ・周囲音カット（近接マイクモード）ワンタップ切り替え
+    if (dom.selectNoiseGateQuick) {
+      dom.selectNoiseGateQuick.addEventListener('change', (e) => {
+        setNoiseGateMode(e.target.value);
+      });
+    }
+    const modalNoiseSelect = document.getElementById('selectNoiseGateMode');
+    if (modalNoiseSelect) {
+      modalNoiseSelect.addEventListener('change', (e) => {
+        setNoiseGateMode(e.target.value);
+      });
+    }
+
     // 動作確認ボタン群
     dom.btnDiagImage.addEventListener('click', testGenerateSampleVisual);
     dom.btnDiagEmergency.addEventListener('click', testEmergencyAlert);
     dom.btnDiagAvatar.addEventListener('click', testCycleAvatars);
+  }
+
+  function setNoiseGateMode(mode) {
+    const validMode = NOISE_GATE_PRESETS[mode] ? mode : 'tv_cut';
+    state.noiseGateMode = validMode;
+    if (dom.selectNoiseGateQuick) dom.selectNoiseGateQuick.value = validMode;
+    const modalNoiseSelect = document.getElementById('selectNoiseGateMode');
+    if (modalNoiseSelect) modalNoiseSelect.value = validMode;
+
+    // VUメーター上のしきい値マーカー位置を更新
+    const preset = NOISE_GATE_PRESETS[validMode];
+    const thresholdPercent = Math.min(95, Math.round(preset.rms * 650));
+    if (dom.vuMeterThreshold) {
+      dom.vuMeterThreshold.style.left = `${thresholdPercent}%`;
+    }
+    logDiag(`周囲音対策モードを「${preset.label} (RMS>${preset.rms})」に変更しました。`);
   }
 
   // ============================================================================
@@ -362,8 +402,8 @@
     const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
 
     let silenceChunks = 0;
+    let attackChunks = 0;
     let isUserCurrentlySpeaking = false;
-    const NOISE_FLOOR_RMS = 0.004; // 部屋の環境ノイズをカットする閾値
 
     processor.onaudioprocess = (e) => {
       if (!state.isSessionActive || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
@@ -382,26 +422,31 @@
         }
       }
 
-      // 音量（RMS）計測によるノイズゲート処理
-      // ※話し終えた後のわずかな環境ノイズでGeminiが「まだ話している」と勘違いして返答が遅れるのを防ぐ
+      // 音量（RMS）計測による近接優先ノイズゲート処理（テレビ音声・遠方雑音の遮断）
       let sumSq = 0;
       for (let i = 0; i < downsampledData.length; i++) {
         sumSq += downsampledData[i] * downsampledData[i];
       }
       const rms = Math.sqrt(sumSq / downsampledData.length);
+      const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.tv_cut;
 
-      if (rms > NOISE_FLOOR_RMS) {
-        isUserCurrentlySpeaking = true;
+      if (rms > preset.rms) {
+        attackChunks++;
         silenceChunks = 0;
+        if (attackChunks >= preset.attackChunks) {
+          isUserCurrentlySpeaking = true;
+          state.lastVoiceActiveTime = Date.now();
+        }
       } else {
+        attackChunks = 0;
         silenceChunks++;
-        if (silenceChunks > 6) {
+        if (silenceChunks > preset.holdChunks) {
           isUserCurrentlySpeaking = false;
         }
       }
 
       // Float32 (-1.0 ~ 1.0) を Int16 (-32768 ~ 32767) の Little-Endian PCM に変換
-      // AIが発話中、またはユーザーが黙っている環境ノイズ時は完全なゼロ（無音）を送ることでGeminiの返答を爆速化
+      // AIが発話中、またはテレビ音等の遠方ノイズ（しきい値未満）の時は完全なゼロ（無音）を送信
       const pcm16 = new Int16Array(downsampledData.length);
       if (!state.isAiSpeaking && isUserCurrentlySpeaking) {
         for (let i = 0; i < downsampledData.length; i++) {
@@ -483,15 +528,20 @@
       ctx.lineTo(canvas.width, midY);
       ctx.stroke();
 
-      // 3. VU音量レベルメーターの計算と反映
+      // 3. VU音量レベルメーターの計算と反映（テレビ・周囲音カットしきい値連動）
       const volumePercent = Math.min(100, Math.round(rms * 650)); // スマホ向けに感度向上
+      const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.tv_cut;
+      const thresholdPercent = Math.min(95, Math.round(preset.rms * 650));
 
       dom.vuMeterFill.style.width = `${volumePercent}%`;
 
-      if (volumePercent < 4) {
+      if (volumePercent < 3) {
         dom.vuLevelText.textContent = '待機中（お話しください）';
         dom.vuLevelText.style.color = 'var(--text-muted)';
-      } else if (volumePercent < 55) {
+      } else if (volumePercent < thresholdPercent) {
+        dom.vuLevelText.textContent = '📺 周囲音カット中（お近くでどうぞ）';
+        dom.vuLevelText.style.color = '#8a8f9e';
+      } else if (volumePercent < 60) {
         dom.vuLevelText.textContent = '音声入力中：良好 🟢';
         dom.vuLevelText.style.color = 'var(--primary)';
       } else {
@@ -536,8 +586,11 @@
       recognition.maxAlternatives = 1;
 
       recognition.onresult = (event) => {
-        // AIがスピーカーから発話中の場合、そのスピーカー音を自分の発話と誤認しないよう破棄
+        // AIがスピーカーから発話中の場合、またはノイズゲートしきい値未満の遠方テレビ音声の場合は破棄
         if (state.isAiSpeaking) return;
+        if (state.noiseGateMode !== 'normal' && (Date.now() - state.lastVoiceActiveTime > 2500)) {
+          return;
+        }
 
         let interimTranscript = '';
         let finalTranscript = '';
@@ -641,7 +694,11 @@
         case 'session_ready': {
           state.isSimulation = !!data.simulation;
           const cleanName = (data.call_name || '').replace(/\s*さん$/, '');
-          dom.partnerStatusText.textContent = `${cleanName}さんとお話し中`;
+          const pName = data.partner_name || state.currentProfile?.partner?.name || 'さくら';
+          if (data.partner_gender) {
+            dom.avatarContainer.setAttribute('data-gender', data.partner_gender);
+          }
+          dom.partnerStatusText.textContent = `${pName}：${cleanName}さんとお話し中`;
           setAvatarState('listening');
           if (state.isSimulation) {
             logDiag('【案内】ローカルシミュレーションモードで接続しました。');
@@ -915,11 +972,19 @@
     dom.userGreeting.textContent = `${rawName}${suffix}のお部屋`;
 
     const pName = profile.partner?.name || 'さくら';
+    const pGender = profile.partner?.gender || '女性';
+    dom.avatarContainer.setAttribute('data-gender', pGender);
     dom.partnerStatusText.textContent = `${pName}：準備完了`;
     const aiTagEl = document.querySelector('.ai-tag');
     if (aiTagEl) aiTagEl.textContent = `🤖 ${pName}`;
     const userTagEl = document.querySelector('.user-tag');
     if (userTagEl) userTagEl.textContent = `🎤 ${rawName}${suffix}`;
+
+    if (profile.noise_gate_mode) {
+      setNoiseGateMode(profile.noise_gate_mode);
+    } else {
+      setNoiseGateMode('tv_cut');
+    }
   }
 
   function loadProfileIntoForm() {
@@ -942,6 +1007,8 @@
     document.getElementById('selectPartnerGender').value = partner.gender || '女性';
     document.getElementById('selectPartnerVoice').value = partner.voice_name || 'Aoede';
     document.getElementById('inputPartnerPersonality').value = partner.personality || '';
+    const noiseSelect = document.getElementById('selectNoiseGateMode');
+    if (noiseSelect) noiseSelect.value = p.noise_gate_mode || state.noiseGateMode || 'tv_cut';
 
     const ec = p.emergency_contact || {};
     document.getElementById('inputFamilyName').value = ec.family_name || '';
@@ -954,6 +1021,7 @@
     e.preventDefault();
     const partnerGender = document.getElementById('selectPartnerGender').value;
     let partnerVoice = document.getElementById('selectPartnerVoice').value;
+    const noiseGateMode = document.getElementById('selectNoiseGateMode')?.value || state.noiseGateMode || 'tv_cut';
 
     const updated = {
       user_id: state.currentProfile?.user_id || 'default_user',
@@ -967,6 +1035,7 @@
       hobbies: document.getElementById('inputHobbies').value.split(',').map(s => s.trim()).filter(Boolean),
       trigger_words: document.getElementById('inputTriggerWords').value.split(',').map(s => s.trim()).filter(Boolean),
       ng_topics: document.getElementById('inputNgTopics').value.split(',').map(s => s.trim()).filter(Boolean),
+      noise_gate_mode: noiseGateMode,
       partner: {
         name: document.getElementById('inputPartnerName').value.trim() || 'さくら',
         age_setting: document.getElementById('inputPartnerAge').value.trim() || '30代',

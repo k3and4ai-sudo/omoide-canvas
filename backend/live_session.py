@@ -103,6 +103,15 @@ class LiveSessionManager:
                 "Puck" if (partner and partner.gender == "男性") else "Aoede"
             )
 
+            # テレビ・周囲音カットモード時は、発話開始検知（StartSensitivity）をLOWにして背景音での誤反応を防止しつつ、
+            # 発話終了検知（EndSensitivity）はHIGHにして話し終えた瞬間に高速返答させる
+            noise_mode = getattr(self.profile, "noise_gate_mode", "tv_cut") or "tv_cut"
+            start_sens = (
+                types.StartSensitivity.START_SENSITIVITY_HIGH
+                if noise_mode == "normal"
+                else types.StartSensitivity.START_SENSITIVITY_LOW
+            )
+
             config = types.LiveConnectConfig(
                 response_modalities=["AUDIO"],
                 speech_config=types.SpeechConfig(
@@ -116,14 +125,14 @@ class LiveSessionManager:
                 thinking_config=types.ThinkingConfig(
                     thinking_budget=0
                 ),
-                # 音声区間検出（VAD）の無音待機時間を 450ms に短縮し、高感度化
+                # 音声区間検出（VAD）：テレビ等の遠方雑音に反応しにくく、かつ話し終わりは即座に検知
                 realtime_input_config=types.RealtimeInputConfig(
                     automatic_activity_detection=types.AutomaticActivityDetection(
                         disabled=False,
-                        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                        start_of_speech_sensitivity=start_sens,
                         end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
-                        prefix_padding_ms=100,
-                        silence_duration_ms=450
+                        prefix_padding_ms=120,
+                        silence_duration_ms=480
                     )
                 ),
                 system_instruction=system_instruction,
@@ -132,7 +141,7 @@ class LiveSessionManager:
                 tools=[generate_memory_visual, refine_memory_visual, trigger_emergency_alert]
             )
 
-            logger.info(f"Connecting to Gemini Live API ({DEFAULT_LIVE_MODEL}, voice={selected_voice})...")
+            logger.info(f"Connecting to Gemini Live API ({DEFAULT_LIVE_MODEL}, voice={selected_voice}, noise_mode={noise_mode})...")
             async with client.aio.live.connect(model=DEFAULT_LIVE_MODEL, config=config) as session:
                 logger.info("Connected to Gemini Live API successfully!")
                 await self.websocket.send_json({
@@ -140,6 +149,7 @@ class LiveSessionManager:
                     "call_name": self.profile.call_name,
                     "partner_name": partner.name if partner else "さくら",
                     "partner_gender": partner.gender if partner else "女性",
+                    "noise_gate_mode": noise_mode,
                     "dementia_level": self.profile.dementia_level.value
                 })
 
