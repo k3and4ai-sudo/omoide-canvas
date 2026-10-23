@@ -31,6 +31,8 @@
     isConnected: false,
     isSessionActive: false,
     isSimulation: false,
+    isLoggedIn: false,              // 起動時ログイン完了フラグ
+    sessionApiKey: '',              // このセッション専用のGemini APIキー
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
     aiSpeechEndTimer: null,         // AI発話終了判定タイマー
     noiseGateMode: 'tv_cut',        // 現在のテレビ・周囲音カットモード
@@ -55,9 +57,20 @@
 
   // DOM要素キャッシュ
   const dom = {
-    // ヘッダー
+    // ヘッダー ＆ ログインモーダル
     userGreeting: document.getElementById('userGreeting'),
     btnToggleCaregiver: document.getElementById('btnToggleCaregiver'),
+    btnOpenLoginModal: document.getElementById('btnOpenLoginModal'),
+    apiKeyStatusBadge: document.getElementById('apiKeyStatusBadge'),
+    loginModal: document.getElementById('loginModal'),
+    loginApiKeyForm: document.getElementById('loginApiKeyForm'),
+    inputSessionApiKey: document.getElementById('inputSessionApiKey'),
+    btnToggleKeyVisibility: document.getElementById('btnToggleKeyVisibility'),
+    chkRememberKeyOnDevice: document.getElementById('chkRememberKeyOnDevice'),
+    loginErrorMsg: document.getElementById('loginErrorMsg'),
+    btnLoginSubmit: document.getElementById('btnLoginSubmit'),
+    btnLoginDemoMode: document.getElementById('btnLoginDemoMode'),
+    btnClearSavedKey: document.getElementById('btnClearSavedKey'),
 
     // パートナー＆セッション
     avatarContainer: document.getElementById('avatarContainer'),
@@ -107,11 +120,137 @@
   // ============================================================================
   // 初期化
   // ============================================================================
+  const STORAGE_KEY_API = 'omoide_device_gemini_api_key';
+
   async function init() {
     setupEventListeners();
+    initLoginModalState();
     await fetchUserProfile();
     drawFlatOscilloscope(); // 初期オシロスコープ波形（水平線）描画
-    logDiag('システムが初期化されました。');
+    logDiag('システムが初期化されました。ログイン（APIキー入力）待機中です。');
+  }
+
+  function initLoginModalState() {
+    try {
+      const savedKey = localStorage.getItem(STORAGE_KEY_API);
+      if (savedKey && dom.inputSessionApiKey) {
+        dom.inputSessionApiKey.value = savedKey;
+      }
+    } catch (e) {}
+  }
+
+  function showLoginMessage(text, isError = true) {
+    if (!dom.loginErrorMsg) return;
+    dom.loginErrorMsg.textContent = text;
+    dom.loginErrorMsg.className = `login-msg ${isError ? 'error' : 'success'}`;
+  }
+
+  function openLoginModal() {
+    if (!dom.loginModal) return;
+    if (state.sessionApiKey && dom.inputSessionApiKey) {
+      dom.inputSessionApiKey.value = state.sessionApiKey;
+    }
+    if (dom.loginErrorMsg) {
+      dom.loginErrorMsg.className = 'login-msg hidden';
+    }
+    dom.loginModal.classList.remove('hidden');
+  }
+
+  function closeLoginModal() {
+    if (!dom.loginModal) return;
+    dom.loginModal.classList.add('hidden');
+  }
+
+  async function handleLoginSubmit(e) {
+    e.preventDefault();
+    const rawKey = (dom.inputSessionApiKey?.value || '').trim();
+    if (!rawKey) {
+      showLoginMessage('Gemini APIキーを入力してください（キーなしで試す場合は下の「デモ体験」を押してください）。', true);
+      return;
+    }
+
+    if (dom.btnLoginSubmit) {
+      dom.btnLoginSubmit.disabled = true;
+      dom.btnLoginSubmit.textContent = '🔄 APIキーを認証しています...';
+    }
+    showLoginMessage('Google Gemini APIキーの有効性を確認しています...', false);
+
+    try {
+      const res = await fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: rawKey })
+      });
+      const data = await res.json();
+      if (!data.valid) {
+        showLoginMessage(data.message || 'APIキーの認証に失敗しました。', true);
+        return;
+      }
+
+      // セッションにキーをセット
+      state.sessionApiKey = rawKey;
+      state.isLoggedIn = true;
+
+      // 端末ブラウザへの保存設定
+      try {
+        if (dom.chkRememberKeyOnDevice?.checked) {
+          localStorage.setItem(STORAGE_KEY_API, rawKey);
+        } else {
+          localStorage.removeItem(STORAGE_KEY_API);
+        }
+      } catch (err) {}
+
+      if (dom.apiKeyStatusBadge) {
+        dom.apiKeyStatusBadge.textContent = `認証済 (${data.masked_key})`;
+      }
+      dom.btnOpenLoginModal?.classList.add('active-key');
+      showLoginMessage('✅ 認証に成功しました！', false);
+      logDiag(`セッションAPIキー認証完了 (${data.masked_key})`);
+
+      // 進行中のセッションがあれば再接続を促すため一旦停止
+      if (state.isSessionActive) {
+        await stopSession();
+      }
+      setTimeout(() => {
+        closeLoginModal();
+      }, 350);
+    } catch (err) {
+      showLoginMessage(`通信エラーが発生しました: ${err.message}`, true);
+    } finally {
+      if (dom.btnLoginSubmit) {
+        dom.btnLoginSubmit.disabled = false;
+        dom.btnLoginSubmit.textContent = '🚀 このAPIキーでログインして開始';
+      }
+    }
+  }
+
+  async function handleLoginDemoMode() {
+    state.sessionApiKey = '';
+    state.isLoggedIn = true;
+    if (dom.apiKeyStatusBadge) {
+      dom.apiKeyStatusBadge.textContent = 'デモ体験（キー未設定）';
+    }
+    dom.btnOpenLoginModal?.classList.remove('active-key');
+    if (state.isSessionActive) {
+      await stopSession();
+    }
+    logDiag('APIキーなし（デモ体験モード）で開始しました。');
+    closeLoginModal();
+  }
+
+  function handleClearSavedKey() {
+    try {
+      localStorage.removeItem(STORAGE_KEY_API);
+    } catch (e) {}
+    state.sessionApiKey = '';
+    if (dom.inputSessionApiKey) {
+      dom.inputSessionApiKey.value = '';
+    }
+    if (dom.apiKeyStatusBadge) {
+      dom.apiKeyStatusBadge.textContent = 'APIキー未設定';
+    }
+    dom.btnOpenLoginModal?.classList.remove('active-key');
+    showLoginMessage('この端末に保存されていたAPIキーを消去しました。', false);
   }
 
   // ============================================================================
@@ -120,6 +259,23 @@
   function setupEventListeners() {
     // セッション開始・終了ボタン
     dom.btnSessionToggle.addEventListener('click', toggleSession);
+
+    // ログイン・APIキー設定モーダル
+    dom.btnOpenLoginModal?.addEventListener('click', openLoginModal);
+    dom.loginApiKeyForm?.addEventListener('submit', handleLoginSubmit);
+    dom.btnLoginDemoMode?.addEventListener('click', handleLoginDemoMode);
+    dom.btnClearSavedKey?.addEventListener('click', handleClearSavedKey);
+    dom.btnToggleKeyVisibility?.addEventListener('click', () => {
+      if (!dom.inputSessionApiKey) return;
+      const isPwd = dom.inputSessionApiKey.type === 'password';
+      dom.inputSessionApiKey.type = isPwd ? 'text' : 'password';
+      dom.btnToggleKeyVisibility.textContent = isPwd ? '🙈' : '👁️';
+    });
+    dom.loginModal?.addEventListener('click', (e) => {
+      if (e.target === dom.loginModal && state.isLoggedIn) {
+        closeLoginModal();
+      }
+    });
 
     // 介護者モーダル開閉
     dom.btnToggleCaregiver.addEventListener('click', openCaregiverModal);
@@ -206,6 +362,10 @@
   }
 
   async function startSession() {
+    if (!state.isLoggedIn) {
+      openLoginModal();
+      return;
+    }
     try {
       updateStatus('マイクと接続を準備しています...', true);
       dom.btnSessionToggle.disabled = true;
@@ -259,14 +419,15 @@
         }
       }
 
-      // 4. ブラウザ音声認識 (Web Speech API) はスマホではマイクを排他ロックしてしまうためPCのみ起動
-      if (!isMobile) {
+      // 4. ブラウザ音声認識 (Web Speech API) はスマホ＋APIキー使用時はマイク競合を防ぐためPCまたはデモモード時のみ起動
+      if (!isMobile || !state.sessionApiKey) {
         startSpeechRecognition();
       }
 
-      // 5. WebSocket 接続確立
+      // 5. WebSocket 接続確立（ログイン時に入力されたそのセッション専用のAPIキーを渡す）
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws/live`;
+      const keyParam = state.sessionApiKey ? `?api_key=${encodeURIComponent(state.sessionApiKey)}` : '';
+      const wsUrl = `${protocol}//${window.location.host}/ws/live${keyParam}`;
       state.socket = new WebSocket(wsUrl);
       state.socket.binaryType = 'arraybuffer';
 

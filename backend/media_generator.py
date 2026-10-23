@@ -156,25 +156,27 @@ async def generate_memory_visual_artifact(
     japanese_title: str,
     visual_elements: str,
     media_format: MediaFormat = MediaFormat.IMAGE,
-    ambient_sound: AmbientSoundType = AmbientSoundType.NONE
+    ambient_sound: AmbientSoundType = AmbientSoundType.NONE,
+    api_key: Optional[str] = None
 ) -> MemoryArtifact:
     """
     情景から安全プロンプトを構築し、Imagen 3 (または Veo) で非同期生成して保存する。
+    セッションで入力された api_key を優先使用する。
     """
     memory_id = str(uuid.uuid4())[:8]
     final_prompt = build_safe_prompt(dementia_level, scene_type, visual_elements, media_format)
 
     file_name = f"{memory_id}.png"
     file_path = MEDIA_DIR / file_name
-    api_key = os.getenv("GEMINI_API_KEY")
+    effective_api_key = (api_key or "").strip()
 
     logger.info(f"Generating visual artifact: {japanese_title} (ID: {memory_id})")
     logger.info(f"Applied Prompt: {final_prompt}")
 
     image_generated = False
-    if api_key and api_key != "your_gemini_api_key_here":
+    if effective_api_key and effective_api_key != "your_gemini_api_key_here":
         try:
-            client = genai.Client(api_key=api_key)
+            client = genai.Client(api_key=effective_api_key)
             # Imagen 3 画像生成
             result = client.models.generate_images(
                 model="imagen-3.0-generate-002",
@@ -223,7 +225,8 @@ async def refine_memory_visual_artifact(
     original_memory_id: str,
     user_feedback: str,
     updated_visual_elements: str,
-    dementia_level: DementiaLevel = DementiaLevel.MILD
+    dementia_level: DementiaLevel = DementiaLevel.MILD,
+    api_key: Optional[str] = None
 ) -> Optional[MemoryArtifact]:
     """
     対象者からの修正希望（共同描画）を反映して絵を再描画する。
@@ -245,7 +248,8 @@ async def refine_memory_visual_artifact(
         japanese_title=f"{data['title']} (修正版)",
         visual_elements=new_visual_elements,
         media_format=MediaFormat(data.get("media_format", MediaFormat.IMAGE)),
-        ambient_sound=AmbientSoundType(data.get("ambient_sound_type", AmbientSoundType.NONE))
+        ambient_sound=AmbientSoundType(data.get("ambient_sound_type", AmbientSoundType.NONE)),
+        api_key=api_key
     )
 
     # 履歴引き継ぎ

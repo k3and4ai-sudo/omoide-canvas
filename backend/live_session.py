@@ -45,9 +45,10 @@ class LiveSessionManager:
     1クライアントと Gemini Live API 間の双方向リアルタイム接続を統括するマネージャー
     """
 
-    def __init__(self, websocket: WebSocket, profile: UserProfile):
+    def __init__(self, websocket: WebSocket, profile: UserProfile, api_key: Optional[str] = None):
         self.websocket = websocket
         self.profile = profile
+        self.api_key = (api_key or "").strip()
         self.is_active = False
         self.session_task: Optional[asyncio.Task] = None
         self.generated_memories: List[MemoryArtifact] = []
@@ -55,13 +56,13 @@ class LiveSessionManager:
         self.start_time: Optional[float] = None
 
     async def run(self):
-        """セッションの開始・メインループ管理"""
+        """セッションの開始・メインループ管理（ユーザー自身のセッションAPIキーを使用）"""
         self.is_active = True
         self.start_time = time.time()
-        api_key = os.getenv("GEMINI_API_KEY")
+        api_key = self.api_key
 
         if not api_key or api_key == "your_gemini_api_key_here":
-            logger.warning("GEMINI_API_KEY is not configured. Running in local simulation mode.")
+            logger.warning("Session API Key is not provided. Running in local simulation mode.")
             await self._run_simulation_mode()
             return
 
@@ -358,7 +359,7 @@ class LiveSessionManager:
             media_format = MediaFormat(args.get("media_format", "image"))
             ambient_sound = AmbientSoundType(args.get("ambient_sound", "none"))
 
-            # メディア生成実行（安全ラッパー適用）
+            # メディア生成実行（安全ラッパー適用・セッション専用APIキーを使用）
             artifact = await generate_memory_visual_artifact(
                 user_id=self.profile.user_id,
                 dementia_level=self.profile.dementia_level,
@@ -366,7 +367,8 @@ class LiveSessionManager:
                 japanese_title=title,
                 visual_elements=elements,
                 media_format=media_format,
-                ambient_sound=ambient_sound
+                ambient_sound=ambient_sound,
+                api_key=self.api_key
             )
             self.generated_memories.append(artifact)
             self.discussed_topics.append(title)
@@ -407,7 +409,8 @@ class LiveSessionManager:
                 original_memory_id=original_id,
                 user_feedback=feedback,
                 updated_visual_elements=elements,
-                dementia_level=self.profile.dementia_level
+                dementia_level=self.profile.dementia_level,
+                api_key=self.api_key
             )
             if new_artifact:
                 self.generated_memories.append(new_artifact)

@@ -1163,3 +1163,156 @@ body {
     font-size: 13px;
   }
 }
+
+/* ==========================================================================
+   起動時ログイン ＆ セッションAPIキー設定モーダル
+   ========================================================================== */
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-api-key-status.active-key {
+  background: #eaf4ef;
+  border-color: #2c5e4f;
+  color: #2c5e4f;
+  font-weight: 700;
+}
+
+.login-dialog {
+  max-width: 540px;
+}
+
+.login-header {
+  background: linear-gradient(135deg, #2c5e4f, #3b7a67);
+}
+
+.login-header h2 {
+  color: #ffffff;
+  font-size: 18px;
+}
+
+.login-body {
+  padding: 22px 24px;
+}
+
+.login-lead {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-main);
+  background: #f9fcfa;
+  border: 1px solid #d4e6de;
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 18px;
+}
+
+.login-subnote {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.api-key-input-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.api-key-input-wrap input {
+  flex: 1;
+  font-family: monospace;
+  font-size: 15px;
+  letter-spacing: 0.03em;
+}
+
+.btn-eye {
+  background: #f4efe6;
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.remember-key-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-main);
+  cursor: pointer;
+  margin-bottom: 14px;
+}
+
+.remember-key-label input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--primary);
+}
+
+.login-msg {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.login-msg.hidden {
+  display: none;
+}
+
+.login-msg.error {
+  background: #fff2f0;
+  border: 1px solid #f4c2b5;
+  color: #c2593f;
+}
+
+.login-msg.success {
+  background: #eaf4ef;
+  border: 1px solid #81b29a;
+  color: #2c5e4f;
+}
+
+.login-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.btn-login-main {
+  width: 100%;
+  padding: 14px 20px;
+  font-size: 16px;
+  border-radius: var(--radius-md);
+}
+
+.login-secondary-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.login-secondary-actions button {
+  flex: 1;
+  font-size: 12.5px;
+  padding: 9px 12px;
+}
+
+.login-help-box {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-color);
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.login-help-box a {
+  color: var(--primary);
+  font-weight: 700;
+  text-decoration: underline;
+}

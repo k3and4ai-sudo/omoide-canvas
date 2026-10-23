@@ -18,14 +18,18 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Quer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
+from google import genai
 
 from backend.models import UserProfile, MemoryArtifact, DailyConditionReport
 from backend.live_session import LiveSessionManager
 from backend.emergency_tool import dispatch_emergency_alert
 from backend.report_generator import generate_daily_condition_report
 
-# 環境変数ロード
+# 環境変数ロード（ただしサーバー所有者のGEMINI_API_KEYが第三者セッションで自動使用されないよう環境変数から除外）
 load_dotenv()
+os.environ.pop("GEMINI_API_KEY", None)
+os.environ.pop("GOOGLE_API_KEY", None)
 
 # ロギング設定
 logging.basicConfig(
@@ -84,16 +88,36 @@ def save_user_profile(profile: UserProfile):
 # REST API エンドポイント
 # ==============================================================================
 
+class ApiKeyVerifyRequest(BaseModel):
+    api_key: str
+
+
 @app.get("/api/health")
 async def health_check():
-    """死活監視・API接続確認"""
-    api_key_set = bool(os.getenv("GEMINI_API_KEY") and os.getenv("GEMINI_API_KEY") != "your_gemini_api_key_here")
+    """死活監視・API接続確認（セッション別APIキー入力方式）"""
     return {
         "status": "ok",
         "app": "omoide-canvas",
         "version": "2.0.0",
-        "gemini_api_key_configured": api_key_set
+        "require_user_api_key": True
     }
+
+
+@app.post("/api/auth/verify")
+async def verify_user_api_key(req: ApiKeyVerifyRequest):
+    """ユーザーがログイン画面で入力した Gemini API キーの有効性を検証"""
+    key = (req.api_key or "").strip()
+    if not key or len(key) < 20:
+        return {"valid": False, "message": "APIキーの形式が正しくありません（AIza... で始まるキーを入力してください）"}
+    try:
+        client = genai.Client(api_key=key)
+        # 軽量なモデルメタデータ取得でキーの有効性を確認（トークン消費なし）
+        client.models.get(model="gemini-2.5-flash")
+        masked = f"{key[:6]}...{key[-4:]}"
+        return {"valid": True, "masked_key": masked, "message": "APIキーの認証に成功しました"}
+    except Exception as e:
+        logger.warning(f"API Key verification failed: {e}")
+        return {"valid": False, "message": "APIキーが無効か、利用権限がありません。Google AI Studioで発行したキーをご確認ください。"}
 
 
 @app.get("/api/profile", response_model=UserProfile)
@@ -160,15 +184,20 @@ async def test_emergency_alert(channel: Optional[str] = "test"):
 # ==============================================================================
 
 @app.websocket("/ws/live")
-async def websocket_live_endpoint(websocket: WebSocket):
+async def websocket_live_endpoint(
+    websocket: WebSocket,
+    api_key: Optional[str] = Query(default=None)
+):
     """
     本人用キャンバス画面とのリアルタイム双方向通信エンドポイント
+    クライアントがログイン時に入力した api_key をこのセッション限定で使用する
     """
     await websocket.accept()
     profile = load_user_profile()
-    session_mgr = LiveSessionManager(websocket, profile)
+    session_mgr = LiveSessionManager(websocket, profile, api_key=api_key)
 
-    logger.info(f"WebSocket client connected for user: {profile.call_name}")
+    key_status = "UserKey" if (api_key and len(api_key.strip()) > 10) else "DemoSimulation"
+    logger.info(f"WebSocket client connected for user: {profile.call_name} (mode={key_status})")
     try:
         await session_mgr.run()
     except WebSocketDisconnect:

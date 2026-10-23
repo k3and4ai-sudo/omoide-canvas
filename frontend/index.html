@@ -23,6 +23,9 @@
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
+      <button id="btnOpenLoginModal" class="btn-subtle btn-api-key-status" title="APIキーの設定・ログイン切替" aria-label="APIキー設定">
+        🔑 <span id="apiKeyStatusBadge">APIキー未設定</span>
+      </button>
       <button id="btnToggleCaregiver" class="btn-subtle" title="介護者・ご家族用設定" aria-label="介護者用ダッシュボード">
         ⚙️ 介護者設定・日報
       </button>
@@ -402,6 +405,68 @@
           </div>
         </div>
 
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================================= -->
+  <!-- 起動時ログイン ＆ ご自身の Gemini APIキー入力モーダル -->
+  <!-- ======================================================================= -->
+  <div class="modal-backdrop" id="loginModal" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+    <div class="modal-dialog login-dialog">
+      <div class="modal-header login-header">
+        <h2 id="loginModalTitle">🔐 おもいでキャンバス ログイン（APIキー設定）</h2>
+      </div>
+      <div class="modal-body login-body">
+        <p class="login-lead">
+          このアプリは<strong>ご利用者様ご自身の Gemini APIキー</strong>を使って、そのセッション中のみAI音声対話と水彩画生成を行います。<br>
+          <span class="login-subnote">※入力されたキーはあなたの現在の通信セッションでのみ使用され、他の利用者に共有・公開されることはありません。</span>
+        </p>
+
+        <form id="loginApiKeyForm" class="login-form">
+          <div class="form-group">
+            <label for="inputSessionApiKey">🔑 Gemini API キー（Google AI Studio）</label>
+            <div class="api-key-input-wrap">
+              <input
+                type="password"
+                id="inputSessionApiKey"
+                placeholder="AIzaSy... で始まるご自身のAPIキーを入力"
+                autocomplete="off"
+                spellcheck="false"
+              >
+              <button type="button" id="btnToggleKeyVisibility" class="btn-eye" title="キーの表示/非表示を切り替え">👁️</button>
+            </div>
+          </div>
+
+          <label class="remember-key-label">
+            <input type="checkbox" id="chkRememberKeyOnDevice" checked>
+            <span>この端末（スマホ・PC）のブラウザにのみ記憶する（次回から自動入力）</span>
+          </label>
+
+          <div id="loginErrorMsg" class="login-msg hidden"></div>
+
+          <div class="login-actions">
+            <button type="submit" id="btnLoginSubmit" class="btn-primary btn-login-main">
+              🚀 このAPIキーでログインして開始
+            </button>
+            <div class="login-secondary-actions">
+              <button type="button" id="btnLoginDemoMode" class="btn-secondary">
+                🧪 APIキーなしでデモ体験（シミュレーション）
+              </button>
+              <button type="button" id="btnClearSavedKey" class="btn-secondary text-danger">
+                🗑️ 端末の保存キーを消去
+              </button>
+            </div>
+          </div>
+        </form>
+
+        <div class="login-help-box">
+          <span>💡 Gemini APIキーをお持ちでない方は、</span>
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">
+            Google AI Studio（無料発行ページ）↗
+          </a>
+          <span>からすぐに取得できます。</span>
+        </div>
       </div>
     </div>
   </div>
