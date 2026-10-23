@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>おもいでキャンバス Googleアカウント作成 ＆ Gemini APIキー取得手順書</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --primary: #2c5e4f;
+      --primary-light: #3b7a67;
+      --primary-bg: #eef6f3;
+      --accent: #e07a5f;
+      --google-blue: #1a73e8;
+      --google-blue-bg: #e8f0fe;
+      --callout-red: #d93025;
+      --text-main: #22252a;
+      --text-muted: #5f6368;
+      --border: #dadce0;
+      --bg-warm: #faf8f5;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Noto Sans JP', sans-serif;
+      color: var(--text-main);
+      background: #f0ede6;
+      line-height: 1.6;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+
+    /* A4 ページコンテナ */
+    .page {
+      width: 210mm;
+      height: 296mm;
+      margin: 12px auto;
+      padding: 9mm 14mm;
+      background: #ffffff;
+      box-shadow: 0 6px 24px rgba(0,0,0,0.12);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+      page-break-after: always;
+      break-after: page;
+    }
+
+    .page:last-child {
+      page-break-after: auto;
+      break-after: auto;
+    }
+
+    @page {
+      size: A4 portrait;
+      margin: 0;
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+      }
+      .page {
+        margin: 0;
+        box-shadow: none;
+        width: 210mm;
+        height: 296mm;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+
+    /* ヘッダーバナー */
+    .doc-header {
+      border-bottom: 2.5px solid var(--primary);
+      padding-bottom: 6px;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+
+    .doc-header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .doc-badge {
+      background: var(--primary);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 99px;
+    }
+
+    .doc-title-main {
+      font-family: 'Zen Maru Gothic', sans-serif;
+      font-size: 19px;
+      color: var(--primary);
+      font-weight: 700;
+    }
+
+    .doc-page-num {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    /* イントロボックス */
+    .intro-banner {
+      background: linear-gradient(135deg, #2c5e4f, #3b7a67);
+      color: #fff;
+      border-radius: 10px;
+      padding: 8px 14px;
+      margin-bottom: 7px;
+    }
+
+    .intro-banner h1 {
+      font-family: 'Zen Maru Gothic', sans-serif;
+      font-size: 16.5px;
+      margin-bottom: 2px;
+    }
+
+    .intro-banner p {
+      font-size: 11px;
+      opacity: 0.95;
+      line-height: 1.45;
+    }
+
+    .flow-overview {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 7px;
+    }
+
+    .flow-card {
+      background: var(--primary-bg);
+      border: 1.5px solid #b8d8cc;
+      border-radius: 8px;
+      padding: 4px 8px;
+      text-align: center;
+    }
+
+    .flow-card .step-tag {
+      display: inline-block;
+      background: var(--primary);
+      color: #fff;
+      font-size: 10.5px;
+      font-weight: 700;
+      padding: 1px 8px;
+      border-radius: 99px;
+      margin-bottom: 2px;
+    }
+
+    .flow-card h3 {
+      font-size: 13px;
+      color: var(--primary);
+      margin-bottom: 1px;
+    }
+
+    .flow-card p {
+      font-size: 10.5px;
+      color: var(--text-muted);
+    }
+
+    /* セクション見出し */
+    .section-heading {
+      background: var(--primary-bg);
+      border-left: 5px solid var(--primary);
+      padding: 5px 12px;
+      border-radius: 0 6px 6px 0;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .section-heading h2 {
+      font-size: 14.5px;
+      color: var(--primary);
+      font-weight: 700;
+    }
+
+    .section-heading span {
+      font-size: 11px;
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    /* ステップブロック */
+    .step-block {
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 7px 11px;
+      margin-bottom: 6px;
+      background: #ffffff;
+    }
+
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+
+    .step-number {
+      background: var(--accent);
+      color: #fff;
+      font-weight: 900;
+      font-size: 11.5px;
+      padding: 2px 8px;
+      border-radius: 5px;
+      flex-shrink: 0;
+    }
+
+    .step-title {
+      font-size: 13.5px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .step-grid {
+      display: grid;
+      grid-template-columns: 1.05fr 0.95fr;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .step-desc {
+      font-size: 11.5px;
+      color: var(--text-main);
+    }
+
+    .step-desc ol {
+      padding-left: 16px;
+      margin-top: 4px;
+    }
+
+    .step-desc li {
+      margin-bottom: 4px;
+    }
+
+    .url-box {
+      background: #f8f9fa;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 9px;
+      font-family: monospace;
+      font-size: 11.5px;
+      color: var(--google-blue);
+      font-weight: 700;
+      margin: 5px 0;
+      word-break: break-all;
+    }
+
+    /* 画面モックアップ（ブラウザUI図解） */
+    .screen-frame {
+      border: 2px solid #cbd5e1;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #ffffff;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.07);
+      position: relative;
+    }
+
+    .browser-bar {
+      background: #f1f3f4;
+      padding: 5px 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border-bottom: 1px solid #dadce0;
+    }
+
+    .browser-dots {
+      display: flex;
+      gap: 4px;
+    }
+
+    .browser-dots span {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #d1d5db;
+    }
+    .browser-dots span:nth-child(1) { background: #ef4444; }
+    .browser-dots span:nth-child(2) { background: #f59e0b; }
+    .browser-dots span:nth-child(3) { background: #10b981; }
+
+    .browser-address {
+      background: #ffffff;
+      border: 1px solid #dadce0;
+      border-radius: 99px;
+      padding: 2px 10px;
+      font-size: 10px;
+      color: #3c4043;
+      flex: 1;
+      font-family: monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .screen-body {
+      padding: 8px 11px;
+      position: relative;
+      background: #fff;
+    }
+
+    /* 赤丸番号バッジ */
+    .callout-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      background: var(--callout-red);
+      color: #ffffff;
+      font-weight: 900;
+      font-size: 11.5px;
+      border-radius: 50%;
+      box-shadow: 0 2px 5px rgba(217,48,37,0.4);
+      vertical-align: middle;
+      margin-right: 3px;
+    }
+
+    /* 注目赤枠 */
+    .highlight-box {
+      border: 2.5px solid var(--callout-red) !important;
+      position: relative;
+      border-radius: 6px;
+    }
+
+    .g-input.highlight-box,
+    .g-input-row.highlight-box,
+    .g-dropdown-item.highlight-box {
+      background: #fff8f7 !important;
+    }
+
+    .badge-floating {
+      position: absolute;
+      top: -10px;
+      right: -10px;
+      width: 22px;
+      height: 22px;
+      background: var(--callout-red);
+      color: #fff;
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 900;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 2px solid #fff;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+      z-index: 5;
+    }
+
+    /* Google UI パーツ */
+    .g-logo {
+      font-weight: 900;
+      font-size: 15px;
+      letter-spacing: -0.5px;
+      margin-bottom: 4px;
+    }
+    .g-logo .b { color: #4285F4; }
+    .g-logo .r { color: #EA4335; }
+    .g-logo .y { color: #FBBC05; }
+    .g-logo .g { color: #34A853; }
+
+    .g-title {
+      font-size: 11.5px;
+      font-weight: 700;
+      margin-bottom: 5px;
+      color: #202124;
+    }
+
+    .g-input {
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      padding: 3px 7px;
+      font-size: 10.5px;
+      color: #202124;
+      background: #fff;
+      margin-bottom: 4px;
+      width: 100%;
+    }
+
+    .g-input-row {
+      display: flex;
+      gap: 6px;
+    }
+
+    .g-btn-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 5px;
+    }
+
+    .g-link {
+      font-size: 10.5px;
+      color: var(--google-blue);
+      font-weight: 700;
+    }
+
+    .g-btn-primary {
+      background: var(--google-blue);
+      color: #ffffff;
+      font-size: 10.5px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 4px;
+      display: inline-block;
+    }
+
+    .g-dropdown {
+      background: #ffffff;
+      border: 1px solid #dadce0;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      border-radius: 6px;
+      padding: 2px 0;
+      width: 130px;
+      font-size: 10px;
+      margin-top: 3px;
+    }
+
+    .g-dropdown-item {
+      padding: 3px 8px;
+    }
+
+    /* Google AI Studio モックアップ */
+    .aistudio-layout {
+      display: grid;
+      grid-template-columns: 95px 1fr;
+      min-height: 120px;
+      background: #1e1f22;
+      color: #e3e3e3;
+      font-size: 10.5px;
+    }
+
+    .aistudio-sidebar {
+      background: #131314;
+      padding: 8px 6px;
+      border-right: 1px solid #333;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .aistudio-brand {
+      font-weight: 700;
+      font-size: 10.5px;
+      color: #8ab4f8;
+      margin-bottom: 4px;
+    }
+
+    .aistudio-nav-item {
+      padding: 5px 6px;
+      border-radius: 6px;
+      background: #282a2c;
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .aistudio-main {
+      padding: 10px 12px;
+      background: #1e1f22;
+    }
+
+    .aistudio-btn {
+      background: #8ab4f8;
+      color: #062e6f;
+      font-weight: 700;
+      padding: 5px 10px;
+      border-radius: 99px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+    }
+
+    .apikey-box {
+      background: #131314;
+      border: 1px solid #444746;
+      border-radius: 6px;
+      padding: 6px 8px;
+      font-family: monospace;
+      font-size: 11px;
+      color: #a8c7fa;
+      margin-top: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* 注意・ポイントボックス */
+    .tip-box {
+      background: #fff8e6;
+      border: 1.5px solid #f5c563;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    .tip-box strong {
+      color: #b06000;
+    }
+
+    /* フッター */
+    .doc-footer {
+      border-top: 1px solid var(--border);
+      padding-top: 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* 印刷ボタンバー（画面表示時のみ） */
+    .print-toolbar {
+      max-width: 210mm;
+      margin: 12px auto 0;
+      background: #2c5e4f;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .print-toolbar button {
+      background: #fff;
+      color: #2c5e4f;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ブラウザ閲覧時の印刷ツールバー（PDF出力時は非表示） -->
+  <div class="print-toolbar no-print">
+    <span>📄 <strong>おもいでキャンバス</strong>：Googleアカウント作成 ＆ Gemini APIキー取得マニュアル</span>
+    <button onclick="window.print()">🖨️ PDFとして保存・印刷する</button>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- 1ページ目：全体フローと 第1部 Googleアカウントの作成手順 -->
+  <!-- ===================================================================== -->
+  <div class="page">
+    <div>
+      <header class="doc-header">
+        <div class="doc-header-left">
+          <span class="doc-badge">ご利用準備ガイド</span>
+          <span class="doc-title-main">🎨 おもいでキャンバス スタートアップ手順書</span>
+        </div>
+        <span class="doc-page-num">Page 1 / 2</span>
+      </header>
+
+      <div class="intro-banner">
+        <h1>Google アカウント作成 ＆ Gemini APIキー取得マニュアル</h1>
+        <p>
+          「おもいでキャンバス」では、ご利用者様ご自身の <strong>Gemini APIキー（無料発行可能）</strong> を使ってAI音声対話と水彩画生成を行います。<br>
+          本手順書では、画面のイラストに沿って <strong>① Googleアカウントの作成</strong> から <strong>② APIキーの取得</strong>、<strong>③ アプリへのログイン</strong> までを分かりやすく説明します。
+        </p>
+      </div>
+
+      <!-- 3ステップ全体像 -->
+      <div class="flow-overview">
+        <div class="flow-card">
+          <span class="step-tag">第1部（約3分）</span>
+          <h3>① Googleアカウント作成</h3>
+          <p>すでにGmail等をお持ちの方は<br><strong>第2部（2ページ目）</strong>へ進んでください</p>
+        </div>
+        <div class="flow-card">
+          <span class="step-tag">第2部（約2分）</span>
+          <h3>② Gemini APIキー発行</h3>
+          <p>Google AI Studio で<br>自分専用のAPIキーをコピーします</p>
+        </div>
+        <div class="flow-card">
+          <span class="step-tag">第3部（約1分）</span>
+          <h3>③ アプリへログイン</h3>
+          <p>おもいでキャンバスの起動画面に<br>キーを貼り付けて開始します</p>
+        </div>
+      </div>
+
+      <!-- 第1部 見出し -->
+      <div class="section-heading">
+        <h2>第1部：Google アカウントの作成手順</h2>
+        <span>※すでにGoogleアカウントをお持ちの方は2ページ目へ</span>
+      </div>
+
+      <!-- STEP 1-1 -->
+      <div class="step-block">
+        <div class="step-header">
+          <span class="step-number">手順 1-1</span>
+          <div class="step-title">Googleのログイン画面から「アカウントを作成」を選ぶ</div>
+        </div>
+        <div class="step-grid">
+          <div class="step-desc">
+            <p>スマホまたはパソコンのブラウザ（Safari / Chrome）で下のアドレスを開きます。</p>
+            <div class="url-box">https://accounts.google.com/signup</div>
+            <ol>
+              <li>画面下部の <span class="callout-num">1</span><strong>「アカウントを作成」</strong> をタップします。</li>
+              <li>表示されたメニューから <span class="callout-num">2</span><strong>「個人で使用」</strong> を選択します。</li>
+            </ol>
+          </div>
+
+          <!-- 画面図解 1-1 -->
+          <div class="screen-frame">
+            <div class="browser-bar">
+              <div class="browser-dots"><span></span><span></span><span></span></div>
+              <div class="browser-address">🔒 accounts.google.com/signup</div>
+            </div>
+            <div class="screen-body">
+              <div class="g-logo"><span class="b">G</span><span class="r">o</span><span class="y">o</span><span class="b">g</span><span class="g">l</span><span class="r">e</span></div>
+              <div class="g-title">ログイン</div>
+              <div class="g-input">メールアドレスまたは電話番号</div>
+              <div class="g-btn-row">
+                <div style="position: relative;">
+                  <span class="g-link highlight-box" style="padding: 3px 6px;">アカウントを作成</span>
+                  <span class="badge-floating">1</span>
+                  <div class="g-dropdown">
+                    <div class="g-dropdown-item highlight-box" style="font-weight:700; color:#d93025;">
+                      ▶ 個人で使用
+                      <span class="badge-floating">2</span>
+                    </div>
+                    <div class="g-dropdown-item" style="color:#5f6368;">子供用</div>
+                    <div class="g-dropdown-item" style="color:#5f6368;">仕事 / ビジネス用</div>
+                  </div>
+                </div>
+                <span class="g-btn-primary">次へ</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 1-2 -->
+      <div class="step-block">
+        <div class="step-header">
+          <span class="step-number">手順 1-2</span>
+          <div class="step-title">お名前・生年月日・性別を入力する</div>
+        </div>
+        <div class="step-grid">
+          <div class="step-desc">
+            <ol>
+              <li><span class="callout-num">1</span><strong>「姓」</strong>と<strong>「名」</strong>を入力し、「次へ」を押します。</li>
+              <li>次の画面で <span class="callout-num">2</span><strong>「生年月日（西暦・月・日）」</strong>と<strong>「性別」</strong>を選択して <span class="callout-num">3</span><strong>「次へ」</strong> をタップします。</li>
+            </ol>
+          </div>
+
+          <!-- 画面図解 1-2 -->
+          <div class="screen-frame">
+            <div class="browser-bar">
+              <div class="browser-dots"><span></span><span></span><span></span></div>
+              <div class="browser-address">🔒 accounts.google.com - 基本情報</div>
+            </div>
+            <div class="screen-body">
+              <div class="g-title">Google アカウントを作成する（名前・生年月日）</div>
+              <div class="g-input-row highlight-box" style="padding:4px; margin-bottom:6px;">
+                <span class="badge-floating">1</span>
+                <div class="g-input" style="margin:0;">姓：山田</div>
+                <div class="g-input" style="margin:0;">名：太郎</div>
+              </div>
+              <div class="g-input-row highlight-box" style="padding:4px;">
+                <span class="badge-floating">2</span>
+                <div class="g-input" style="margin:0;">1975 年</div>
+                <div class="g-input" style="margin:0;">4 月</div>
+                <div class="g-input" style="margin:0;">15 日</div>
+              </div>
+              <div class="g-btn-row" style="justify-content: flex-end;">
+                <span class="g-btn-primary highlight-box" style="position:relative;">
+                  次へ
+                  <span class="badge-floating">3</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 1-3 -->
+      <div class="step-block" style="margin-bottom: 6px;">
+        <div class="step-header">
+          <span class="step-number">手順 1-3</span>
+          <div class="step-title">Gmailアドレスとパスワードを決めて作成完了</div>
+        </div>
+        <div class="step-grid">
+          <div class="step-desc">
+            <ol>
+              <li><span class="callout-num">1</span>候補から選ぶか、<strong>「自分でGmailアドレスを作成」</strong>でお好きな半角英数字を入力します。</li>
+              <li><span class="callout-num">2</span><strong>パスワード（英数字8文字以上）</strong>を設定します（忘れないようメモしてください）。</li>
+              <li>画面の案内に従って電話番号（SMS認証コード）を確認し、<span class="callout-num">3</span>利用規約に<strong>「同意する」</strong>を押すとGoogleアカウントが完成します！</li>
+            </ol>
+          </div>
+
+          <!-- 画面図解 1-3 -->
+          <div class="screen-frame">
+            <div class="browser-bar">
+              <div class="browser-dots"><span></span><span></span><span></span></div>
+              <div class="browser-address">🔒 accounts.google.com - アドレスとパスワード</div>
+            </div>
+            <div class="screen-body">
+              <div class="g-title">ログイン方法とパスワードの設定</div>
+              <div class="g-input highlight-box">
+                <span class="badge-floating">1</span>
+                🔘 yamada.omoide2026@gmail.com
+              </div>
+              <div class="g-input highlight-box">
+                <span class="badge-floating">2</span>
+                パスワード：●●●●●●●●●●
+              </div>
+              <div class="g-btn-row" style="justify-content: flex-end;">
+                <span class="g-btn-primary highlight-box" style="position:relative;">
+                  同意して作成
+                  <span class="badge-floating">3</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="doc-footer">
+      <span>おもいでキャンバス (omoide-canvas) 公式マニュアル</span>
+      <span>1 / 2 ページ（次は Gemini APIキーの取得手順）</span>
+    </footer>
+  </div>
+
+  <!-- ===================================================================== -->
+  <!-- 2ページ目：第2部 Gemini APIキーの作成手順 ＆ 第3部 アプリへのログイン -->
+  <!-- ===================================================================== -->
+  <div class="page">
+    <div>
+      <header class="doc-header">
+        <div class="doc-header-left">
+          <span class="doc-badge">APIキー発行・ログイン</span>
+          <span class="doc-title-main">🔑 Gemini APIキーの作成とアプリへの設定手順</span>
+        </div>
+        <span class="doc-page-num">Page 2 / 2</span>
+      </header>
+
+      <!-- 第2部 見出し -->
+      <div class="section-heading">
+        <h2>第2部：Gemini APIキーの作成手順（Google AI Studio）</h2>
+        <span>※無料で即座に発行できます（クレジットカード不要）</span>
+      </div>
+
+      <!-- STEP 2-1 -->
+      <div class="step-block">
+        <div class="step-header">
+          <span class="step-number">手順 2-1</span>
+          <div class="step-title">Google AI Studio を開いて利用規約に同意する</div>
+        </div>
+        <div class="step-grid">
+          <div class="step-desc">
+            <p>以下の公式ページを開くか、おもいでキャンバスのログイン画面下部のリンクをタップします。</p>
+            <div class="url-box">https://aistudio.google.com/app/apikey</div>
+            <ol>
+              <li>Googleアカウントでログインします。</li>
+              <li>初回のみ表示される画面で <span class="callout-num">1</span><strong>利用規約のチェックボックス</strong> にチェックを入れ、<span class="callout-num">2</span><strong>「Continue（続行）」</strong> を押します。</li>
+            </ol>
+          </div>
+
+          <!-- 画面図解 2-1 -->
+          <div class="screen-frame">
+            <div class="browser-bar">
+              <div class="browser-dots"><span></span><span></span><span></span></div>
+              <div class="browser-address">🔒 aistudio.google.com/app/apikey</div>
+            </div>
+            <div class="screen-body" style="background:#1e1f22; color:#fff;">
+              <div style="font-size:12px; font-weight:700; color:#8ab4f8; margin-bottom:6px;">
+                ✦ Welcome to Google AI Studio
+              </div>
+              <div class="highlight-box" style="background:#2b2d30 !important; color:#fff; padding:6px 8px; font-size:10.5px; margin-bottom:8px;">
+                <span class="badge-floating">1</span>
+                ☑️ I accept the Additional Terms of Service and acknowledge the Privacy Notice.
+              </div>
+              <div style="text-align:right;">
+                <span class="aistudio-btn highlight-box" style="position:relative;">
+                  Continue（続行）
+                  <span class="badge-floating">2</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 2-2 -->
+      <div class="step-block">
+        <div class="step-header">
+          <span class="step-number">手順 2-2</span>
+          <div class="step-title">「Create API key（APIキーを作成）」を押してキーをコピーする</div>
+        </div>
+        <div class="step-grid">
+          <div class="step-desc">
+            <ol>
+              <li>左上の <span class="callout-num">1</span><strong>「Get API key」</strong>（または画面右上の青い <strong>「＋ Create API key」</strong> ボタン）をタップします。</li>
+              <li><strong>「Create API key in new project（新しいプロジェクトでAPIキーを作成）」</strong> を選びます。</li>
+              <li><code>AIzaSy...</code> で始まる文字列が表示されたら、<span class="callout-num">2</span><strong>「Copy（コピー）」</strong> ボタンを押します。</li>
+            </ol>
+          </div>
+
+          <!-- 画面図解 2-2 -->
+          <div class="screen-frame">
+            <div class="browser-bar">
+              <div class="browser-dots"><span></span><span></span><span></span></div>
+              <div class="browser-address">🔒 aistudio.google.com/app/apikey</div>
+            </div>
+            <div class="aistudio-layout">
+              <div class="aistudio-sidebar">
+                <div class="aistudio-brand">Google AI Studio</div>
+                <div class="aistudio-nav-item">🔑 Get API key</div>
+                <div style="color:#9aa0a6; padding:3px 6px;">Chat Prompt</div>
+              </div>
+              <div class="aistudio-main">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                  <strong style="font-size:11.5px;">API Keys</strong>
+                  <span class="aistudio-btn highlight-box" style="position:relative;">
+                    ＋ Create API key
+                    <span class="badge-floating">1</span>
+                  </span>
+                </div>
+                <div style="font-size:10px; color:#9aa0a6;">生成されたあなたのAPIキー：</div>
+                <div class="apikey-box highlight-box">
+                  <span class="badge-floating">2</span>
+                  <span>AIzaSyD9x8...（39文字）</span>
+                  <span style="background:#8ab4f8; color:#062e6f; padding:2px 8px; border-radius:4px; font-weight:700;">📋 Copy</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 第3部 見出し -->
+      <div class="section-heading">
+        <h2>第3部：「おもいでキャンバス」へのログイン手順</h2>
+        <span>※次回からは自動入力されます</span>
+      </div>
+
+      <!-- STEP 3-1 -->
+      <div class="step-block">
+        <div class="step-header">
+          <span class="step-number">手順 3-1</span>
+          <div class="step-title">起動時のログイン画面にAPIキーを貼り付けて開始する</div>
+        </div>
+        <div class="step-grid">
+          <div class="step-desc">
+            <p>スマホやPCで「おもいでキャンバス」の公開アドレスを開きます。</p>
+            <div class="url-box">https://k3and4ai-sudo.github.io/omoide-canvas/</div>
+            <ol>
+              <li>起動時に表示されるログイン画面の <span class="callout-num">1</span><strong>「Gemini API キー」入力欄</strong> に、先ほどコピーしたキー（<code>AIzaSy...</code>）を貼り付けます。</li>
+              <li><span class="callout-num">2</span><strong>「この端末のブラウザにのみ記憶する」</strong> にチェックを入れておくと、次回から入力不要になります。</li>
+              <li><span class="callout-num">3</span><strong>「🚀 このAPIキーでログインして開始」</strong> をタップすると認証が完了し、すぐにお話を始められます！</li>
+            </ol>
+          </div>
+
+          <!-- 画面図解 3-1（おもいでキャンバス実画面） -->
+          <div class="screen-frame">
+            <div class="browser-bar">
+              <div class="browser-dots"><span></span><span></span><span></span></div>
+              <div class="browser-address">🔒 k3and4ai-sudo.github.io/omoide-canvas/</div>
+            </div>
+            <div class="screen-body" style="background:#faf6f0; padding:10px 12px;">
+              <div style="background:#2c5e4f; color:#fff; padding:6px 10px; border-radius:6px 6px 0 0; font-weight:700; font-size:11.5px;">
+                🔐 おもいでキャンバス ログイン（APIキー設定）
+              </div>
+              <div style="background:#fff; border:1px solid #d4e6de; border-top:none; padding:10px; border-radius:0 0 6px 6px;">
+                <div style="font-size:10.5px; font-weight:700; margin-bottom:3px;">🔑 Gemini API キー（Google AI Studio）</div>
+                <div class="g-input highlight-box" style="font-family:monospace; margin-bottom:6px;">
+                  <span class="badge-floating">1</span>
+                  AIzaSyD9x8●●●●●●●●●●●●●●●●
+                </div>
+                <div class="highlight-box" style="font-size:10px; padding:3px 6px; margin-bottom:8px;">
+                  <span class="badge-floating">2</span>
+                  ☑️ この端末（スマホ・PC）のブラウザにのみ記憶する
+                </div>
+                <div class="highlight-box" style="background:#2c5e4f !important; color:#fff; text-align:center; padding:6px; border-radius:6px; font-weight:700; font-size:11px;">
+                  <span class="badge-floating">3</span>
+                  🚀 このAPIキーでログインして開始
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 安心ポイント -->
+      <div class="tip-box">
+        <strong>💡 安心・安全にお使いいただくためのポイント</strong><br>
+        ・入力されたAPIキーは、<strong>現在開いているあなたの通信セッションでのみ</strong>使用され、他の利用者に表示・共有されることはありません。<br>
+        ・画面右上の <strong>「🔑 認証済 (AIzaSy...)」</strong> ボタンから、いつでもAPIキーの変更や端末内の保存キー消去（ログアウト）が行えます。
+      </div>
+    </div>
+
+    <footer class="doc-footer">
+      <span>おもいでキャンバス (omoide-canvas) 公式マニュアル</span>
+      <span>2 / 2 ページ</span>
+    </footer>
+  </div>
+
+</body>
+</html>
