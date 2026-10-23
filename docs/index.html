@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>おもいでキャンバス (omoide-canvas) 接続ゲートウェイ</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #fcf9f2 0%, #eef5f2 100%);
+      color: #2b2d42;
+      font-family: "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+      text-align: center;
+    }
+    .card {
+      background: #ffffff;
+      border: 2px solid #e5dfd3;
+      border-radius: 24px;
+      padding: 40px 28px;
+      max-width: 420px;
+      width: 88%;
+      box-shadow: 0 12px 36px rgba(44, 94, 79, 0.12);
+    }
+    .icon {
+      font-size: 3.2rem;
+      margin-bottom: 12px;
+    }
+    .spinner {
+      width: 44px;
+      height: 44px;
+      border: 4px solid rgba(44, 94, 79, 0.2);
+      border-top-color: #2c5e4f;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+      margin: 0 auto 20px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    h2 {
+      margin: 0 0 10px;
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #2c5e4f;
+    }
+    p {
+      margin: 0;
+      font-size: 0.95rem;
+      color: #5c6479;
+      line-height: 1.6;
+    }
+    .error-box {
+      display: none;
+      background: #fff5ed;
+      border: 1.5px solid #e07a5f;
+      color: #2b2d42;
+      padding: 16px;
+      border-radius: 14px;
+      margin-top: 20px;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      text-align: left;
+    }
+    .retry-btn {
+      display: inline-block;
+      margin-top: 14px;
+      padding: 10px 24px;
+      background: #2c5e4f;
+      color: #ffffff;
+      border-radius: 999px;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 0.95rem;
+      cursor: pointer;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">🎨</div>
+    <div id="spinner" class="spinner"></div>
+    <h2 id="title">おもいでキャンバスへ接続中...</h2>
+    <p id="desc">最新のセキュアサーバーへ自動的にご案内しています</p>
+    <div id="error-box" class="error-box">
+      <div id="error-msg"></div>
+      <button class="retry-btn" onclick="location.reload()">🔄 再読み込み</button>
+    </div>
+  </div>
+
+  <script>
+    async function connectToCanvas() {
+      const title = document.getElementById("title");
+      const desc = document.getElementById("desc");
+      const spinner = document.getElementById("spinner");
+      const errorBox = document.getElementById("error-box");
+      const errorMsg = document.getElementById("error-msg");
+
+      try {
+        let data = null;
+        const endpoints = [
+          `https://raw.githubusercontent.com/k3and4ai-sudo/omoide-canvas/main/docs/tunnel_endpoint.json?t=${Date.now()}`,
+          `./tunnel_endpoint.json?t=${Date.now()}`
+        ];
+        for (const ep of endpoints) {
+          try {
+            const res = await fetch(ep, { cache: "no-store" });
+            if (res.ok) {
+              const parsed = await res.json();
+              if (parsed && parsed.status === "online" && parsed.backend_url) {
+                data = parsed;
+                break;
+              }
+            }
+          } catch (e) {}
+        }
+
+        if (data && data.status === "online" && data.backend_url) {
+          desc.textContent = "接続先が確認できました。画面を開きます...";
+          const search = window.location.search || "";
+          window.location.replace(`${data.backend_url}/${search}`);
+        } else {
+          throw new Error("現在サーバーがスリープ中または停止中です。<br>PC側で <code>./start_tunnel.sh</code> を実行してください。");
+        }
+      } catch (err) {
+        spinner.style.display = "none";
+        title.textContent = "サーバー待機中";
+        desc.textContent = "接続先サーバーが見つかりませんでした。";
+        errorBox.style.display = "block";
+        errorMsg.innerHTML = err.message;
+      }
+    }
+    connectToCanvas();
+  </script>
+</body>
+</html>
