@@ -22,9 +22,9 @@
 
   // 周囲音・テレビ音声カットモード別のRMSしきい値設定（スマホマイク最適チューニング版）
   const NOISE_GATE_PRESETS = {
-    normal: { rms: 0.0022, hangoverChunks: 7, eosSilenceChunks: 6, label: '標準感度' },
-    tv_cut: { rms: 0.0055, hangoverChunks: 7, eosSilenceChunks: 6, label: 'テレビ・周囲音カット' },
-    strict: { rms: 0.0120, hangoverChunks: 6, eosSilenceChunks: 5, label: '強めカット' }
+    normal: { rms: 0.0022, vuThresholdPercent: 3, hangoverChunks: 12, eosSilenceChunks: 14, label: '標準感度' },
+    tv_cut: { rms: 0.0045, vuThresholdPercent: 7, hangoverChunks: 12, eosSilenceChunks: 14, label: 'テレビ・周囲音カット' },
+    strict: { rms: 0.0100, vuThresholdPercent: 14, hangoverChunks: 10, eosSilenceChunks: 12, label: '強めカット' }
   };
 
   const state = {
@@ -528,18 +528,21 @@
 ・絶対に触れてはいけないNG話題：${ngStr}
 
 # 【全レベル共通の絶対原則】
-1. 否定・訂正の絶対禁止（バリデーション）：事実と異なる発言や同じ話の繰り返しがあっても決して指摘・訂正せず、毎回初めて聞くように温かく受け止めてください。
-2. 挨拶の連呼・「どういたしまして」の誤用禁止：最初の挨拶の後は「こんにちは」を繰り返さず、相手の発言内容に100%直接答えてください。
-3. 短期記憶テスト・質問攻めの禁止：1回の返答につき質問は【最大1つだけ】にしてください。
-4. 人生の先生として敬意を払う姿勢：「ぜひ${nickname}に教えていただきたいです」という姿勢で接してください。
-5. 【重要】テレビ・ラジオ・周囲の雑音対策（空間フィルタリング）：
+1. 【最重要】聞き取った言葉への100%忠実な応答：
+   ご本人が話した言葉（および送信された認識テキスト）をそのまま最優先で受け止め、まずその言葉を復唱・共感して100%直接答えてください。言っていないことを勝手に推測したり、プロフィール情報（リンゴ畑や先生など）へ無理やり話題をすり替えるのは絶対に禁止です。
+2. 否定・訂正の絶対禁止（バリデーション）：事実と異なる発言や同じ話の繰り返しがあっても決して指摘・訂正せず、毎回初めて聞くように温かく受け止めてください。
+3. 挨拶の連呼・「どういたしまして」の誤用禁止：最初の挨拶の後は「こんにちは」を繰り返さず、相手の発言内容に100%直接答えてください。
+4. 短期記憶テスト・質問攻めの禁止：1回の返答につき質問は【最大1つだけ】にしてください。
+5. 人生の先生として敬意を払う姿勢：「ぜひ${nickname}に教えていただきたいです」という姿勢で接してください。
+6. 【重要】テレビ・ラジオ・周囲の雑音対策（空間フィルタリング）：
    背景から聞こえるテレビ番組の音声（ニュース、CM、ドラマ等）や遠くの第三者の声には絶対に反応せず、目の前の「${nickname}」が直接ゆっくり話しかけた言葉にのみ返答してください。
 ${levelRules}
 
-# 【思い出の映像化（ツール呼び出し）ルール】
-・会話の中で昔の思い出の風景や行きたい場所の情景が語られたら（または「絵を描いて」と希望されたら）：
-1. 「とても素敵な風景ですね！今その絵を描いてみますね」と声かけし、直ちに \`generate_memory_visual\` ツールを呼び出す。
-2. 絵が表示されたら「${nickname}、画面に絵が浮かびましたが、こんな雰囲気でしたか？」と確認する。
+# 【思い出の映像化（キャンバス描画ツール呼び出し）ルール】
+・通常の日常会話や挨拶、質問に対しては、勝手に絵を描かず、まず会話そのものを丁寧に楽しんでください。
+・会話の中で具体的な思い出の風景や行きたい場所の情景が語られた時、またはご本人から「絵を描いて」「キャンバスに映して」と希望された時のみ：
+1. 「とても素敵な風景ですね！今その絵をキャンバスに描いてみますね」と声かけし、直ちに \`generate_memory_visual\` ツールを呼び出す。
+2. 絵が表示されたら「${nickname}、キャンバスに絵が浮かびましたが、こんな雰囲気でしたか？」と確認する。
 3. 修正希望があった場合は \`refine_memory_visual\` ツールを呼び出す。
 
 # 【緊急通報（SOS）の絶対ルール】
@@ -758,9 +761,9 @@ ${levelRules}
             automatic_activity_detection: {
               disabled: false,
               start_of_speech_sensitivity: 'START_SENSITIVITY_HIGH',
-              end_of_speech_sensitivity: 'END_SENSITIVITY_HIGH',
-              prefix_padding_ms: 80,
-              silence_duration_ms: 300
+              end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
+              prefix_padding_ms: 200,
+              silence_duration_ms: 800
             }
           },
           tools: [
@@ -1386,7 +1389,7 @@ ${levelRules}
             state.pendingUserTranscript = interimTranscript.trim();
           }
 
-          // ユーザーが話し終えた（1.2秒間の沈黙）を検知して送信
+          // ユーザーが話し終えた（950msの沈黙）を検知して送信
           if (state.speechDebounceTimer) {
             clearTimeout(state.speechDebounceTimer);
           }
@@ -1403,7 +1406,7 @@ ${levelRules}
               logDiag(`発話完了を検知（デモ）: 「${textToSend}」`);
               const profile = state.currentProfile || DEFAULT_USER_PROFILE;
               const nickname = formatUserNickname(profile.call_name);
-              const aiReply = `${textToSend}ですか、とても素敵ですね！その頃の情景をキャンバスに描いてみますね。`;
+              const aiReply = `${textToSend}ですね！お話しくださってありがとうございます。その情景をキャンバスにも描いてみますね。`;
               dom.aiTranscriptText.textContent = aiReply;
               speakTextWithWebSpeech(aiReply);
               setTimeout(async () => {
@@ -1411,26 +1414,39 @@ ${levelRules}
                 setAvatarState('drawing');
                 const art = await generateStandaloneMemoryArtifact({
                   scene_type: 'past_memory',
-                  japanese_title: `${textToSend.slice(0, 14)}の思い出`,
+                  japanese_title: `${textToSend.slice(0, 14)}の風景`,
                   visual_elements: `${textToSend}、懐かしい日本の風景、温かい日差し`,
                   ambient_sound: 'autumn_insects'
                 });
                 displayGeneratedMedia(art);
-                const followUp = `${nickname}、画面に絵が浮かびましたよ。こんな雰囲気でしたか？`;
+                const followUp = `${nickname}、キャンバスに「${textToSend.slice(0, 14)}」の絵が浮かびましたよ。いかがですか？`;
                 dom.aiTranscriptText.textContent = followUp;
                 speakTextWithWebSpeech(followUp);
               }, 2200);
               return;
             }
 
-            if (state.socket && state.socket.readyState === WebSocket.OPEN && !state.isDirectGeminiWs) {
-              state.socket.send(JSON.stringify({
-                type: 'user_transcript',
-                text: textToSend
-              }));
-              logDiag(`発話完了を検知・送信: 「${textToSend}」`);
+            if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+              if (state.isDirectGeminiWs) {
+                // Gemini直結時も、ブラウザで正確に聞き取れた日本語字幕テキストを送信して聞き間違いをゼロにする
+                if (!state.currentAiTurnTranscript) {
+                  state.socket.send(JSON.stringify({
+                    client_content: {
+                      turns: [{ role: 'user', parts: [{ text: textToSend }] }],
+                      turn_complete: true
+                    }
+                  }));
+                  logDiag(`認識テキストを送信: 「${textToSend}」`);
+                }
+              } else {
+                state.socket.send(JSON.stringify({
+                  type: 'user_transcript',
+                  text: textToSend
+                }));
+                logDiag(`発話完了を検知・送信: 「${textToSend}」`);
+              }
             }
-          }, 1200);
+          }, 950);
         }
       };
 

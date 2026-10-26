@@ -121,14 +121,14 @@ class LiveSessionManager:
                 thinking_config=types.ThinkingConfig(
                     thinking_budget=0
                 ),
-                # 音声区間検出（VAD）：最高感度＋300ms無音判定で、話し終えた瞬間に即座に返答開始
+                # 音声区間検出（VAD）：文の途中の息継ぎで切れないよう800msの余裕を持たせる
                 realtime_input_config=types.RealtimeInputConfig(
                     automatic_activity_detection=types.AutomaticActivityDetection(
                         disabled=False,
                         start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
-                        end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
-                        prefix_padding_ms=80,
-                        silence_duration_ms=300
+                        end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
+                        prefix_padding_ms=200,
+                        silence_duration_ms=800
                     )
                 ),
                 system_instruction=system_instruction,
@@ -225,11 +225,15 @@ class LiveSessionManager:
                             logger.debug(f"audio_stream_end notice: {eos_err}")
 
                     elif msg_type == "user_transcript":
-                        # スマホ等でブラウザ音声認識またはテキスト送信された発話のフォールバック処理
+                        # ブラウザ音声認識で確定した字幕テキストをGeminiへも補足通知し、聞き間違いを防止
                         user_text = data.get("text", "").strip()
                         if user_text:
                             logger.info(f"User transcript received: {user_text}")
                             self.discussed_topics.append(user_text)
+                            try:
+                                await session.send(input=f"（ユーザーの発言：「{user_text}」※この発言内容にそのまま直接答えてください）", end_of_turn=True)
+                            except Exception as tr_err:
+                                logger.debug(f"Transcript forward notice: {tr_err}")
 
                     elif msg_type == "test_generate_visual":
                         await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
