@@ -233,6 +233,33 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 if FRONTEND_DIR.exists():
     app.mount("/app", StaticFiles(directory="frontend"), name="frontend")
 
+
+@app.get("/styles.css")
+async def serve_styles_css():
+    return FileResponse(FRONTEND_DIR / "styles.css", media_type="text/css")
+
+
+@app.get("/app.js")
+async def serve_app_js():
+    return FileResponse(FRONTEND_DIR / "app.js", media_type="application/javascript")
+
+
+@app.get("/Omoide_Canvas_User_Manual.pdf")
+async def serve_user_manual_pdf():
+    pdf_path = Path("docs/Omoide_Canvas_User_Manual.pdf")
+    if not pdf_path.exists():
+        pdf_path = STATIC_DIR / "manual" / "Omoide_Canvas_User_Manual.pdf"
+    return FileResponse(pdf_path, media_type="application/pdf")
+
+
+@app.get("/Google_Account_and_Gemini_API_Key_Manual.pdf")
+async def serve_api_key_manual_pdf():
+    pdf_path = Path("docs/Google_Account_and_Gemini_API_Key_Manual.pdf")
+    if not pdf_path.exists():
+        pdf_path = STATIC_DIR / "manual" / "Google_Account_and_Gemini_API_Key_Manual.pdf"
+    return FileResponse(pdf_path, media_type="application/pdf")
+
+
 @app.get("/")
 async def root_index():
     """ルートアクセス時はフロントエンドの index.html を返す"""

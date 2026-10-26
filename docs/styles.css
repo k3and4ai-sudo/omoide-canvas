@@ -1,0 +1,1318 @@
+/* ==========================================================================
+   おもいでキャンバス (omoide-canvas) スタイルシート
+   和モダン・水彩風・認知負荷ゼロUIデザインシステム
+   ========================================================================== */
+
+:root {
+  --primary: #2c5e4f;          /* 落ち着いた深緑・常磐色 */
+  --primary-light: #417b6a;
+  --primary-subtle: #eef5f2;
+  --secondary: #e07a5f;        /* 温かみのあるテラコッタ橙 */
+  --secondary-soft: #f4a261;
+  --accent-gold: #f2cc8f;      /* 優しい山吹色 */
+  --accent-blue: #81b29a;      /* 青磁色 */
+  
+  --bg-warm: #fcf9f2;          /* 生成り色（和紙のような温かい白） */
+  --card-bg: #ffffff;
+  --text-main: #2b2d42;        /* 視認性の高いスミ色 */
+  --text-muted: #5c6479;
+  --border-color: #e5dfd3;
+
+  --shadow-sm: 0 2px 8px rgba(44, 94, 79, 0.06);
+  --shadow-md: 0 6px 20px rgba(44, 94, 79, 0.08);
+  --shadow-lg: 0 12px 36px rgba(44, 94, 79, 0.12);
+  
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-full: 9999px;
+  
+  --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  font-family: 'Zen Maru Gothic', 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
+  background-color: var(--bg-warm);
+  color: var(--text-main);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ==========================================================================
+   ヘッダー
+   ========================================================================== */
+.app-header {
+  height: 64px;
+  background: #ffffff;
+  border-bottom: 1.5px solid var(--border-color);
+  padding: 0 28px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: var(--shadow-sm);
+  z-index: 10;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-icon {
+  font-size: 26px;
+}
+
+.brand-title {
+  font-family: 'Kiwi Maru', 'Zen Maru Gothic', serif;
+  font-size: 22px;
+  color: var(--primary);
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+.user-greeting {
+  font-size: 15px;
+  color: var(--text-muted);
+  background: var(--primary-subtle);
+  padding: 4px 14px;
+  border-radius: var(--radius-full);
+  margin-left: 12px;
+  border: 1px solid rgba(44, 94, 79, 0.15);
+}
+
+.btn-subtle {
+  background: #f4efe6;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  padding: 8px 16px;
+  border-radius: var(--radius-full);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.btn-subtle:hover {
+  background: #eae2d5;
+  color: var(--text-main);
+}
+
+/* ==========================================================================
+   メインレイアウト（ご本人用「認知負荷ゼロ」2画面構成）
+   ========================================================================== */
+.canvas-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 24px;
+  padding: 20px 28px;
+  overflow: hidden;
+}
+
+@media (max-width: 960px) {
+  .canvas-main {
+    grid-template-columns: 300px 1fr;
+    gap: 16px;
+    padding: 16px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   左パネル: AIパートナー アバター
+   -------------------------------------------------------------------------- */
+.partner-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.avatar-card {
+  flex: 1;
+  background: var(--card-bg);
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+.avatar-container {
+  width: 220px;
+  height: 220px;
+  position: relative;
+  margin-bottom: 20px;
+  transition: transform 0.4s ease;
+}
+
+.avatar-svg {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+  pointer-events: none;
+}
+
+/* アバター状態切り替え */
+.avatar-container[data-state="idle"] .state-idle,
+.avatar-container[data-state="listening"] .state-listening,
+.avatar-container[data-state="speaking"] .state-speaking,
+.avatar-container[data-state="drawing"] .state-drawing {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+/* パートナー性別に応じたカラーテーマ切り替え（男性設定時は爽やかな紺青色） */
+.avatar-container[data-gender="男性"] .avatar-svg > circle:first-of-type {
+  stroke: #3d5a80;
+}
+.avatar-container[data-gender="男性"] .avatar-svg > path:first-of-type {
+  fill: #3d5a80;
+}
+
+/* アバターアニメーション */
+.avatar-container[data-state="idle"] {
+  animation: gentle-breath 4s ease-in-out infinite;
+}
+
+.avatar-container[data-state="listening"] {
+  animation: nod-listening 2.5s ease-in-out infinite;
+}
+
+.avatar-container[data-state="speaking"] .speaking-mouth {
+  animation: mouth-move 0.35s ease-in-out infinite alternate;
+}
+
+.avatar-container[data-state="drawing"] .brush-motion {
+  animation: draw-wiggle 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes gentle-breath {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+@keyframes nod-listening {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  35% { transform: translateY(4px) rotate(-1.5deg); }
+  65% { transform: translateY(2px) rotate(1deg); }
+}
+
+@keyframes mouth-move {
+  0% { transform: scaleY(0.6); transform-origin: center; }
+  100% { transform: scaleY(1.2); transform-origin: center; }
+}
+
+@keyframes draw-wiggle {
+  0% { transform: rotate(-5deg) translate(-2px, -2px); transform-origin: 125px 120px; }
+  100% { transform: rotate(10deg) translate(2px, 2px); transform-origin: 125px 120px; }
+}
+
+.partner-name-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--primary-subtle);
+  color: var(--primary);
+  padding: 6px 18px;
+  border-radius: var(--radius-full);
+  font-size: 14px;
+  font-weight: 500;
+  border: 1px solid rgba(44, 94, 79, 0.15);
+}
+
+.badge-dot {
+  width: 8px;
+  height: 8px;
+  background-color: var(--accent-blue);
+  border-radius: 50%;
+  display: inline-block;
+  animation: pulse-dot 2s infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.6; }
+}
+
+/* マイク音量・オシロスコープ波形モニター */
+.audio-monitor-card {
+  background: #ffffff;
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.monitor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.monitor-label {
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.vu-level-text {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.oscilloscope-canvas {
+  width: 100%;
+  height: 46px;
+  background-color: #1a2723;
+  border-radius: 6px;
+  box-shadow: inset 0 2px 6px rgba(0,0,0,0.3);
+}
+
+.vu-meter-track {
+  width: 100%;
+  height: 7px;
+  background: #e8e2d5;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  position: relative;
+}
+
+.vu-meter-threshold {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background-color: #d62828;
+  z-index: 2;
+  opacity: 0.75;
+  transition: left 0.2s ease;
+}
+
+.vu-meter-fill {
+  width: 0%;
+  height: 100%;
+  background: linear-gradient(90deg, #81b29a, #f4a261, #e07a5f);
+  border-radius: var(--radius-full);
+  transition: width 0.08s ease-out;
+}
+
+.noise-gate-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.noise-gate-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.noise-gate-select {
+  flex: 1;
+  font-size: 11.5px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: #f9fcfa;
+  color: var(--primary);
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* 特大対話開始ボタン */
+.session-trigger-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-primary-large {
+  background: linear-gradient(135deg, var(--primary), var(--primary-light));
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 18px 24px;
+  font-size: 20px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(44, 94, 79, 0.25);
+  transition: var(--transition-smooth);
+}
+
+.btn-primary-large:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 22px rgba(44, 94, 79, 0.35);
+}
+
+.btn-primary-large:active {
+  transform: translateY(1px);
+}
+
+.btn-primary-large.active {
+  background: linear-gradient(135deg, var(--secondary), #c2593f);
+  box-shadow: 0 6px 16px rgba(224, 122, 95, 0.3);
+}
+
+.btn-icon {
+  font-size: 26px;
+}
+
+.session-hint {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* --------------------------------------------------------------------------
+   右パネル: 思い出キャンバス（特大描画エリア）
+   -------------------------------------------------------------------------- */
+.memory-canvas-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.canvas-frame {
+  flex: 1;
+  background: #ffffff;
+  border: 2px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.media-display-area {
+  flex: 1;
+  position: relative;
+  background: #fdfbf7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* プレースホルダー */
+.canvas-placeholder {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-muted);
+}
+
+.canvas-placeholder.hidden {
+  display: none !important;
+}
+
+.art-icon {
+  font-size: 64px;
+  display: block;
+  margin-bottom: 16px;
+  opacity: 0.85;
+}
+
+.canvas-placeholder h2 {
+  font-family: 'Kiwi Maru', serif;
+  color: var(--primary);
+  font-size: 24px;
+  margin-bottom: 12px;
+}
+
+.canvas-placeholder p {
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+/* 生成された画像・動画 */
+.memory-visual {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background-color: #fdfbf7;
+  border-radius: 8px;
+  transition: opacity 0.6s ease-in-out;
+}
+
+.memory-visual.hidden {
+  display: none !important;
+  opacity: 0;
+}
+
+/* 描画中ローディング */
+.drawing-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(253, 251, 247, 0.88);
+  backdrop-filter: blur(4px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  transition: opacity 0.4s ease;
+}
+
+.drawing-overlay.hidden {
+  display: none;
+}
+
+.watercolor-spinner {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--secondary), var(--accent-gold), var(--primary), var(--secondary));
+  mask: radial-gradient(circle, transparent 52%, black 53%);
+  -webkit-mask: radial-gradient(circle, transparent 52%, black 53%);
+  animation: spin 1.8s linear infinite;
+  margin-bottom: 18px;
+}
+
+@keyframes spin {
+  100% { transform: rotate(360deg); }
+}
+
+.drawing-text {
+  font-family: 'Kiwi Maru', serif;
+  font-size: 18px;
+  color: var(--primary);
+  font-weight: 500;
+}
+
+/* リアルタイム文字起こし・字幕パネル */
+.subtitles-panel {
+  background: #fbf9f5;
+  border-top: 1.5px solid var(--border-color);
+  padding: 12px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 84px;
+}
+
+.subtitle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.2s ease;
+}
+
+.user-row {
+  background: #eef5f2;
+  border-left: 3px solid var(--primary);
+}
+
+.ai-row {
+  background: #fff5ed;
+  border-left: 3px solid var(--secondary);
+}
+
+.speaker-tag {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.user-tag {
+  background: var(--primary);
+  color: #fff;
+}
+
+.ai-tag {
+  background: var(--secondary);
+  color: #fff;
+}
+
+.subtitle-text {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-main);
+  line-height: 1.5;
+  flex: 1;
+}
+
+/* キャプションバー */
+.canvas-caption-bar {
+  height: 64px;
+  background: #ffffff;
+  border-top: 1.5px solid var(--border-color);
+  padding: 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.caption-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.caption-tag {
+  background: var(--secondary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+}
+
+.caption-title {
+  font-family: 'Kiwi Maru', serif;
+  font-size: 20px;
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.caption-sound-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-muted);
+  background: #f7f3ec;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+}
+
+.caption-sound-indicator.hidden {
+  display: none;
+}
+
+.sound-wave {
+  color: var(--secondary);
+  font-weight: bold;
+  animation: sound-bounce 1s infinite alternate;
+}
+
+@keyframes sound-bounce {
+  0% { transform: scale(0.9); }
+  100% { transform: scale(1.2); }
+}
+
+/* ==========================================================================
+   フッターステータスバー
+   ========================================================================== */
+.app-status-bar {
+  height: 52px;
+  background: var(--primary);
+  color: #ffffff;
+  padding: 0 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 -2px 10px rgba(0,0,0,0.06);
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 15px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  background-color: #81b29a;
+  border-radius: 50%;
+}
+
+.status-dot.active {
+  background-color: #e07a5f;
+  animation: pulse-dot 1.2s infinite;
+}
+
+/* 波形ビジュアライザ */
+.visualizer-container {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+}
+
+.wave-bar {
+  width: 4px;
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.6);
+  border-radius: var(--radius-full);
+  transition: height 0.15s ease;
+}
+
+.visualizer-container.listening .wave-bar {
+  animation: wave 0.8s ease-in-out infinite alternate;
+}
+
+.visualizer-container.listening .wave-bar:nth-child(2) { animation-delay: 0.15s; }
+.visualizer-container.listening .wave-bar:nth-child(3) { animation-delay: 0.3s; }
+.visualizer-container.listening .wave-bar:nth-child(4) { animation-delay: 0.45s; }
+.visualizer-container.listening .wave-bar:nth-child(5) { animation-delay: 0.6s; }
+
+@keyframes wave {
+  0% { height: 6px; }
+  100% { height: 22px; background-color: #ffffff; }
+}
+
+.hidden-vision-elements {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 1px;
+  height: 1px;
+}
+
+/* ==========================================================================
+   モーダル（介護者用ダッシュボード）
+   ========================================================================== */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(43, 45, 66, 0.45);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.modal-backdrop.hidden {
+  display: none;
+}
+
+.modal-dialog {
+  background: #ffffff;
+  width: 100%;
+  max-width: 840px;
+  max-height: 90vh;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.modal-header {
+  padding: 18px 24px;
+  background: var(--bg-warm);
+  border-bottom: 1.5px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h2 {
+  font-size: 20px;
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.btn-close {
+  background: none;
+  border: none;
+  font-size: 28px;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.modal-tabs {
+  display: flex;
+  background: #f4efe6;
+  border-bottom: 1.5px solid var(--border-color);
+  overflow-x: auto;
+}
+
+.tab-btn {
+  padding: 12px 20px;
+  background: none;
+  border: none;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  transition: var(--transition-smooth);
+  white-space: nowrap;
+}
+
+.tab-btn.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: #ffffff;
+}
+
+.modal-body {
+  padding: 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.tab-pane {
+  display: none;
+}
+
+.tab-pane.active {
+  display: block;
+}
+
+/* フォーム部品 */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 640px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 700;
+  margin-bottom: 6px;
+  color: var(--text-main);
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  color: var(--text-main);
+  background: #ffffff;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+  border-color: var(--primary);
+}
+
+.form-fieldset {
+  border: 1.5px solid #f4c2b5;
+  background: #fff8f6;
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-top: 16px;
+}
+
+.form-fieldset legend {
+  padding: 0 10px;
+  font-weight: 700;
+  color: #c2593f;
+  font-size: 14px;
+}
+
+.text-danger {
+  color: #c2593f !important;
+}
+
+.modal-footer {
+  margin-top: 24px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 12px 24px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.btn-primary:hover {
+  background: var(--primary-light);
+}
+
+.btn-secondary {
+  background: #f4efe6;
+  border: 1.5px solid var(--border-color);
+  color: var(--text-main);
+  padding: 10px 18px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.btn-secondary:hover {
+  background: #eae2d5;
+}
+
+/* ギャラリー＆日報一覧 */
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.gallery-card {
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.gallery-card img {
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+}
+
+.gallery-card-body {
+  padding: 12px;
+}
+
+.gallery-card-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 4px;
+}
+
+.gallery-card-date {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.reports-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.report-card {
+  border: 1.5px solid var(--border-color);
+  background: #ffffff;
+  border-radius: var(--radius-md);
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.report-header {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+
+.report-date {
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.report-duration {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.report-body {
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* 診断ログ */
+.diagnostic-box {
+  background: #fdfbf7;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
+
+.diag-buttons {
+  display: flex;
+  gap: 12px;
+  margin: 16px 0;
+  flex-wrap: wrap;
+}
+
+.diag-log {
+  background: #2b2d42;
+  color: #81b29a;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  font-family: monospace;
+  font-size: 12px;
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.empty-hint {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 40px;
+  font-size: 14px;
+}
+
+/* ==========================================================================
+   スマートフォン・縦画面レスポンシブ最適化 (max-width: 768px)
+   ========================================================================== */
+@media (max-width: 768px) {
+  body {
+    height: auto;
+    min-height: 100dvh;
+    overflow-y: auto;
+  }
+
+  /* 1. ヘッダーの文字折り返し・崩れ防止 */
+  .app-header {
+    height: auto;
+    min-height: 54px;
+    padding: 8px 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .brand-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+  }
+
+  .brand-title {
+    font-size: 16px;
+    white-space: nowrap;
+    letter-spacing: 0.02em;
+  }
+
+  .user-greeting {
+    font-size: 12px;
+    padding: 3px 10px;
+    margin-left: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .btn-subtle {
+    padding: 6px 10px;
+    font-size: 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* 2. メイン2画面をスマホでは縦並び（1カラム）に配置 */
+  .canvas-main {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    overflow: visible;
+  }
+
+  /* 3. パートナーパネルをコンパクト化 */
+  .partner-panel {
+    gap: 10px;
+  }
+
+  .avatar-card {
+    padding: 14px;
+    flex-direction: row;
+    justify-content: space-around;
+    gap: 12px;
+  }
+
+  .avatar-container {
+    width: 96px;
+    height: 96px;
+    margin-bottom: 0;
+    flex-shrink: 0;
+  }
+
+  .partner-name-badge {
+    font-size: 13px;
+    padding: 6px 12px;
+    white-space: nowrap;
+  }
+
+  .btn-primary-large {
+    padding: 14px 18px;
+    font-size: 18px;
+  }
+
+  /* 4. 思い出キャンバスと字幕のスマホ最適化 */
+  .media-display-area {
+    min-height: 220px;
+  }
+
+  .canvas-placeholder {
+    padding: 20px 14px;
+  }
+
+  .art-icon {
+    font-size: 42px;
+    margin-bottom: 8px;
+  }
+
+  .canvas-placeholder h2 {
+    font-size: 18px;
+  }
+
+  .canvas-placeholder p {
+    font-size: 13px;
+  }
+
+  .subtitles-panel {
+    padding: 10px 12px;
+    min-height: auto;
+  }
+
+  .subtitle-row {
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 8px;
+  }
+
+  .subtitle-text {
+    font-size: 14px;
+  }
+
+  .canvas-caption-bar {
+    height: auto;
+    min-height: 48px;
+    padding: 8px 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .caption-title {
+    font-size: 15px;
+  }
+
+  /* 5. フッターステータスバー */
+  .app-status-bar {
+    height: auto;
+    min-height: 44px;
+    padding: 8px 12px;
+  }
+
+  .status-indicator {
+    font-size: 13px;
+  }
+}
+
+/* ==========================================================================
+   起動時ログイン ＆ セッションAPIキー設定モーダル
+   ========================================================================== */
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-api-key-status.active-key {
+  background: #eaf4ef;
+  border-color: #2c5e4f;
+  color: #2c5e4f;
+  font-weight: 700;
+}
+
+.login-dialog {
+  max-width: 540px;
+}
+
+.login-header {
+  background: linear-gradient(135deg, #2c5e4f, #3b7a67);
+}
+
+.login-header h2 {
+  color: #ffffff;
+  font-size: 18px;
+}
+
+.login-body {
+  padding: 22px 24px;
+}
+
+.login-lead {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-main);
+  background: #f9fcfa;
+  border: 1px solid #d4e6de;
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 18px;
+}
+
+.login-subnote {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.api-key-input-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.api-key-input-wrap input {
+  flex: 1;
+  font-family: monospace;
+  font-size: 15px;
+  letter-spacing: 0.03em;
+}
+
+.btn-eye {
+  background: #f4efe6;
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.remember-key-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-main);
+  cursor: pointer;
+  margin-bottom: 14px;
+}
+
+.remember-key-label input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--primary);
+}
+
+.login-msg {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.login-msg.hidden {
+  display: none;
+}
+
+.login-msg.error {
+  background: #fff2f0;
+  border: 1px solid #f4c2b5;
+  color: #c2593f;
+}
+
+.login-msg.success {
+  background: #eaf4ef;
+  border: 1px solid #81b29a;
+  color: #2c5e4f;
+}
+
+.login-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.btn-login-main {
+  width: 100%;
+  padding: 14px 20px;
+  font-size: 16px;
+  border-radius: var(--radius-md);
+}
+
+.login-secondary-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.login-secondary-actions button {
+  flex: 1;
+  font-size: 12.5px;
+  padding: 9px 12px;
+}
+
+.login-help-box {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border-color);
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.login-help-box a {
+  color: var(--primary);
+  font-weight: 700;
+  text-decoration: underline;
+}
