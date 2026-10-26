@@ -277,8 +277,8 @@ body {
   justify-content: space-between;
   align-items: center;
   font-size: 12px;
-  height: 18px;
-  line-height: 18px;
+  height: 20px;
+  line-height: 20px;
   overflow: hidden;
   min-width: 0;
 }
@@ -290,14 +290,49 @@ body {
   flex-shrink: 0;
 }
 
+.monitor-state-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: #edf2ef;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  height: 18px;
+  line-height: 16px;
+}
+
+.monitor-state-badge.active {
+  background: rgba(61, 90, 69, 0.14);
+  color: var(--primary);
+}
+
+.mic-response-row {
+  width: 100%;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  background: #f6f8f7;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  contain: layout paint;
+}
+
 .vu-level-text {
-  font-size: 11.5px;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  text-align: right;
-  flex-shrink: 0;
+  text-align: left;
+  width: 100%;
+  line-height: 22px;
 }
 
 .oscilloscope-canvas {

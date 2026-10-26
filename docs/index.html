@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261027_4">
+  <link rel="stylesheet" href="styles.css?v=20261027_5">
 </head>
 <body>
 
@@ -117,7 +117,7 @@
       <div class="audio-monitor-card" id="audioMonitorCard">
         <div class="monitor-header">
           <span class="monitor-label">🎙️ マイク音量・波形</span>
-          <span class="vu-level-text" id="vuLevelText">待機中</span>
+          <span class="monitor-state-badge" id="micActiveBadge">待機中</span>
         </div>
         <!-- オシロスコープ波形キャンバス -->
         <canvas id="oscilloscopeCanvas" class="oscilloscope-canvas" width="280" height="46"></canvas>
@@ -125,6 +125,10 @@
         <div class="vu-meter-track">
           <div class="vu-meter-threshold" id="vuMeterThreshold" title="周囲音カットしきい値"></div>
           <div class="vu-meter-fill" id="vuMeterFill"></div>
+        </div>
+        <!-- 音量波形の下に配置：マイク聞き取り応答ステータス（高さ・幅完全固定でちらつき防止） -->
+        <div class="mic-response-row">
+          <span class="vu-level-text" id="vuLevelText">🎤 待機中（お話しください）</span>
         </div>
         <!-- テレビ・周囲音カット（近接マイクモード）ワンタップ切替 -->
         <div class="noise-gate-bar">
@@ -489,6 +493,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261027_4"></script>
+  <script src="app.js?v=20261027_5"></script>
 </body>
 </html>

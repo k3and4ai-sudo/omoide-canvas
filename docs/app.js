@@ -89,6 +89,7 @@
 
     // オシロスコープ ＆ VU音量メーター ＆ テレビ音カット切替
     oscilloscopeCanvas: document.getElementById('oscilloscopeCanvas'),
+    micActiveBadge: document.getElementById('micActiveBadge'),
     vuMeterFill: document.getElementById('vuMeterFill'),
     vuMeterThreshold: document.getElementById('vuMeterThreshold'),
     vuLevelText: document.getElementById('vuLevelText'),
@@ -1034,7 +1035,14 @@ ${levelRules}
     }
     drawFlatOscilloscope();
     dom.vuMeterFill.style.width = '0%';
-    dom.vuLevelText.textContent = '待機中';
+    if (dom.micActiveBadge) {
+      dom.micActiveBadge.textContent = '待機中';
+      dom.micActiveBadge.classList.remove('active');
+    }
+    if (dom.vuLevelText) {
+      dom.vuLevelText.textContent = '🎤 待機中（お話しください）';
+      dom.vuLevelText.style.color = 'var(--text-muted)';
+    }
 
     // マイク停止
     if (state.micStream) {
@@ -1209,11 +1217,18 @@ ${levelRules}
     const ctx = canvas.getContext('2d');
     let lastVuUpdateTime = 0;
     let lastVuWidth = -1;
+    let lastVuText = '';
+    let lastVuColor = '';
+    let voiceHoldUntil = 0;
+    let lastPeakLevel = 0;
 
-    // セッション中のラベルは完全固定（音量による文字数の増減・画面ちらつきを100%防止）
+    if (dom.micActiveBadge) {
+      dom.micActiveBadge.textContent = 'マイクON';
+      dom.micActiveBadge.classList.add('active');
+    }
     if (dom.vuLevelText) {
-      dom.vuLevelText.textContent = 'マイク入力ON';
-      dom.vuLevelText.style.color = 'var(--primary)';
+      dom.vuLevelText.textContent = '🎤 待機中（お話しください）';
+      dom.vuLevelText.style.color = 'var(--text-muted)';
     }
 
     function renderWaveform() {
@@ -1257,15 +1272,54 @@ ${levelRules}
       ctx.lineTo(canvas.width, midY);
       ctx.stroke();
 
-      // 3. VU音量バーのみ更新（テキスト書き換えは一切行わない）
+      // 3. VU音量バー＆波形下の固定枠でのマイク聞き取り応答表示の更新
       const now = performance.now();
-      if (now - lastVuUpdateTime < 120) return;
+      if (now - lastVuUpdateTime < 150) return;
       lastVuUpdateTime = now;
 
       const volumePercent = Math.min(100, Math.round(rms * 1400));
       if (Math.abs(volumePercent - lastVuWidth) >= 2) {
         dom.vuMeterFill.style.width = `${volumePercent}%`;
         lastVuWidth = volumePercent;
+      }
+
+      const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.tv_cut;
+      const thresholdPercent = preset.vuThresholdPercent;
+
+      if (volumePercent >= thresholdPercent && !state.isAiSpeaking) {
+        voiceHoldUntil = now + 450;
+        lastPeakLevel = Math.max(lastPeakLevel, volumePercent);
+      } else if (now >= voiceHoldUntil) {
+        lastPeakLevel = 0;
+      }
+
+      let nextText = '🎤 待機中（お話しください）';
+      let nextColor = 'var(--text-muted)';
+
+      if (state.isAiSpeaking) {
+        nextText = '🔊 パートナーがお話し中（マイク待機）';
+        nextColor = 'var(--primary)';
+      } else if (volumePercent >= thresholdPercent || now < voiceHoldUntil) {
+        if (volumePercent >= 60 || lastPeakLevel >= 60) {
+          nextText = '🎤 音声入力中：しっかり届いています 🟡';
+        } else {
+          nextText = '🎤 音声入力中：良好 🟢';
+        }
+        nextColor = 'var(--primary)';
+      } else if (volumePercent >= 4) {
+        nextText = '📺 周囲音カット中（お近くでどうぞ）';
+        nextColor = 'var(--text-muted)';
+      }
+
+      if (dom.vuLevelText) {
+        if (nextText !== lastVuText) {
+          dom.vuLevelText.textContent = nextText;
+          lastVuText = nextText;
+        }
+        if (nextColor !== lastVuColor) {
+          dom.vuLevelText.style.color = nextColor;
+          lastVuColor = nextColor;
+        }
       }
     }
 
