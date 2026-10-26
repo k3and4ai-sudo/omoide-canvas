@@ -904,7 +904,9 @@ ${levelRules}
 
           if (sc.turnComplete || sc.turn_complete) {
             state.currentAiTurnTranscript = '';
-            setAvatarState('listening');
+            if (!state.isAiSpeaking && !state.isDrawingMedia) {
+              setAvatarState('listening');
+            }
           }
         }
 
@@ -1205,6 +1207,9 @@ ${levelRules}
     const floatArray = new Float32Array(bufferLength);
     const canvas = dom.oscilloscopeCanvas;
     const ctx = canvas.getContext('2d');
+    let lastVuUpdateTime = 0;
+    let lastVuText = '';
+    let lastVuWidth = -1;
 
     function renderWaveform() {
       if (!state.isSessionActive) return;
@@ -1218,56 +1223,69 @@ ${levelRules}
         sumSquares += floatArray[i] * floatArray[i];
       }
       const rms = Math.sqrt(sumSquares / bufferLength);
-      const visualGain = 3.5; // スマホマイクの波形がはっきり振れるよう3.5倍に視覚増幅
+      const visualGain = 3.5;
 
-      // 2. オシロスコープ波形の描画
+      // 2. オシロスコープ波形の描画（shadowBlurを廃止しGPU再描画ちらつきを防止）
       ctx.fillStyle = '#1a2723';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      ctx.lineWidth = 2.5;
-      ctx.strokeStyle = '#81b29a'; // 和の青磁色
-      ctx.shadowBlur = 4;
-      ctx.shadowColor = '#a8dadc';
+      ctx.lineWidth = 2.2;
+      ctx.strokeStyle = '#81b29a';
       ctx.beginPath();
 
       const sliceWidth = canvas.width * 1.0 / bufferLength;
       let x = 0;
       const midY = canvas.height / 2;
 
-      for (let i = 0; i < bufferLength; i++) {
+      for (let i = 0; i < bufferLength; i += 2) {
         const sample = Math.max(-1, Math.min(1, floatArray[i] * visualGain));
-        const y = midY + sample * (midY * 0.9);
+        const y = midY + sample * (midY * 0.88);
 
         if (i === 0) {
           ctx.moveTo(x, y);
         } else {
           ctx.lineTo(x, y);
         }
-        x += sliceWidth;
+        x += sliceWidth * 2;
       }
 
       ctx.lineTo(canvas.width, midY);
       ctx.stroke();
 
-      // 3. VU音量レベルメーターの計算と反映（テレビ・周囲音カットしきい値連動）
-      const volumePercent = Math.min(100, Math.round(rms * 1400)); // スマホ向けに感度向上
+      // 3. VU音量レベルメーターの更新（180ms間隔にスロットル＋同一テキスト時のDOM書換抑止で画面ちらつき完全防止）
+      const now = performance.now();
+      if (now - lastVuUpdateTime < 180) return;
+      lastVuUpdateTime = now;
+
+      const volumePercent = Math.min(100, Math.round(rms * 1400));
       const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.tv_cut;
       const thresholdPercent = Math.min(95, Math.round(preset.rms * 1400));
 
-      dom.vuMeterFill.style.width = `${volumePercent}%`;
+      if (Math.abs(volumePercent - lastVuWidth) >= 2) {
+        dom.vuMeterFill.style.width = `${volumePercent}%`;
+        lastVuWidth = volumePercent;
+      }
 
-      if (volumePercent < 3) {
-        dom.vuLevelText.textContent = '待機中（お話しください）';
-        dom.vuLevelText.style.color = 'var(--text-muted)';
+      let nextText = '';
+      let nextColor = 'var(--text-muted)';
+      if (volumePercent < 4) {
+        nextText = '待機中（お話しください）';
+        nextColor = 'var(--text-muted)';
       } else if (volumePercent < thresholdPercent) {
-        dom.vuLevelText.textContent = '📺 周囲音カット中（お近くでどうぞ）';
-        dom.vuLevelText.style.color = '#8a8f9e';
+        nextText = '周囲音カット中（お近くでどうぞ）';
+        nextColor = '#8a8f9e';
       } else if (volumePercent < 60) {
-        dom.vuLevelText.textContent = '音声入力中：良好 🟢';
-        dom.vuLevelText.style.color = 'var(--primary)';
+        nextText = '音声入力中：良好';
+        nextColor = 'var(--primary)';
       } else {
-        dom.vuLevelText.textContent = '音声入力中：しっかり届いています 🟡';
-        dom.vuLevelText.style.color = '#e07a5f';
+        nextText = '音声入力中：しっかり届いています';
+        nextColor = '#e07a5f';
+      }
+
+      if (nextText !== lastVuText) {
+        dom.vuLevelText.textContent = nextText;
+        dom.vuLevelText.style.color = nextColor;
+        lastVuText = nextText;
       }
     }
 
@@ -1751,6 +1769,9 @@ ${levelRules}
           break;
 
         case 'avatar_state':
+          if (data.state === 'listening' && (state.isAiSpeaking || state.isDrawingMedia)) {
+            break;
+          }
           setAvatarState(data.state);
           break;
 
@@ -1802,7 +1823,9 @@ ${levelRules}
 
     // AI発話中フラグをONにしてマイクエコーを遮断
     state.isAiSpeaking = true;
-    setAvatarState('speaking');
+    if (!state.isDrawingMedia) {
+      setAvatarState('speaking');
+    }
 
     if (state.aiSpeechEndTimer) {
       clearTimeout(state.aiSpeechEndTimer);
@@ -1810,7 +1833,9 @@ ${levelRules}
     const remainingMs = Math.max(150, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 180);
     state.aiSpeechEndTimer = setTimeout(() => {
       state.isAiSpeaking = false;
-      setAvatarState('listening');
+      if (!state.isDrawingMedia) {
+        setAvatarState('listening');
+      }
     }, remainingMs);
   }
 
@@ -1852,29 +1877,44 @@ ${levelRules}
   }
 
   // ============================================================================
-  // アバター表情切り替え
+  // アバター表情切り替え（不要なDOM再描画・ちらつき防止付き）
   // ============================================================================
   function setAvatarState(avatarState) {
-    dom.avatarContainer.setAttribute('data-state', avatarState);
+    if (avatarState === 'drawing') {
+      state.isDrawingMedia = true;
+    } else if (avatarState === 'idle') {
+      state.isDrawingMedia = false;
+    }
+
+    const currentAttr = dom.avatarContainer.getAttribute('data-state');
+    if (currentAttr !== avatarState) {
+      dom.avatarContainer.setAttribute('data-state', avatarState);
+    }
+
     const pName = state.currentProfile?.partner?.name || 'パートナー';
+    let nextLabel = '';
 
     switch (avatarState) {
       case 'idle':
-        dom.partnerStatusText.textContent = `${pName}：準備完了`;
+        nextLabel = `${pName}：準備完了`;
         dom.drawingOverlay.classList.add('hidden');
         break;
       case 'listening':
-        dom.partnerStatusText.textContent = `${pName}：お話を聞いています...`;
-        dom.drawingOverlay.classList.add('hidden');
+        nextLabel = `${pName}：お話を聞いています...`;
+        if (!state.isDrawingMedia) dom.drawingOverlay.classList.add('hidden');
         break;
       case 'speaking':
-        dom.partnerStatusText.textContent = `${pName}：お話し中...`;
-        dom.drawingOverlay.classList.add('hidden');
+        nextLabel = `${pName}：お話し中...`;
+        if (!state.isDrawingMedia) dom.drawingOverlay.classList.add('hidden');
         break;
       case 'drawing':
-        dom.partnerStatusText.textContent = `${pName}：絵を描いています...`;
+        nextLabel = `${pName}：絵を描いています...`;
         dom.drawingOverlay.classList.remove('hidden');
         break;
+    }
+
+    if (nextLabel && dom.partnerStatusText.textContent !== nextLabel) {
+      dom.partnerStatusText.textContent = nextLabel;
     }
   }
 
@@ -1882,6 +1922,7 @@ ${levelRules}
   // 生成メディアのクロスフェード表示 ＆ 環境音連動
   // ============================================================================
   function displayGeneratedMedia(mediaData) {
+    state.isDrawingMedia = false;
     dom.canvasPlaceholder.classList.add('hidden');
     dom.drawingOverlay.classList.add('hidden');
 

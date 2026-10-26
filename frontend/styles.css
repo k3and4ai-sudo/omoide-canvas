@@ -273,16 +273,23 @@ body {
   justify-content: space-between;
   align-items: center;
   font-size: 12px;
+  height: 18px;
+  line-height: 18px;
+  overflow: hidden;
 }
 
 .monitor-label {
   font-weight: 700;
   color: var(--primary);
+  white-space: nowrap;
 }
 
 .vu-level-text {
   font-size: 11.5px;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .oscilloscope-canvas {
@@ -518,24 +525,30 @@ body {
   font-weight: 500;
 }
 
-/* リアルタイム文字起こし・字幕パネル */
+/* リアルタイム文字起こし・字幕パネル（レイアウト高さ固定で文字増減時の画面ちらつき防止） */
 .subtitles-panel {
   background: #fbf9f5;
   border-top: 1.5px solid var(--border-color);
-  padding: 12px 20px;
+  padding: 10px 20px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-height: 84px;
+  gap: 6px;
+  height: 104px;
+  min-height: 104px;
+  max-height: 104px;
+  overflow: hidden;
 }
 
 .subtitle-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 6px 12px;
+  padding: 5px 12px;
   border-radius: var(--radius-sm);
-  transition: background-color 0.2s ease;
+  height: 38px;
+  min-height: 38px;
+  max-height: 38px;
+  overflow: hidden;
 }
 
 .user-row {
@@ -554,6 +567,7 @@ body {
   padding: 2px 8px;
   border-radius: var(--radius-full);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .user-tag {
@@ -567,11 +581,14 @@ body {
 }
 
 .subtitle-text {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 500;
   color: var(--text-main);
-  line-height: 1.5;
+  line-height: 1.4;
   flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* キャプションバー */
@@ -676,10 +693,12 @@ body {
 
 .wave-bar {
   width: 4px;
-  height: 6px;
+  height: 18px;
   background-color: rgba(255, 255, 255, 0.6);
   border-radius: var(--radius-full);
-  transition: height 0.15s ease;
+  transform: scaleY(0.35);
+  transform-origin: center;
+  will-change: transform;
 }
 
 .visualizer-container.listening .wave-bar {
@@ -692,8 +711,8 @@ body {
 .visualizer-container.listening .wave-bar:nth-child(5) { animation-delay: 0.6s; }
 
 @keyframes wave {
-  0% { height: 6px; }
-  100% { height: 22px; background-color: #ffffff; }
+  0% { transform: scaleY(0.35); }
+  100% { transform: scaleY(1); background-color: #ffffff; }
 }
 
 .hidden-vision-elements {
@@ -1126,18 +1145,27 @@ body {
   }
 
   .subtitles-panel {
-    padding: 10px 12px;
-    min-height: auto;
+    padding: 8px 12px;
+    height: 92px;
+    min-height: 92px;
+    max-height: 92px;
+    overflow: hidden;
   }
 
   .subtitle-row {
-    align-items: flex-start;
+    align-items: center;
     gap: 8px;
-    padding: 6px 8px;
+    padding: 4px 8px;
+    height: 34px;
+    min-height: 34px;
+    max-height: 34px;
   }
 
   .subtitle-text {
-    font-size: 14px;
+    font-size: 13.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .canvas-caption-bar {
