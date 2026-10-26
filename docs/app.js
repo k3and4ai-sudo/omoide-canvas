@@ -1208,8 +1208,13 @@ ${levelRules}
     const canvas = dom.oscilloscopeCanvas;
     const ctx = canvas.getContext('2d');
     let lastVuUpdateTime = 0;
-    let lastVuText = '';
     let lastVuWidth = -1;
+
+    // セッション中のラベルは完全固定（音量による文字数の増減・画面ちらつきを100%防止）
+    if (dom.vuLevelText) {
+      dom.vuLevelText.textContent = 'マイク入力ON';
+      dom.vuLevelText.style.color = 'var(--primary)';
+    }
 
     function renderWaveform() {
       if (!state.isSessionActive) return;
@@ -1217,7 +1222,7 @@ ${levelRules}
       state.oscilloscopeAnimId = requestAnimationFrame(renderWaveform);
       analyser.getFloatTimeDomainData(floatArray);
 
-      // 1. RMS（実効音量）を先に計算し、スマホの小音量でも見やすいよう波形ゲインを自動増幅
+      // 1. RMS（実効音量）を計算
       let sumSquares = 0;
       for (let i = 0; i < bufferLength; i++) {
         sumSquares += floatArray[i] * floatArray[i];
@@ -1225,7 +1230,7 @@ ${levelRules}
       const rms = Math.sqrt(sumSquares / bufferLength);
       const visualGain = 3.5;
 
-      // 2. オシロスコープ波形の描画（shadowBlurを廃止しGPU再描画ちらつきを防止）
+      // 2. オシロスコープ波形の描画
       ctx.fillStyle = '#1a2723';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -1252,40 +1257,15 @@ ${levelRules}
       ctx.lineTo(canvas.width, midY);
       ctx.stroke();
 
-      // 3. VU音量レベルメーターの更新（180ms間隔にスロットル＋同一テキスト時のDOM書換抑止で画面ちらつき完全防止）
+      // 3. VU音量バーのみ更新（テキスト書き換えは一切行わない）
       const now = performance.now();
-      if (now - lastVuUpdateTime < 180) return;
+      if (now - lastVuUpdateTime < 120) return;
       lastVuUpdateTime = now;
 
       const volumePercent = Math.min(100, Math.round(rms * 1400));
-      const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.tv_cut;
-      const thresholdPercent = Math.min(95, Math.round(preset.rms * 1400));
-
       if (Math.abs(volumePercent - lastVuWidth) >= 2) {
         dom.vuMeterFill.style.width = `${volumePercent}%`;
         lastVuWidth = volumePercent;
-      }
-
-      let nextText = '';
-      let nextColor = 'var(--text-muted)';
-      if (volumePercent < 4) {
-        nextText = '待機中（お話しください）';
-        nextColor = 'var(--text-muted)';
-      } else if (volumePercent < thresholdPercent) {
-        nextText = '周囲音カット中（お近くでどうぞ）';
-        nextColor = '#8a8f9e';
-      } else if (volumePercent < 60) {
-        nextText = '音声入力中：良好';
-        nextColor = 'var(--primary)';
-      } else {
-        nextText = '音声入力中：しっかり届いています';
-        nextColor = '#e07a5f';
-      }
-
-      if (nextText !== lastVuText) {
-        dom.vuLevelText.textContent = nextText;
-        dom.vuLevelText.style.color = nextColor;
-        lastVuText = nextText;
       }
     }
 
