@@ -1002,6 +1002,7 @@ ${levelRules}
   function stopSessionCleanup() {
     state.isSessionActive = false;
     state.isConnected = false;
+    stopSyntheticAmbientSound();
     if (state.keepaliveIntervalId) {
       clearInterval(state.keepaliveIntervalId);
       state.keepaliveIntervalId = null;
@@ -1092,6 +1093,12 @@ ${levelRules}
     let preSpeechRingBuffer = []; // 話し始めの最初の子音（「し」「か」等）が欠けないよう直前3チャンクを保持
 
     processor.onaudioprocess = (e) => {
+      // 出力バッファを明示的にゼロクリアして、スピーカーへのノイズ・発振漏れを完全防止
+      try {
+        const outBuf = e.outputBuffer.getChannelData(0);
+        outBuf.fill(0);
+      } catch (err) {}
+
       if (!state.isSessionActive || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
 
       // AI発話中はエコー防止のためバッファをクリアして送信しない
@@ -1917,37 +1924,9 @@ ${levelRules}
     return labels[type] || '懐かしい音 ♪';
   }
 
-  // 優しい環境音シンセサイザー（外部音源ファイル不要のWebAudio生成）
-  function playSyntheticAmbientSound(soundType) {
+  // 環境音インジケーター連動（※連続発振音「ピーーーー」の原因となるOscillator連続再生は廃止し、無音・視覚表示のみとする）
+  function playSyntheticAmbientSound(_soundType) {
     stopSyntheticAmbientSound();
-    if (!state.audioContextOut) return;
-
-    try {
-      const ctx = state.audioContextOut;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      if (soundType === 'autumn_insects') {
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(4500, ctx.currentTime);
-        gain.gain.setValueAtTime(0.015, ctx.currentTime);
-      } else if (soundType === 'wind_chime') {
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(2200, ctx.currentTime);
-        gain.gain.setValueAtTime(0.02, ctx.currentTime);
-      } else {
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(440, ctx.currentTime);
-        gain.gain.setValueAtTime(0.01, ctx.currentTime);
-      }
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      state.ambientSoundNode = { osc, gain };
-    } catch (e) {
-      console.warn('Ambient sound play error:', e);
-    }
   }
 
   function stopSyntheticAmbientSound() {
