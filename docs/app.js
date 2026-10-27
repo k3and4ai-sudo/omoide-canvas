@@ -1119,30 +1119,10 @@ ${levelRules}
             logDiag(`AIツール呼び出し: ${funcName} (${args.japanese_title || ''})`);
 
             if (funcName === 'generate_memory_visual' || funcName === 'refine_memory_visual') {
-              // 1. AIへのツール応答を直ちに返送（会話を止めず、AIに確認を促す）
-              try {
-                ws.send(JSON.stringify({
-                  tool_response: {
-                    function_responses: [
-                      {
-                        id: callId,
-                        name: funcName,
-                        response: {
-                          output: {
-                            status: 'scene_recorded_awaiting_approval',
-                            title: args.japanese_title || '思い出の情景',
-                            message: '情景情報を受け取りました。ご本人に「キャンバスに描いてみましょうか？」と尋ねて確認してください。'
-                          }
-                        }
-                      }
-                    ]
-                  }
-                }));
-              } catch (err) {
-                console.warn('Tool response send warning:', err);
-              }
+              logDiag(`AIツール呼び出しを受信して描画を開始します: 「${args.japanese_title || ''}」`);
+              dismissCanvasError();
 
-              // 2. AIが集めた情景情報を情景メモ（sceneCollector）に統合
+              // 情景情報を情景メモに統合
               if (args.japanese_title) state.sceneCollector.topic = args.japanese_title;
               if (args.visual_elements) {
                 const parts = args.visual_elements.split(/[、,，/]/);
@@ -1153,21 +1133,12 @@ ${levelRules}
                   }
                 });
               }
+              state.sceneCollector.status = 'drawing';
+              renderSceneCollectorUI();
 
-              // 3. ユーザーが直前に明示的に「描いて」「絵にして」と指示していた場合はそのまま描画
-              if (state.sceneCollector.drawConfirmedByUser) {
-                state.sceneCollector.drawConfirmedByUser = false;
-                logDiag(`ユーザー合意済みのため描画を実行: 「${args.japanese_title || ''}」`);
-                setAvatarState('drawing');
-                handleDirectMediaGeneration(ws, callId, funcName, args);
-              } else {
-                // 勝手には描かず、確認状態にして画面バナーを表示・ユーザーの同意を待つ！
-                state.sceneCollector.isAwaitingConfirmation = true;
-                state.sceneCollector.status = 'confirming';
-                state.sceneCollector.pendingArgs = { callId, funcName, args };
-                renderSceneCollectorUI();
-                logDiag(`AIからの描画提案を受信: 「${args.japanese_title || ''}」（勝手な描画を抑制し、合意確認待ちに移行）`);
-              }
+              // アバターを描画中にして即座に画像生成を実行！
+              setAvatarState('drawing');
+              handleDirectMediaGeneration(ws, callId, funcName, args);
             } else if (funcName === 'trigger_emergency_alert') {
               handleDirectEmergencyAlert(ws, callId, funcName, args);
             }
@@ -3008,13 +2979,18 @@ ${elements}
     const sc = state.sceneCollector;
     let changed = false;
 
-    // 1. AIが描画確認の呼びかけを行ったか検知
+    // 1. AIが描画確認の呼びかけ、または描画宣言を行ったか検知
     if (speaker === 'ai') {
       const isConfirming = /(キャンバスに描いてみましょうか|描いてみましょうか|絵にしてみましょうか|描きましょうか|絵を描いてみましょうか|キャンバスに映してみましょうか|キャンバスに描いてみますか)/.test(clean);
+      const isDeclaringDraw = /(描いてみますね|描きますね|絵にしてみますね|キャンバスに描いてみます|キャンバスに描きます|描いてみましょう|絵を描いてみましょう)/.test(clean);
+
       if (isConfirming) {
         sc.isAwaitingConfirmation = true;
         sc.status = 'confirming';
         renderSceneCollectorUI();
+      } else if (isDeclaringDraw) {
+        logDiag(`AIの描画宣言を検知して自動描画を開始: 「${clean}」`);
+        executeConfirmedDrawing();
         return;
       }
     }
@@ -3315,17 +3291,8 @@ ${elements}
       }
     }
 
-    // 準備完了状態のときはプロンプトダイアログなしでそのまま即座に確定描画！
-    if (sc.status === 'ready' || sc.status === 'confirming') {
-      await executeConfirmedDrawing(candidate);
-      return;
-    }
-
-    // ワンタップで自由に入力・指定できる確認ダイアログ（そのままOKを押せば候補が描画される）
-    const promptMsg = '描きたい思い出の情景やお話の内容を入力してください\n（例：北アルプス槍ヶ岳の鋭い岩峰、文化祭の喫茶店の中など）';
-    const userEntered = window.prompt(promptMsg, candidate || '文化祭の喫茶店の中');
-    const finalTopic = (userEntered !== null ? userEntered.trim() : candidate) || '思い出の風景';
-
+    const finalTopic = candidate || '思い出の風景';
+    logDiag(`「今の話題を絵にする」ボタンが押されました: 「${finalTopic}」の描画を即座に開始します。`);
     state.sessionTopics.push(finalTopic);
     await executeConfirmedDrawing(finalTopic);
   }
