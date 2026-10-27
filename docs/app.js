@@ -542,12 +542,10 @@
    背景から聞こえるテレビ番組の音声（ニュース、CM、ドラマ等）や遠くの第三者の声には絶対に反応せず、目の前の「${nickname}」が直接ゆっくり話しかけた言葉にのみ返答してください。
 ${levelRules}
 
-# 【思い出の映像化（キャンバス描画ツール呼び出し）ルール】
-・通常の日常会話や挨拶、質問に対しては、勝手に絵を描かず、まず会話そのものを丁寧に楽しんでください。
-・会話の中で具体的な思い出の風景や行きたい場所の情景が語られた時、またはご本人から「絵を描いて」「キャンバスに映して」と希望された時のみ：
-1. 「とても素敵な風景ですね！今その絵をキャンバスに描いてみますね」と声かけし、直ちに \`generate_memory_visual\` ツールを呼び出す。
-2. 絵が表示されたら「${nickname}、キャンバスに絵が浮かびましたが、こんな雰囲気でしたか？」と確認する。
-3. 修正希望があった場合は \`refine_memory_visual\` ツールを呼び出す。
+# 【思い出の映像化（キャンバス描画ツール呼び出し）ルール：積極呼出】
+・相手が思い出の風景、行きたい場所、昔の出来事（例：文化祭、教室、喫茶店の中、故郷、街、駅、海、山など）について話したり、情景の切り替えや修正希望（例：「喫茶店の中に切り替えたい」「〜を描いて」「〜を置いて」など）を口にしたら、直ちに会話を返しながら積極的に \`generate_memory_visual\` または \`refine_memory_visual\` ツールを呼び出してください。
+・ツール呼び出しを躊躇せず、会話が進むごとに相手の言葉に合わせてキャンバスの絵をどんどん新しく描き換えてください。
+・絵が表示されたら「${nickname}、キャンバスに絵が浮かびましたよ。いかがですか？」と温かく声をかけてください。
 
 # 【緊急通報（SOS）の絶対ルール】
 相手が「助けて」「苦しい」「痛い」等の発言をした場合は、まず「${nickname}、大丈夫ですか？ご家族に連絡を入れましょうか？」と確認し、本人が同意した場合のみ \`trigger_emergency_alert\` を呼び出してください。`;
@@ -1413,12 +1411,12 @@ ${levelRules}
             state.pendingUserTranscript = interimTranscript.trim();
           }
 
-          // ユーザーが話し終えた（950msの沈黙）を検知して送信
+          // ユーザーが話し終えた（700msの沈黙）を検知して処理
           if (state.speechDebounceTimer) {
             clearTimeout(state.speechDebounceTimer);
           }
           state.speechDebounceTimer = setTimeout(async () => {
-            if (!state.isSessionActive || state.isAiSpeaking) return;
+            if (!state.isSessionActive) return;
             const textToSend = state.pendingUserTranscript;
             state.pendingUserTranscript = '';
             if (!textToSend || textToSend.length < 2) return;
@@ -1446,28 +1444,26 @@ ${levelRules}
                 const followUp = `${nickname}、キャンバスに「${textToSend.slice(0, 14)}」の絵が浮かびましたよ。いかがですか？`;
                 dom.aiTranscriptText.textContent = followUp;
                 speakTextWithWebSpeech(followUp);
-              }, 2200);
+              }, 1800);
               return;
             }
 
             if (state.socket && state.socket.readyState === WebSocket.OPEN) {
               // 会話した内容に合わせて毎回キャンバスを更新・描き直しする（短い相槌のみ除外）
               const isShortAck = /^(はい|いいえ|うん|ええ|ありがとう|ありがとうございます|こんにちは|おはよう|こんばんは|そうです|ちがいます|なるほど)$/.test(textToSend.trim());
-              if (!isShortAck && textToSend.trim().length >= 3 && textToSend.trim() !== state.lastDrawnUtterance) {
+              if (!isShortAck && textToSend.trim().length >= 2 && textToSend.trim() !== state.lastDrawnUtterance) {
                 triggerSceneDrawingForTopic(textToSend);
               }
 
               if (state.isDirectGeminiWs) {
                 // Gemini直結時も、ブラウザで正確に聞き取れた日本語字幕テキストを送信して聞き間違いをゼロにする
-                if (!state.currentAiTurnTranscript) {
-                  state.socket.send(JSON.stringify({
-                    client_content: {
-                      turns: [{ role: 'user', parts: [{ text: textToSend }] }],
-                      turn_complete: true
-                    }
-                  }));
-                  logDiag(`認識テキストを送信: 「${textToSend}」`);
-                }
+                state.socket.send(JSON.stringify({
+                  client_content: {
+                    turns: [{ role: 'user', parts: [{ text: textToSend }] }],
+                    turn_complete: true
+                  }
+                }));
+                logDiag(`認識テキストを送信: 「${textToSend}」`);
               } else {
                 state.socket.send(JSON.stringify({
                   type: 'user_transcript',
@@ -1476,7 +1472,7 @@ ${levelRules}
                 logDiag(`発話完了を検知・送信: 「${textToSend}」`);
               }
             }
-          }, 950);
+          }, 700);
         }
       };
 
@@ -1553,10 +1549,15 @@ ${levelRules}
     canvas.width = 800;
     canvas.height = 600;
     const ctx = canvas.getContext('2d');
-    const combined = `${title || ''} ${elements || ''}`;
 
-    const isCafe = /(喫茶店|カフェ|コーヒー|珈琲|紅茶|クリームソーダ|ホットケーキ|ナポリタン|パフェ|模擬店の中|店内|テーブル|カップ|茶店|純喫茶)/.test(combined);
-    const isClassroom = /(教室の中|教室|黒板|机|教壇|授業|窓際)/.test(combined);
+    // 最新の描きたい情景を最優先でテーマ判定する
+    const latestMatch = (elements || '').match(/【最新の描きたい情景（最優先）】:\s*([^/]+)/);
+    const primaryTopic = (latestMatch ? latestMatch[1].trim() : (title || elements || '')).toLowerCase();
+    const combined = `${primaryTopic} ${title || ''} ${elements || ''}`;
+
+    const isCafe = /(喫茶店|カフェ|コーヒー|珈琲|紅茶|クリームソーダ|ホットケーキ|ナポリタン|パフェ|模擬店の中|店内|テーブル|カップ|茶店|純喫茶|お茶|注文|メニュー|カウンター)/.test(primaryTopic) ||
+                   (/(喫茶店|カフェ|コーヒー|珈琲|紅茶|クリームソーダ|ホットケーキ|ナポリタン|パフェ|模擬店の中|店内|テーブル|カップ|茶店|純喫茶)/.test(combined) && !/(校舎の外|学校全体|グラウンド|校門)/.test(primaryTopic));
+    const isClassroom = !isCafe && (/(教室の中|教室|黒板|机|教壇|授業|窓際)/.test(primaryTopic) || /(教室の中|黒板|教壇)/.test(combined));
     const isSchool = !isCafe && !isClassroom && /(高校|文化祭|学園祭|学校|校舎|中学|小学校|先生|生徒|部活|運動会|体育祭|青春|合唱|バンド|模擬店)/.test(combined);
     const isSea = /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
     const isSakura = /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
@@ -1974,6 +1975,47 @@ ${levelRules}
             }
           }
         } catch (e) {}
+      }
+
+      // Step 2.5: Gemini 2.5 Flash によるオーダーメイドSVG水彩画生成
+      // (Imagen 3 クォータ制限時や無料枠でも、ユーザーの会話内容・修正希望通りの情景や小物を100%忠実に描く)
+      if (!mediaDataUrl) {
+        try {
+          const svgPrompt = `あなたは優しい絵本・水彩画の画家です。高齢者・回想法ケアのため、ユーザーが語った思い出や情景に合わせて、温かい水彩画風のSVGイラスト（幅800、高さ600）を描いてください。
+描く情景・会話内容：
+${elements}
+
+【要件】
+1. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。
+2. 昭和レトロ・温かみのあるパステル調の水彩グラデーション（<linearGradient>, <radialGradient>）や柔らかな色合いを使用してください。
+3. 会話で言及された具体的な情景（例：高校の文化祭の喫茶店、木目のカウンター、丸テーブル、クリームソーダ、コーヒー、窓の外の光や木々、黒板の手書きメニューなど）を具体的に配置して描いてください。
+4. 人物の顔は描かず、後ろ姿か遠景のシルエット、あるいは温かい情景・静物を中心に描いてください。
+5. 余計な説明文やコードブロック（\`\`\`xml や \`\`\`svg など）は含めず、純粋な <svg>...</svg> のみを出力してください。`;
+
+          const resSvg = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: svgPrompt }] }],
+                generationConfig: { temperature: 0.4, maxOutputTokens: 2500 }
+              })
+            }
+          );
+          if (resSvg.ok) {
+            const dataSvg = await resSvg.json();
+            const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            const svgMatch = rawText.match(/<svg[\s\S]*?<\/svg>/i);
+            if (svgMatch && svgMatch[0]) {
+              const cleanSvg = svgMatch[0];
+              mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
+              logDiag('Gemini 2.5 Flash によるオーダーメイド水彩画(SVG)の描画に成功しました！');
+            }
+          }
+        } catch (svgErr) {
+          console.warn('Gemini SVG generation warning:', svgErr);
+        }
       }
     }
 

@@ -239,6 +239,22 @@ class LiveSessionManager:
                             except Exception as tr_err:
                                 logger.debug(f"Transcript forward notice: {tr_err}")
 
+                            # 相槌以外かつ新トピックの場合、キャンバスの絵を会話内容に合わせて更新
+                            is_ack = user_text in ["はい", "いいえ", "うん", "ええ", "ありがとう", "こんにちは", "そうです", "なるほど"]
+                            if not is_ack and len(user_text) >= 2 and user_text != self.last_drawn_topic:
+                                self.last_drawn_topic = user_text
+                                recent_ctx = "、".join(self.discussed_topics[-3:])
+                                await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
+                                asyncio.create_task(
+                                    self._handle_media_generation(session, "user_transcript_auto", {
+                                        "scene_type": "past_memory",
+                                        "japanese_title": user_text[:18],
+                                        "visual_elements": f"【最新の描きたい情景（最優先）】: {user_text} / 【会話の文脈】: {recent_ctx}",
+                                        "media_format": "image",
+                                        "ambient_sound": "autumn_insects"
+                                    })
+                                )
+
                     elif msg_type == "test_generate_visual":
                         await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
                         asyncio.create_task(

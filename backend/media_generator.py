@@ -88,12 +88,19 @@ def get_japanese_font(size: int = 28) -> ImageFont.ImageFont:
 
 def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> None:
     """
-    API未設定時またはクォータ制限時でも、会話テーマ（海・桜・雪・夕焼け・山里）に応じた水彩画風イラストを動的生成・保存する
+    API未設定時またはクォータ制限時でも、会話テーマ（喫茶店・教室・海・桜・雪・夕焼け・山里）に応じた水彩画風イラストを動的生成・保存する
     """
     width, height = 1024, 768
-    combined = f"{title} {elements}"
-    is_cafe = any(k in combined for k in ["喫茶店", "カフェ", "コーヒー", "珈琲", "紅茶", "クリームソーダ", "ホットケーキ", "ナポリタン", "パフェ", "店内", "テーブル", "カップ", "純喫茶"])
-    is_classroom = any(k in combined for k in ["教室の中", "教室", "黒板", "机", "教壇", "授業"])
+
+    # 最新の描きたい情景を最優先でテーマ判定する
+    import re
+    latest_match = re.search(r"【最新の描きたい情景（最優先）】:\s*([^/]+)", elements or "")
+    primary_topic = latest_match.group(1).strip() if latest_match else (title or elements or "")
+    combined = f"{primary_topic} {title} {elements}"
+
+    cafe_keywords = ["喫茶店", "カフェ", "コーヒー", "珈琲", "紅茶", "クリームソーダ", "ホットケーキ", "ナポリタン", "パフェ", "模擬店の中", "店内", "テーブル", "カップ", "茶店", "純喫茶", "お茶", "注文", "メニュー", "カウンター"]
+    is_cafe = any(k in primary_topic for k in cafe_keywords) or (any(k in combined for k in cafe_keywords) and not any(k in primary_topic for k in ["校舎の外", "学校全体", "グラウンド", "校門"]))
+    is_classroom = (not is_cafe) and (any(k in primary_topic for k in ["教室の中", "教室", "黒板", "机", "教壇", "授業", "窓際"]) or any(k in combined for k in ["教室の中", "黒板", "教壇"]))
     is_school = (not is_cafe and not is_classroom) and any(k in combined for k in ["高校", "文化祭", "学園祭", "学校", "校舎", "中学", "小学校", "先生", "生徒", "部活", "運動会", "体育祭", "青春", "合唱", "模擬店"])
     is_sea = any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
     is_sakura = any(k in combined for k in ["桜", "春", "花", "菜の花", "入学", "卒業", "ピンク", "花見", "公園", "庭"])
@@ -257,26 +264,37 @@ async def generate_memory_visual_artifact(
             except Exception as nb_err:
                 logger.warning(f"Nano Banana ({nb_model}) skipped: {nb_err}")
 
-        # 2. Imagen 3 画像生成を試行
+        # 3. Gemini 2.5 Flash によるオーダーメイドSVG生成を試行
+        # (Imagen 3 クォータ制限時や無料枠でも、ユーザーの会話内容通りの情景を100%動的に描画する)
         if not image_generated:
             try:
-                result = client.models.generate_images(
-                    model="imagen-3.0-generate-002",
-                    prompt=final_prompt,
-                    config=types.GenerateImagesConfig(
-                        number_of_images=1,
-                        aspect_ratio="4:3",
-                        output_mime_type="image/png",
-                    ),
+                svg_prompt = f"""あなたは優しい絵本・水彩画の画家です。高齢者・回想法ケアのため、ユーザーが語った思い出や情景に合わせて、温かい水彩画風のSVGイラスト（幅800、高さ600）を描いてください。
+描く情景・会話内容：
+{visual_elements}
+
+【要件】
+1. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。
+2. 昭和レトロ・温かみのあるパステル調の水彩グラデーション（<linearGradient>, <radialGradient>）や柔らかな色合いを使用してください。
+3. 会話で言及された具体的な情景（例：高校の文化祭の喫茶店、木目のカウンター、丸テーブル、クリームソーダ、コーヒー、窓の外の光や木々、黒板の手書きメニューなど）を具体的に配置して描いてください。
+4. 人物の顔は描かず、後ろ姿か遠景のシルエット、あるいは温かい情景・静物を中心に描いてください。
+5. 余計な説明文やコードブロック（```xml や ```svg など）は含めず、純粋な <svg>...</svg> のみを出力してください。"""
+
+                svg_res = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=svg_prompt,
                 )
-                if result and result.generated_images:
-                    generated_image = result.generated_images[0]
-                    with open(file_path, "wb") as f:
-                        f.write(generated_image.image.image_bytes)
-                    image_generated = True
-                    logger.info(f"Imagen 3 generation succeeded: {file_path}")
-            except Exception as e:
-                logger.error(f"Imagen 3 generation failed ({e}).")
+                if svg_res and svg_res.text:
+                    svg_match = re.search(r"<svg[\s\S]*?</svg>", svg_res.text, re.IGNORECASE)
+                    if svg_match:
+                        svg_name = f"{memory_id}.svg"
+                        svg_path = MEDIA_DIR / svg_name
+                        with open(svg_path, "w", encoding="utf-8") as f:
+                            f.write(svg_match.group(0))
+                        file_name = svg_name
+                        image_generated = True
+                        logger.info(f"Gemini 2.5 Flash SVG generation succeeded: {svg_path}")
+            except Exception as svg_err:
+                logger.warning(f"Gemini 2.5 Flash SVG generation failed: {svg_err}")
 
     if not image_generated:
         generate_fallback_image(japanese_title, file_path, visual_elements)
