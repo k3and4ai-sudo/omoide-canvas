@@ -86,54 +86,67 @@ def get_japanese_font(size: int = 28) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def generate_fallback_image(title: str, file_path: Path) -> None:
+def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> None:
     """
-    API未設定時でも、情緒ある本物の水彩画アートを美しく生成・保存する
+    API未設定時またはクォータ制限時でも、会話テーマ（海・桜・雪・夕焼け・山里）に応じた水彩画風イラストを動的生成・保存する
     """
-    preset_dir = MEDIA_DIR / "presets"
-    apple_preset = preset_dir / "apple_orchard.jpg"
-    village_preset = preset_dir / "showa_village.jpg"
+    width, height = 1024, 768
+    combined = f"{title} {elements}"
+    is_sea = any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
+    is_sakura = any(k in combined for k in ["桜", "春", "花", "菜の花", "入学", "卒業", "ピンク", "花見", "公園", "庭"])
+    is_snow = any(k in combined for k in ["雪", "冬", "スキー", "こたつ", "正月", "北国", "白", "氷", "北海道", "新潟"])
+    is_sunset = any(k in combined for k in ["夕焼け", "夕方", "夕日", "秋", "赤とんぼ", "紅葉", "もみじ", "祭り", "花火"])
 
-    base_image = None
-    # 会話タイトルに応じた最適な水彩画アートを選択
-    if "リンゴ" in title or "りんご" in title or "松本" in title or "山" in title or "秋" in title:
-        chosen_preset = apple_preset if apple_preset.exists() else village_preset
-    else:
-        chosen_preset = village_preset if village_preset.exists() else apple_preset
-
-    if chosen_preset and chosen_preset.exists():
-        try:
-            base_image = Image.open(chosen_preset).convert("RGB")
-            # 1024x768 にリサイズ
-            base_image = base_image.resize((1024, 768), Image.Resampling.LANCZOS)
-        except Exception as e:
-            logger.warning(f"Failed to load preset watercolor: {e}")
-
-    if base_image is None:
-        # プリセットがなければ水彩風グラデーション風景を描画
-        width, height = 1024, 768
-        base_image = Image.new("RGB", (width, height), color=(253, 248, 242))
-        draw = ImageDraw.Draw(base_image)
-        # 空
-        draw.rectangle([0, 0, width, height // 2], fill=(245, 230, 215))
-        # 山並み
-        draw.polygon([(0, 400), (250, 220), (500, 420)], fill=(129, 178, 154))
-        draw.polygon([(350, 450), (650, 200), (1024, 450)], fill=(100, 150, 130))
-        # 大地
-        draw.rectangle([0, 400, width, height], fill=(238, 245, 242))
-
-    # 右上に上品な和紙風短冊（タイトル札）を合成
+    base_image = Image.new("RGB", (width, height), color=(253, 248, 242))
     draw = ImageDraw.Draw(base_image)
+
+    if is_sea:
+        draw.rectangle([0, 0, width, 420], fill=(168, 218, 220))
+        draw.ellipse([740, 80, 860, 200], fill=(255, 243, 176))
+        draw.rectangle([0, 420, width, 640], fill=(69, 123, 157))
+        draw.rectangle([0, 640, width, height], fill=(244, 228, 193))
+        draw.polygon([(300, 410), (300, 290), (370, 395)], fill=(255, 255, 255))
+    elif is_sakura:
+        draw.rectangle([0, 0, width, 440], fill=(253, 226, 228))
+        draw.polygon([(0, 460), (280, 250), (580, 460)], fill=(149, 184, 166))
+        draw.polygon([(400, 460), (720, 230), (1024, 460)], fill=(129, 178, 154))
+        draw.rectangle([0, 460, width, height], fill=(205, 234, 192))
+        for i in range(45):
+            px = (i * 113 + 60) % 960
+            py = (i * 71 + 40) % 420
+            draw.ellipse([px, py, px + 16, py + 16], fill=(255, 183, 197))
+    elif is_snow:
+        draw.rectangle([0, 0, width, 460], fill=(207, 217, 223))
+        draw.polygon([(0, 460), (280, 240), (580, 460)], fill=(184, 201, 217))
+        draw.polygon([(380, 460), (700, 210), (1024, 460)], fill=(159, 180, 199))
+        draw.rectangle([0, 460, width, height], fill=(248, 250, 252))
+        for i in range(60):
+            px = (i * 97 + 30) % 980
+            py = (i * 67 + 20) % 720
+            draw.ellipse([px, py, px + 10, py + 10], fill=(255, 255, 255))
+    elif is_sunset:
+        draw.rectangle([0, 0, width, 450], fill=(244, 162, 97))
+        draw.ellipse([720, 140, 860, 280], fill=(231, 111, 81))
+        draw.polygon([(0, 450), (280, 250), (580, 450)], fill=(109, 89, 122))
+        draw.polygon([(380, 450), (700, 220), (1024, 450)], fill=(86, 71, 102))
+        draw.rectangle([0, 450, width, height], fill=(132, 165, 157))
+    else:
+        draw.rectangle([0, 0, width, 440], fill=(245, 230, 215))
+        draw.ellipse([740, 90, 850, 200], fill=(255, 238, 173))
+        draw.polygon([(0, 440), (260, 230), (540, 440)], fill=(129, 178, 154))
+        draw.polygon([(360, 450), (680, 200), (1024, 450)], fill=(100, 150, 130))
+        draw.rectangle([0, 440, width, height], fill=(207, 225, 185))
+
+    # 左上に上品な和紙風短冊（タイトル札）を合成
     font_title = get_japanese_font(26)
     font_sub = get_japanese_font(16)
 
-    # 短冊背景
     badge_x, badge_y = 40, 40
-    badge_w, badge_h = 360, 80
+    badge_w, badge_h = 440, 84
     draw.rounded_rectangle(
         [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
         radius=12,
-        fill=(255, 255, 255, 230),
+        fill=(255, 255, 255, 235),
         outline=(224, 122, 95),
         width=2
     )
@@ -142,11 +155,11 @@ def generate_fallback_image(title: str, file_path: Path) -> None:
     if len(clean_title) > 18:
         clean_title = clean_title[:17] + "…"
 
-    draw.text((badge_x + 16, badge_y + 12), "【おもいで水彩画】", fill=(224, 122, 95), font=font_sub)
-    draw.text((badge_x + 16, badge_y + 36), clean_title, fill=(44, 94, 79), font=font_title)
+    draw.text((badge_x + 16, badge_y + 12), "🎨 おもいでキャンバス 水彩画", fill=(224, 122, 95), font=font_sub)
+    draw.text((badge_x + 16, badge_y + 38), clean_title, fill=(44, 94, 79), font=font_title)
 
     base_image.save(file_path, "PNG")
-    logger.info(f"Artistic watercolor image generated for '{title}' at {file_path}")
+    logger.info(f"Dynamic theme watercolor image generated for '{title}' at {file_path}")
 
 
 async def generate_memory_visual_artifact(
@@ -175,29 +188,59 @@ async def generate_memory_visual_artifact(
 
     image_generated = False
     if effective_api_key and effective_api_key != "your_gemini_api_key_here":
-        try:
-            client = genai.Client(api_key=effective_api_key)
-            # Imagen 3 画像生成
-            result = client.models.generate_images(
-                model="imagen-3.0-generate-002",
-                prompt=final_prompt,
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    aspect_ratio="4:3",
-                    output_mime_type="image/png",
-                ),
-            )
-            if result and result.generated_images:
-                generated_image = result.generated_images[0]
-                with open(file_path, "wb") as f:
-                    f.write(generated_image.image.image_bytes)
-                image_generated = True
-                logger.info(f"Imagen 3 generation succeeded: {file_path}")
-        except Exception as e:
-            logger.error(f"Imagen 3 generation failed ({e}). Falling back to placeholder visual.")
+        client = genai.Client(api_key=effective_api_key)
+
+        # 1. Nano Banana 系 (Gemini Flash Image: gemini-2.5-flash-image / gemini-2.0-flash-exp-image-generation) を試行
+        nano_banana_models = [
+            "gemini-2.5-flash-image",
+            "gemini-2.0-flash-exp-image-generation",
+        ]
+        for nb_model in nano_banana_models:
+            if image_generated:
+                break
+            try:
+                nb_res = client.models.generate_content(
+                    model=nb_model,
+                    contents=final_prompt,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["TEXT", "IMAGE"]
+                    ),
+                )
+                if nb_res and nb_res.candidates:
+                    parts = nb_res.candidates[0].content.parts or []
+                    for part in parts:
+                        if part.inline_data and part.inline_data.data:
+                            with open(file_path, "wb") as f:
+                                f.write(part.inline_data.data)
+                            image_generated = True
+                            logger.info(f"Nano Banana ({nb_model}) generation succeeded: {file_path}")
+                            break
+            except Exception as nb_err:
+                logger.warning(f"Nano Banana ({nb_model}) skipped: {nb_err}")
+
+        # 2. Imagen 3 画像生成を試行
+        if not image_generated:
+            try:
+                result = client.models.generate_images(
+                    model="imagen-3.0-generate-002",
+                    prompt=final_prompt,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=1,
+                        aspect_ratio="4:3",
+                        output_mime_type="image/png",
+                    ),
+                )
+                if result and result.generated_images:
+                    generated_image = result.generated_images[0]
+                    with open(file_path, "wb") as f:
+                        f.write(generated_image.image.image_bytes)
+                    image_generated = True
+                    logger.info(f"Imagen 3 generation succeeded: {file_path}")
+            except Exception as e:
+                logger.error(f"Imagen 3 generation failed ({e}).")
 
     if not image_generated:
-        generate_fallback_image(japanese_title, file_path)
+        generate_fallback_image(japanese_title, file_path, visual_elements)
 
     artifact = MemoryArtifact(
         memory_id=memory_id,

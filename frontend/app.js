@@ -907,8 +907,20 @@ ${levelRules}
           }
 
           if (sc.turnComplete || sc.turn_complete) {
+            const finishedAiTxt = state.currentAiTurnTranscript;
             state.currentAiTurnTranscript = '';
-            if (!state.isAiSpeaking && !state.isDrawingMedia) {
+            // AIが「絵を描いてみますね」「キャンバスに描きます」と言ったのにツール呼び出しイベントが省略された場合の自動補完
+            if (/(描いてみます|描きますね|キャンバスに.*描|絵にしてみます)/.test(finishedAiTxt) && !state.isDrawingMedia) {
+              const lastTopic = state.sessionTopics[state.sessionTopics.length - 1] || '思い出の風景';
+              logDiag(`発言内容から水彩画生成を自動開始: 「${lastTopic}」`);
+              setAvatarState('drawing');
+              generateStandaloneMemoryArtifact({
+                scene_type: 'past_memory',
+                japanese_title: `${lastTopic.slice(0, 16)}の風景`,
+                visual_elements: `${lastTopic}、温かい水彩画の風景`,
+                ambient_sound: 'autumn_insects'
+              }).then(art => displayGeneratedMedia(art));
+            } else if (!state.isAiSpeaking && !state.isDrawingMedia) {
               setAvatarState('listening');
             }
           }
@@ -1518,57 +1530,111 @@ ${levelRules}
     return `${pStyle}${pEra}${(visualElements || '').trim()}${pSafety}`;
   }
 
-  async function renderFallbackWatercolorDataUrl(title) {
+  async function renderFallbackWatercolorDataUrl(title, elements = '') {
     const canvas = document.createElement('canvas');
     canvas.width = 800;
     canvas.height = 600;
     const ctx = canvas.getContext('2d');
+    const combined = `${title || ''} ${elements || ''}`;
 
-    const isApple = /(リンゴ|りんご|松本|山|秋)/.test(title || '');
-    const presetSrc = isApple
-      ? 'static/memories/presets/apple_orchard.jpg'
-      : 'static/memories/presets/showa_village.jpg';
+    const isSea = /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
+    const isSakura = /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
+    const isSnow = /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
+    const isSunset = /(夕焼け|夕方|夕日|秋|赤とんぼ|紅葉|もみじ|祭り|花火)/.test(combined);
 
-    let loadedImg = false;
-    try {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = reject;
-        img.src = presetSrc;
-      });
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      loadedImg = true;
-    } catch (e) {}
+    // 1. テーマ別の水彩空グラデーション
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    if (isSea) {
+      skyGrad.addColorStop(0, '#a8dadc');
+      skyGrad.addColorStop(0.55, '#f1faee');
+      skyGrad.addColorStop(0.56, '#457b9d');
+      skyGrad.addColorStop(0.85, '#72b5d8');
+      skyGrad.addColorStop(1, '#f4e4c1');
+    } else if (isSakura) {
+      skyGrad.addColorStop(0, '#fde2e4');
+      skyGrad.addColorStop(0.55, '#fff1e6');
+      skyGrad.addColorStop(1, '#cdeac0');
+    } else if (isSnow) {
+      skyGrad.addColorStop(0, '#cfd9df');
+      skyGrad.addColorStop(0.6, '#e2ebf0');
+      skyGrad.addColorStop(1, '#f8fafc');
+    } else if (isSunset) {
+      skyGrad.addColorStop(0, '#f4a261');
+      skyGrad.addColorStop(0.5, '#f6bd60');
+      skyGrad.addColorStop(1, '#84a59d');
+    } else {
+      skyGrad.addColorStop(0, '#f5e6d7');
+      skyGrad.addColorStop(0.55, '#eef5f2');
+      skyGrad.addColorStop(1, '#cfe1b9');
+    }
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    if (!loadedImg) {
-      const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-      grad.addColorStop(0, '#f5e6d7');
-      grad.addColorStop(0.55, '#eef5f2');
-      grad.addColorStop(1, '#d8e8e0');
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // 2. 太陽・月
+    ctx.save();
+    ctx.fillStyle = isSunset ? 'rgba(231, 111, 81, 0.75)' : 'rgba(255, 238, 173, 0.75)';
+    ctx.beginPath();
+    ctx.arc(630, 140, 56, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
 
-      ctx.fillStyle = '#81b29a';
+    // 3. テーマ別の風景モチーフ描画
+    if (isSea) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+      ctx.lineWidth = 4;
+      for (let y = 370; y <= 470; y += 32) {
+        ctx.beginPath();
+        for (let x = 40; x < 760; x += 60) {
+          ctx.quadraticCurveTo(x + 15, y - 8, x + 30, y);
+          ctx.quadraticCurveTo(x + 45, y + 8, x + 60, y);
+        }
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      ctx.moveTo(0, 380);
-      ctx.lineTo(220, 210);
-      ctx.lineTo(460, 380);
+      ctx.moveTo(240, 320);
+      ctx.lineTo(240, 230);
+      ctx.lineTo(295, 310);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.fillStyle = isSnow ? '#b8c9d9' : isSakura ? '#95b8a6' : '#81b29a';
+      ctx.beginPath();
+      ctx.moveTo(0, 390);
+      ctx.quadraticCurveTo(200, 190, 440, 390);
       ctx.closePath();
       ctx.fill();
 
-      ctx.fillStyle = '#649682';
+      ctx.fillStyle = isSnow ? '#9fb4c7' : isSunset ? '#6d597a' : '#649682';
       ctx.beginPath();
-      ctx.moveTo(300, 400);
-      ctx.lineTo(560, 190);
-      ctx.lineTo(800, 400);
+      ctx.moveTo(280, 400);
+      ctx.quadraticCurveTo(540, 170, 800, 400);
       ctx.closePath();
       ctx.fill();
+
+      if (isSakura) {
+        ctx.fillStyle = 'rgba(255, 183, 197, 0.85)';
+        for (let i = 0; i < 45; i++) {
+          const px = (i * 97 + 50) % 760;
+          const py = (i * 61 + 40) % 420;
+          ctx.beginPath();
+          ctx.arc(px, py, 8 + (i % 6), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (isSnow) {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        for (let i = 0; i < 55; i++) {
+          const px = (i * 83 + 30) % 780;
+          const py = (i * 53 + 20) % 560;
+          ctx.beginPath();
+          ctx.arc(px, py, 4 + (i % 4), 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
 
-    // 和紙風短冊（タイトル札）を左上に描画
-    const bx = 28, by = 28, bw = 340, bh = 74;
+    // 4. 和紙風短冊（タイトル札）を左上に描画
+    const bx = 28, by = 28, bw = 420, bh = 82;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
     ctx.strokeStyle = '#e07a5f';
     ctx.lineWidth = 2.5;
@@ -1583,14 +1649,14 @@ ${levelRules}
 
     ctx.fillStyle = '#e07a5f';
     ctx.font = 'bold 14px "Noto Sans JP", sans-serif';
-    ctx.fillText('【おもいで水彩画】', bx + 16, by + 26);
+    ctx.fillText('🎨 おもいでキャンバス 水彩画', bx + 16, by + 28);
 
-    const cleanTitle = (title || '思い出の風景').replace(/\n/g, ' ').slice(0, 17);
+    const cleanTitle = (title || '思い出の風景').replace(/\n/g, ' ').slice(0, 20);
     ctx.fillStyle = '#2c5e4f';
     ctx.font = 'bold 21px "Noto Sans JP", sans-serif';
-    ctx.fillText(cleanTitle, bx + 16, by + 56);
+    ctx.fillText(cleanTitle, bx + 16, by + 60);
 
-    return canvas.toDataURL('image/jpeg', 0.86);
+    return canvas.toDataURL('image/jpeg', 0.88);
   }
 
   async function generateStandaloneMemoryArtifact(args) {
@@ -1605,34 +1671,16 @@ ${levelRules}
     const apiKey = (state.sessionApiKey || '').trim();
 
     if (apiKey) {
-      // Step 1: Imagen 3 REST API
-      try {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              instances: [{ prompt: finalPrompt }],
-              parameters: { sampleCount: 1, aspectRatio: '4:3', outputOptions: { mimeType: 'image/jpeg' } }
-            })
-          }
-        );
-        if (res.ok) {
-          const data = await res.json();
-          const b64 = data?.predictions?.[0]?.bytesBase64Encoded;
-          if (b64) {
-            mediaDataUrl = `data:image/jpeg;base64,${b64}`;
-            logDiag('Imagen 3 による水彩画生成に成功しました！');
-          }
-        }
-      } catch (e) {}
-
-      // Step 2: Gemini 2.0 Flash Image Generation フォールバック
-      if (!mediaDataUrl) {
+      // Step 1: Nano Banana 系 (Gemini 2.5 Flash Image / Gemini 2.0 Flash Image Generation)
+      const nanoBananaModels = [
+        'gemini-2.5-flash-image',
+        'gemini-2.0-flash-exp-image-generation'
+      ];
+      for (const modelName of nanoBananaModels) {
+        if (mediaDataUrl) break;
         try {
-          const res2 = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp-image-generation:generateContent?key=${encodeURIComponent(apiKey)}`,
+          const resNb = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1642,25 +1690,50 @@ ${levelRules}
               })
             }
           );
-          if (res2.ok) {
-            const data2 = await res2.json();
-            const parts = data2?.candidates?.[0]?.content?.parts || [];
+          if (resNb.ok) {
+            const dataNb = await resNb.json();
+            const parts = dataNb?.candidates?.[0]?.content?.parts || [];
             for (const p of parts) {
               const inl = p.inlineData || p.inline_data;
               if (inl && inl.data) {
                 mediaDataUrl = `data:${inl.mimeType || 'image/png'};base64,${inl.data}`;
-                logDiag('Gemini Flash Image による水彩画生成に成功しました！');
+                logDiag(`Nano Banana (${modelName}) による水彩画生成に成功しました！`);
                 break;
               }
             }
           }
         } catch (e) {}
       }
+
+      // Step 2: Imagen 3 REST API フォールバック
+      if (!mediaDataUrl) {
+        try {
+          const res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                instances: [{ prompt: finalPrompt }],
+                parameters: { sampleCount: 1, aspectRatio: '4:3', outputOptions: { mimeType: 'image/jpeg' } }
+              })
+            }
+          );
+          if (res.ok) {
+            const data = await res.json();
+            const b64 = data?.predictions?.[0]?.bytesBase64Encoded;
+            if (b64) {
+              mediaDataUrl = `data:image/jpeg;base64,${b64}`;
+              logDiag('Imagen 3 による水彩画生成に成功しました！');
+            }
+          }
+        } catch (e) {}
+      }
     }
 
-    // Step 3: プリセット水彩画＋タイトル短冊合成フォールバック
+    // Step 3: テーマ別水彩画キャンバス描画フォールバック
     if (!mediaDataUrl) {
-      mediaDataUrl = await renderFallbackWatercolorDataUrl(title);
+      mediaDataUrl = await renderFallbackWatercolorDataUrl(title, elements);
     }
 
     const artifact = {

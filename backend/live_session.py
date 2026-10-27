@@ -54,6 +54,8 @@ class LiveSessionManager:
         self.generated_memories: List[MemoryArtifact] = []
         self.discussed_topics: List[str] = []
         self.start_time: Optional[float] = None
+        self.current_ai_turn_text: str = ""
+        self.tool_called_in_turn: bool = False
 
     async def run(self):
         """セッションの開始・メインループ管理（ユーザー自身のセッションAPIキーを使用）"""
@@ -299,6 +301,7 @@ class LiveSessionManager:
                         if output_trans and getattr(output_trans, "text", None):
                             ai_txt = output_trans.text.strip()
                             if ai_txt:
+                                self.current_ai_turn_text += ai_txt
                                 logger.info(f"Gemini output_transcription: {ai_txt}")
                                 await self.websocket.send_json({
                                     "type": "transcript",
@@ -307,14 +310,32 @@ class LiveSessionManager:
                                 })
 
                         if getattr(server_content, "turn_complete", False):
-                            await self.websocket.send_json({
-                                "type": "avatar_state",
-                                "state": "listening"
-                            })
+                            turn_txt = self.current_ai_turn_text
+                            self.current_ai_turn_text = ""
+                            if not self.tool_called_in_turn and any(kw in turn_txt for kw in ["描いてみます", "描きますね", "キャンバスに", "絵にしてみます"]):
+                                last_topic = self.discussed_topics[-1] if self.discussed_topics else "思い出の風景"
+                                logger.info(f"Auto-triggering visual generation from AI speech for topic: {last_topic}")
+                                await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
+                                asyncio.create_task(
+                                    self._handle_media_generation(session, "auto_call", {
+                                        "scene_type": "past_memory",
+                                        "japanese_title": f"{last_topic[:16]}の風景",
+                                        "visual_elements": f"{last_topic}、温かい水彩画の風景",
+                                        "media_format": "image",
+                                        "ambient_sound": "autumn_insects"
+                                    })
+                                )
+                            else:
+                                await self.websocket.send_json({
+                                    "type": "avatar_state",
+                                    "state": "listening"
+                                })
+                            self.tool_called_in_turn = False
 
                     # 2. ツール呼び出し（Function Call）
                     tool_call = response.tool_call
                     if tool_call is not None:
+                        self.tool_called_in_turn = True
                         for call in tool_call.function_calls:
                             func_name = call.name
                             args = call.args or {}
@@ -388,12 +409,13 @@ class LiveSessionManager:
             })
 
             # Gemini へツール完了を返答し、AIから「絵が浮かびましたよ」と話させる
-            await session.send(input=types.LiveClientToolResponse(
-                function_responses=[types.FunctionResponse(
-                    id=call_id,
-                    response={"output": {"status": "displayed_on_canvas", "title": title}}
-                )]
-            ))
+            if call_id != "auto_call" and call_id != "test_call":
+                await session.send(input=types.LiveClientToolResponse(
+                    function_responses=[types.FunctionResponse(
+                        id=call_id,
+                        response={"output": {"status": "displayed_on_canvas", "title": title}}
+                    )]
+                ))
 
         except Exception as e:
             logger.error(f"Error handling media generation: {e}", exc_info=True)
