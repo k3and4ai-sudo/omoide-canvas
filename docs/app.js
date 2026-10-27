@@ -1854,93 +1854,122 @@ ${levelRules}
       ctx.closePath();
       ctx.fill();
     } else if (isMountain) {
-      // 鋭く尖った雄大な岩山・北アルプス連峰（槍ヶ岳・穂高のような鋭利な岩峰・三角錐と険しい稜線）
-      // 1. 遠景の険しいギザギザ連峰（薄紫ブルー）
-      ctx.fillStyle = '#65778e';
+      // 鋭く尖った雄大な岩山・北アルプス連峰（槍ヶ岳・穂高・剱岳のような切り立った鋭利な岩峰と険しい稜線）
+      // 1. 遠景の険しいギザギザ連峰（薄紫ブルーの鋭角シルエット）
+      ctx.fillStyle = '#5c6d82';
       ctx.beginPath();
       ctx.moveTo(0, 440);
-      ctx.lineTo(70, 240);
-      ctx.lineTo(130, 290);
-      ctx.lineTo(220, 180);
-      ctx.lineTo(290, 250);
-      ctx.lineTo(400, 100); // 鋭い山頂
-      ctx.lineTo(490, 210);
-      ctx.lineTo(590, 130);
-      ctx.lineTo(670, 230);
-      ctx.lineTo(750, 160);
-      ctx.lineTo(800, 220);
+      ctx.lineTo(60, 230);
+      ctx.lineTo(120, 280);
+      ctx.lineTo(210, 160);
+      ctx.lineTo(280, 240);
+      ctx.lineTo(390, 85); // 鋭く尖った遠景主峰
+      ctx.lineTo(480, 200);
+      ctx.lineTo(580, 120);
+      ctx.lineTo(660, 220);
+      ctx.lineTo(740, 150);
+      ctx.lineTo(800, 210);
       ctx.lineTo(800, 480);
       ctx.lineTo(0, 480);
       ctx.closePath();
       ctx.fill();
 
-      // 2. 中景：鋭角に尖った主峰（左：日向の岩肌、右：険しい影）
-      ctx.fillStyle = '#94a3b8';
+      // 2. 中景：切り立った鋭角な主岩峰（槍ヶ岳・剱岳のような鋭利な三角錐）
+      // 左側斜面（朝日のハイライト・明るい青灰色）
+      ctx.fillStyle = '#9cb3c9';
       ctx.beginPath();
-      ctx.moveTo(140, 460);
-      ctx.lineTo(390, 95); // 鋭く天を突く頂点！
-      ctx.lineTo(390, 460);
+      ctx.moveTo(110, 460);
+      ctx.lineTo(380, 75); // 天を突く鋭い主峰の頂点！
+      ctx.lineTo(380, 460);
       ctx.closePath();
       ctx.fill();
 
-      ctx.fillStyle = '#334155';
+      // 右側斜面（切り立った深い岩陰・濃紺）
+      ctx.fillStyle = '#2c3e50';
       ctx.beginPath();
-      ctx.moveTo(390, 95);
-      ctx.lineTo(610, 460);
-      ctx.lineTo(390, 460);
+      ctx.moveTo(380, 75);
+      ctx.lineTo(600, 460);
+      ctx.lineTo(380, 460);
       ctx.closePath();
       ctx.fill();
 
-      // 鋭い第二岩峰
-      ctx.fillStyle = '#7c8ba1';
+      // 鋭い第二岩峰（険しい針峰）
+      ctx.fillStyle = '#829ab1';
       ctx.beginPath();
-      ctx.moveTo(480, 450);
-      ctx.lineTo(630, 140);
-      ctx.lineTo(630, 450);
+      ctx.moveTo(460, 450);
+      ctx.lineTo(620, 115); // 鋭い山頂
+      ctx.lineTo(620, 450);
       ctx.closePath();
       ctx.fill();
 
-      ctx.fillStyle = '#1e293b';
+      ctx.fillStyle = '#1a2530';
       ctx.beginPath();
-      ctx.moveTo(630, 140);
-      ctx.lineTo(770, 450);
-      ctx.lineTo(630, 450);
+      ctx.moveTo(620, 115);
+      ctx.lineTo(760, 450);
+      ctx.lineTo(620, 450);
       ctx.closePath();
       ctx.fill();
 
-      // 3. 山頂の尖った万年雪・鋭い雪渓
+      // 3. 切り立った岩肌のシャープな亀裂・稜線（ドラマチックな陰影線）
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(380, 75);
+      ctx.lineTo(290, 230);
+      ctx.lineTo(340, 310);
+      ctx.lineTo(260, 460);
+      ctx.stroke();
+
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.6)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(380, 75);
+      ctx.lineTo(440, 210);
+      ctx.lineTo(410, 320);
+      ctx.lineTo(490, 460);
+      ctx.stroke();
+
+      // 4. 山頂の尖った万年雪・鋭い氷河雪渓（純白のシャープな冠雪）
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
-      ctx.moveTo(390, 95);
-      ctx.lineTo(365, 170);
-      ctx.lineTo(380, 155);
-      ctx.lineTo(390, 185);
-      ctx.lineTo(405, 160);
-      ctx.lineTo(420, 175);
+      ctx.moveTo(380, 75);
+      ctx.lineTo(350, 155);
+      ctx.lineTo(368, 140);
+      ctx.lineTo(380, 175);
+      ctx.lineTo(398, 148);
+      ctx.lineTo(415, 162);
       ctx.closePath();
       ctx.fill();
 
       ctx.beginPath();
-      ctx.moveTo(630, 140);
-      ctx.lineTo(610, 195);
-      ctx.lineTo(625, 185);
-      ctx.lineTo(630, 210);
-      ctx.lineTo(645, 190);
+      ctx.moveTo(620, 115);
+      ctx.lineTo(598, 175);
+      ctx.lineTo(612, 162);
+      ctx.lineTo(620, 190);
+      ctx.lineTo(638, 168);
       ctx.closePath();
       ctx.fill();
 
-      // 4. 麓の針葉樹林（深い緑のモミの木）
+      // 5. 山腹にたなびく幻想的な雲海（白い霧）
+      const cloudGrad = ctx.createLinearGradient(0, 360, 0, 450);
+      cloudGrad.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+      cloudGrad.addColorStop(0.5, 'rgba(240, 248, 255, 0.6)');
+      cloudGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      ctx.fillStyle = cloudGrad;
+      ctx.fillRect(0, 360, canvas.width, 90);
+
+      // 6. 麓の針葉樹林（深い原生林のモミの木）
       ctx.fillStyle = '#1e293b';
       ctx.fillRect(0, 445, canvas.width, 155);
-      const pineColors = ['#0f3d2e', '#1e4d3a', '#2d6a4f'];
-      for (let tx = 10; tx < 795; tx += 26) {
-        const th = 42 + (tx % 19) * 3;
-        const ty = 438 + (tx % 13) * 2;
+      const pineColors = ['#0d2818', '#1b4332', '#2d6a4f'];
+      for (let tx = 8; tx < 796; tx += 22) {
+        const th = 45 + (tx % 23) * 3;
+        const ty = 436 + (tx % 13) * 2;
         ctx.fillStyle = pineColors[tx % pineColors.length];
         ctx.beginPath();
         ctx.moveTo(tx, ty);
-        ctx.lineTo(tx - 13, ty + th);
-        ctx.lineTo(tx + 13, ty + th);
+        ctx.lineTo(tx - 12, ty + th);
+        ctx.lineTo(tx + 12, ty + th);
         ctx.closePath();
         ctx.fill();
       }
@@ -2056,18 +2085,27 @@ Guidelines:
         const seed = Math.floor(Math.random() * 999999);
         const fluxUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fluxPrompt)}?width=1024&height=768&model=flux&nologo=true&seed=${seed}`;
 
-        // 画像のロード完了を最大7秒待機（タイムアウト時はSVGへフォールバック）
-        const imgLoaded = await new Promise((resolve) => {
-          const testImg = new Image();
-          const timer = setTimeout(() => resolve(false), 7000);
-          testImg.onload = () => { clearTimeout(timer); resolve(true); };
-          testImg.onerror = () => { clearTimeout(timer); resolve(false); };
-          testImg.src = fluxUrl;
-        });
+        // 画像のロード完了を最大2.5秒待機（FLUXが混雑・402レートリミット時は即座にSVG/Canvasへフォールバック）
+        if (!state.pollinationsBlocked) {
+          const imgLoaded = await new Promise((resolve) => {
+            const testImg = new Image();
+            const timer = setTimeout(() => {
+              state.pollinationsBlocked = true; // 混雑または402制限時は次回以降待機せず即時描画
+              resolve(false);
+            }, 2500);
+            testImg.onload = () => { clearTimeout(timer); resolve(true); };
+            testImg.onerror = () => {
+              clearTimeout(timer);
+              state.pollinationsBlocked = true;
+              resolve(false);
+            };
+            testImg.src = fluxUrl;
+          });
 
-        if (imgLoaded) {
-          mediaDataUrl = fluxUrl;
-          logDiag('FLUX による最高峰クオリティの情景描画に成功しました！');
+          if (imgLoaded) {
+            mediaDataUrl = fluxUrl;
+            logDiag('FLUX による最高峰クオリティの情景描画に成功しました！');
+          }
         }
       } catch (fluxErr) {
         console.warn('FLUX generation warning:', fluxErr);
