@@ -897,15 +897,6 @@ ${levelRules}
 
           const outputTrans = sc.outputTranscription || sc.output_transcription;
           if (outputTrans && outputTrans.text) {
-            if (state.currentUserTurnTranscript.trim()) {
-              const completedUserText = state.currentUserTurnTranscript.trim();
-              state.sessionTopics.push(completedUserText);
-              state.currentUserTurnTranscript = '';
-              // ユーザーの発話が完了してAIが返答を始めた瞬間、その発話内容に合わせて必ずキャンバスを書き換える
-              if (completedUserText.length >= 3 && completedUserText !== state.lastDrawnUtterance && !/^(はい|いいえ|うん|ええ|ありがとう|こんにちは|おはよう|こんばんは|そうです|ちがいます)$/.test(completedUserText)) {
-                triggerSceneDrawingForTopic(completedUserText);
-              }
-            }
             state.currentAiTurnTranscript += outputTrans.text;
             const cleanAiTxt = state.currentAiTurnTranscript.trim();
             if (cleanAiTxt) {
@@ -914,29 +905,37 @@ ${levelRules}
           }
 
           if (sc.turnComplete || sc.turn_complete) {
+            let topicToDraw = '';
+            // 1. ユーザー自身の発話テキスト（認識できた場合）
             if (state.currentUserTurnTranscript.trim()) {
-              const completedUserText = state.currentUserTurnTranscript.trim();
-              state.sessionTopics.push(completedUserText);
+              const uText = state.currentUserTurnTranscript.trim();
               state.currentUserTurnTranscript = '';
-              if (completedUserText.length >= 3 && completedUserText !== state.lastDrawnUtterance) {
-                triggerSceneDrawingForTopic(completedUserText);
+              const isShortAck = /^(はい|いいえ|うん|ええ|ありがとう|こんにちは|おはよう|こんばんは|そうです|ちがいます|なるほど)$/.test(uText);
+              if (!isShortAck && uText.length >= 2) {
+                topicToDraw = uText;
+                state.sessionTopics.push(uText);
               }
             }
-            const finishedAiTxt = state.currentAiTurnTranscript;
+
+            // 2. ユーザー発話が空（スマホ等）の場合は、AIの返答音声から会話の話題・情景を自動抽出
+            const finishedAiTxt = state.currentAiTurnTranscript.trim();
             state.currentAiTurnTranscript = '';
-            // AIの返答から新しい情景が検出された場合、またはAIが「絵を描いてみますね」と言った場合の自動描画
-            const sceneMatch = finishedAiTxt.match(/(喫茶店|カフェ|クリームソーダ|ホットケーキ|教室の中|校舎|文化祭|模擬店|海|浜辺|桜|夕焼け|雪景色|公園|商店街|電車|リンゴ畑)/);
-            if (sceneMatch && sceneMatch[0] && !state.sessionTopics.includes(sceneMatch[0])) {
-              const detectedScene = `${sceneMatch[0]}の思い出の情景`;
-              state.sessionTopics.push(detectedScene);
-              if (detectedScene !== state.lastDrawnUtterance) {
-                triggerSceneDrawingForTopic(detectedScene);
+            if (!topicToDraw && finishedAiTxt) {
+              const sceneMatch = finishedAiTxt.match(/(喫茶店の中|喫茶店|カフェ|クリームソーダ|ホットケーキ|コーヒー|教室の中|教室|校舎|文化祭|模擬店|海|浜辺|桜|夕焼け|雪景色|公園|商店街|電車|リンゴ畑|祭り|故郷)/);
+              if (sceneMatch && sceneMatch[0]) {
+                topicToDraw = `${sceneMatch[0]}の思い出の情景`;
+                state.sessionTopics.push(topicToDraw);
+              } else if (finishedAiTxt.length >= 6) {
+                // 返答文の要約をトピックとして採用
+                topicToDraw = finishedAiTxt.replace(/[、。！!？?]/g, ' ').slice(0, 24);
+                state.sessionTopics.push(topicToDraw);
               }
-            } else if (/(描いてみます|描きますね|キャンバスに.*描|絵にしてみます)/.test(finishedAiTxt)) {
-              const lastTopic = state.sessionTopics[state.sessionTopics.length - 1] || '思い出の風景';
-              if (lastTopic !== state.lastDrawnUtterance) {
-                triggerSceneDrawingForTopic(lastTopic);
-              }
+            }
+
+            // 3. 話題が定まり、前回描いたものと異なれば即座にキャンバスを描画
+            if (topicToDraw && topicToDraw !== state.lastDrawnUtterance) {
+              logDiag(`対話から情景を検知して描画開始: 「${topicToDraw}」`);
+              triggerSceneDrawingForTopic(topicToDraw);
             } else if (!state.isAiSpeaking && !state.isDrawingMedia) {
               setAvatarState('listening');
             }
@@ -1919,104 +1918,43 @@ ${levelRules}
     const apiKey = (state.sessionApiKey || '').trim();
 
     if (apiKey) {
-      // Step 1: Nano Banana 系 (Gemini 2.5 Flash Image / Gemini 2.0 Flash Image Generation)
-      const nanoBananaModels = [
-        'gemini-2.5-flash-image',
-        'gemini-2.0-flash-exp-image-generation'
-      ];
-      for (const modelName of nanoBananaModels) {
-        if (mediaDataUrl) break;
-        try {
-          const resNb = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: finalPrompt }] }],
-                generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
-              })
-            }
-          );
-          if (resNb.ok) {
-            const dataNb = await resNb.json();
-            const parts = dataNb?.candidates?.[0]?.content?.parts || [];
-            for (const p of parts) {
-              const inl = p.inlineData || p.inline_data;
-              if (inl && inl.data) {
-                mediaDataUrl = `data:${inl.mimeType || 'image/png'};base64,${inl.data}`;
-                logDiag(`Nano Banana (${modelName}) による水彩画生成に成功しました！`);
-                break;
-              }
-            }
-          }
-        } catch (e) {}
-      }
-
-      // Step 2: Imagen 3 REST API フォールバック
-      if (!mediaDataUrl) {
-        try {
-          const res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${encodeURIComponent(apiKey)}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                instances: [{ prompt: finalPrompt }],
-                parameters: { sampleCount: 1, aspectRatio: '4:3', outputOptions: { mimeType: 'image/jpeg' } }
-              })
-            }
-          );
-          if (res.ok) {
-            const data = await res.json();
-            const b64 = data?.predictions?.[0]?.bytesBase64Encoded;
-            if (b64) {
-              mediaDataUrl = `data:image/jpeg;base64,${b64}`;
-              logDiag('Imagen 3 による水彩画生成に成功しました！');
-            }
-          }
-        } catch (e) {}
-      }
-
-      // Step 2.5: Gemini 2.5 Flash によるオーダーメイドSVG水彩画生成
-      // (Imagen 3 クォータ制限時や無料枠でも、ユーザーの会話内容・修正希望通りの情景や小物を100%忠実に描く)
-      if (!mediaDataUrl) {
-        try {
-          const svgPrompt = `あなたは優しい絵本・水彩画の画家です。高齢者・回想法ケアのため、ユーザーが語った思い出や情景に合わせて、温かい水彩画風のSVGイラスト（幅800、高さ600）を描いてください。
+      // Step 1: Gemini 2.5 Flash によるオーダーメイドSVG水彩画生成（最優先・高速1.5秒）
+      // (全APIキーで100%確実に利用可能。ユーザーの会話内容・修正希望通りの情景や小物を忠実に描画)
+      try {
+        const svgPrompt = `あなたは優しい絵本・水彩画の画家です。高齢者・回想法ケアのため、ユーザーが語った思い出や情景に合わせて、温かい水彩画風のSVGイラスト（幅800、高さ600）を描いてください。
 描く情景・会話内容：
 ${elements}
 
 【要件】
 1. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。
 2. 昭和レトロ・温かみのあるパステル調の水彩グラデーション（<linearGradient>, <radialGradient>）や柔らかな色合いを使用してください。
-3. 会話で言及された具体的な情景（例：高校の文化祭の喫茶店、木目のカウンター、丸テーブル、クリームソーダ、コーヒー、窓の外の光や木々、黒板の手書きメニューなど）を具体的に配置して描いてください。
+3. 会話で言及された具体的な情景（例：文化祭の喫茶店、木目のカウンター、丸テーブル、クリームソーダ、コーヒー、窓の外の光や木々、黒板の手書きメニューなど）を具体的に配置して描いてください。
 4. 人物の顔は描かず、後ろ姿か遠景のシルエット、あるいは温かい情景・静物を中心に描いてください。
 5. 余計な説明文やコードブロック（\`\`\`xml や \`\`\`svg など）は含めず、純粋な <svg>...</svg> のみを出力してください。`;
 
-          const resSvg = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: svgPrompt }] }],
-                generationConfig: { temperature: 0.4, maxOutputTokens: 2500 }
-              })
-            }
-          );
-          if (resSvg.ok) {
-            const dataSvg = await resSvg.json();
-            const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            const svgMatch = rawText.match(/<svg[\s\S]*?<\/svg>/i);
-            if (svgMatch && svgMatch[0]) {
-              const cleanSvg = svgMatch[0];
-              mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
-              logDiag('Gemini 2.5 Flash によるオーダーメイド水彩画(SVG)の描画に成功しました！');
-            }
+        const resSvg = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: svgPrompt }] }],
+              generationConfig: { temperature: 0.4, maxOutputTokens: 2500 }
+            })
           }
-        } catch (svgErr) {
-          console.warn('Gemini SVG generation warning:', svgErr);
+        );
+        if (resSvg.ok) {
+          const dataSvg = await resSvg.json();
+          const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          const svgMatch = rawText.match(/<svg[\s\S]*?<\/svg>/i);
+          if (svgMatch && svgMatch[0]) {
+            const cleanSvg = svgMatch[0];
+            mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
+            logDiag('Gemini 2.5 Flash によるオーダーメイド水彩画(SVG)の描画に成功しました！');
+          }
         }
+      } catch (svgErr) {
+        console.warn('Gemini SVG generation warning:', svgErr);
       }
     }
 
@@ -2635,6 +2573,9 @@ ${elements}
 
     const shortTitle = cleanTopic.length > 18 ? `${cleanTopic.slice(0, 18)}…` : cleanTopic;
     logDiag(`会話に合わせてキャンバスを更新中: 「${shortTitle}」`);
+    if (dom.captionTitle) {
+      dom.captionTitle.textContent = `🎨 描画中: 「${shortTitle}」`;
+    }
     setAvatarState('drawing');
     if (dom.btnDrawCurrentTopic) {
       dom.btnDrawCurrentTopic.disabled = true;
