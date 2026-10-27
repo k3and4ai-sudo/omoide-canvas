@@ -651,6 +651,42 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.caption-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.btn-draw-now {
+  background: linear-gradient(135deg, var(--primary) 0%, #2c5e4f 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-full);
+  padding: 7px 15px;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease, opacity 0.2s ease;
+  white-space: nowrap;
+}
+
+.btn-draw-now:hover {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
+
+.btn-draw-now:disabled {
+  opacity: 0.55;
+  cursor: wait;
 }
 
 .caption-tag {

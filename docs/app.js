@@ -103,6 +103,7 @@
     drawingOverlay: document.getElementById('drawingOverlay'),
     captionTitle: document.getElementById('captionTitle'),
     captionTag: document.getElementById('captionTag'),
+    btnDrawCurrentTopic: document.getElementById('btnDrawCurrentTopic'),
     soundIndicator: document.getElementById('soundIndicator'),
     soundName: document.getElementById('soundName'),
     userTranscriptText: document.getElementById('userTranscriptText'),
@@ -424,6 +425,7 @@
     dom.btnDiagImage.addEventListener('click', testGenerateSampleVisual);
     dom.btnDiagEmergency.addEventListener('click', testEmergencyAlert);
     dom.btnDiagAvatar.addEventListener('click', testCycleAvatars);
+    dom.btnDrawCurrentTopic?.addEventListener('click', drawCurrentConversationScene);
   }
 
   function setNoiseGateMode(mode) {
@@ -1439,6 +1441,12 @@ ${levelRules}
             }
 
             if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+              // ユーザーの発話の中に「絵を描いて」「文化祭」「昔〜」「行った」「思い出」など情景や描画希望が含まれていれば即座に裏で水彩画生成も開始
+              const shouldAutoDraw = /(描いて|書いて|絵に|キャンバス|文化祭|高校|中学|小学校|学校|昔|子供の頃|若い頃|故郷|ふるさと|旅行|海|山|川|桜|祭り|花火|雪|畑|風景|景色)/.test(textToSend);
+              if (shouldAutoDraw && !state.isDrawingMedia) {
+                triggerSceneDrawingForTopic(textToSend);
+              }
+
               if (state.isDirectGeminiWs) {
                 // Gemini直結時も、ブラウザで正確に聞き取れた日本語字幕テキストを送信して聞き間違いをゼロにする
                 if (!state.currentAiTurnTranscript) {
@@ -1537,6 +1545,7 @@ ${levelRules}
     const ctx = canvas.getContext('2d');
     const combined = `${title || ''} ${elements || ''}`;
 
+    const isSchool = /(高校|文化祭|学園祭|学校|教室|黒板|校舎|中学|小学校|先生|生徒|部活|運動会|体育祭|青春|合唱|バンド|模擬店)/.test(combined);
     const isSea = /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
     const isSakura = /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
     const isSnow = /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
@@ -1544,7 +1553,11 @@ ${levelRules}
 
     // 1. テーマ別の水彩空グラデーション
     const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    if (isSea) {
+    if (isSchool) {
+      skyGrad.addColorStop(0, '#fff3d6');
+      skyGrad.addColorStop(0.55, '#fdebd0');
+      skyGrad.addColorStop(1, '#e8d5b7');
+    } else if (isSea) {
       skyGrad.addColorStop(0, '#a8dadc');
       skyGrad.addColorStop(0.55, '#f1faee');
       skyGrad.addColorStop(0.56, '#457b9d');
@@ -1574,12 +1587,83 @@ ${levelRules}
     ctx.save();
     ctx.fillStyle = isSunset ? 'rgba(231, 111, 81, 0.75)' : 'rgba(255, 238, 173, 0.75)';
     ctx.beginPath();
-    ctx.arc(630, 140, 56, 0, Math.PI * 2);
+    ctx.arc(650, 130, 52, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
     // 3. テーマ別の風景モチーフ描画
-    if (isSea) {
+    if (isSchool) {
+      // 校庭の大地
+      ctx.fillStyle = '#e6ccb2';
+      ctx.fillRect(0, 390, canvas.width, 210);
+
+      // 懐かしい木造・レトロ校舎
+      ctx.fillStyle = '#faf0ca';
+      ctx.strokeStyle = '#bc6c25';
+      ctx.lineWidth = 3;
+      ctx.fillRect(140, 210, 520, 185);
+      ctx.strokeRect(140, 210, 520, 185);
+
+      // 校舎の屋根
+      ctx.fillStyle = '#d66853';
+      ctx.beginPath();
+      ctx.moveTo(115, 210);
+      ctx.lineTo(400, 145);
+      ctx.lineTo(685, 210);
+      ctx.closePath();
+      ctx.fill();
+
+      // 学校の時計台
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(400, 182, 18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // 教室の窓枠（2階建て）
+      ctx.fillStyle = '#a8dadc';
+      for (let row = 0; row < 2; row++) {
+        for (let col = 0; col < 6; col++) {
+          if (row === 1 && (col === 2 || col === 3)) continue;
+          const wx = 175 + col * 78;
+          const wy = 235 + row * 72;
+          ctx.fillRect(wx, wy, 48, 44);
+          ctx.strokeRect(wx, wy, 48, 44);
+        }
+      }
+
+      // 文化祭の横断幕・アーチ
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(310, 300, 180, 42);
+      ctx.strokeRect(310, 300, 180, 42);
+      ctx.fillStyle = '#e07a5f';
+      ctx.font = 'bold 18px "Noto Sans JP", sans-serif';
+      ctx.fillText('🎉 文化祭・青春の記憶', 316, 327);
+
+      // カラフルな万国旗・ガーランドと紙吹雪
+      const flagColors = ['#e07a5f', '#f4a261', '#81b29a', '#457b9d', '#e9c46a'];
+      for (let i = 0; i < 14; i++) {
+        const fx = 60 + i * 50;
+        const fy = 135 + Math.sin(i * 0.6) * 28;
+        ctx.fillStyle = flagColors[i % flagColors.length];
+        ctx.beginPath();
+        ctx.moveTo(fx, fy);
+        ctx.lineTo(fx + 26, fy + 6);
+        ctx.lineTo(fx + 12, fy + 28);
+        ctx.closePath();
+        ctx.fill();
+      }
+      // 屋台・模擬店テント
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(90, 355, 110, 65);
+      ctx.fillStyle = '#e07a5f';
+      ctx.beginPath();
+      ctx.moveTo(82, 355);
+      ctx.lineTo(145, 322);
+      ctx.lineTo(208, 355);
+      ctx.closePath();
+      ctx.fill();
+    } else if (isSea) {
       ctx.strokeStyle = 'rgba(255,255,255,0.75)';
       ctx.lineWidth = 4;
       for (let y = 370; y <= 470; y += 32) {
@@ -2319,23 +2403,53 @@ ${levelRules}
   }
 
   // ============================================================================
-  // 動作診断・テストツール
+  // 動作診断・テストツール ＆ ワンタップ「今の話題を絵にする」
   // ============================================================================
-  async function testGenerateSampleVisual() {
-    logDiag('水彩画生成テストを開始します...');
+  async function triggerSceneDrawingForTopic(rawTopic) {
+    const cleanTopic = (rawTopic || '').replace(/[「」]/g, '').trim() || '思い出の風景';
+    const shortTitle = cleanTopic.length > 16 ? `${cleanTopic.slice(0, 16)}…` : cleanTopic;
+    logDiag(`キャンバス描画を開始: 「${shortTitle}」`);
     setAvatarState('drawing');
-    if (state.socket && state.socket.readyState === WebSocket.OPEN && !state.isDirectGeminiWs) {
-      state.socket.send(JSON.stringify({ type: 'test_generate_visual' }));
-    } else {
+    if (dom.btnDrawCurrentTopic) {
+      dom.btnDrawCurrentTopic.disabled = true;
+      dom.btnDrawCurrentTopic.textContent = '🎨 描画中...';
+    }
+    try {
       const art = await generateStandaloneMemoryArtifact({
         scene_type: 'past_memory',
-        japanese_title: '夕暮れの信州松本とりんご畑',
-        visual_elements: '夕暮れの信州松本のリンゴ畑、赤く実ったリンゴ、北アルプスの山並み',
+        japanese_title: shortTitle,
+        visual_elements: `${cleanTopic}、温かい水彩画の風景、懐かしい日本の情景`,
         ambient_sound: 'autumn_insects'
       });
       displayGeneratedMedia(art);
+    } catch (e) {
+      console.error('triggerSceneDrawingForTopic error:', e);
+    } finally {
+      if (dom.btnDrawCurrentTopic) {
+        dom.btnDrawCurrentTopic.disabled = false;
+        dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
+      }
       setAvatarState(state.isSessionActive ? 'listening' : 'idle');
     }
+  }
+
+  async function drawCurrentConversationScene() {
+    let topic = state.sessionTopics[state.sessionTopics.length - 1] || '';
+    if (!topic && dom.userTranscriptText) {
+      const txt = dom.userTranscriptText.textContent || '';
+      if (!txt.includes('お話をはじめる') && !txt.includes('声が文字になります')) {
+        topic = txt;
+      }
+    }
+    if (!topic) {
+      topic = '高校の文化祭の思い出';
+    }
+    await triggerSceneDrawingForTopic(topic);
+  }
+
+  async function testGenerateSampleVisual() {
+    const lastTopic = state.sessionTopics[state.sessionTopics.length - 1] || '高校の文化祭の思い出';
+    await triggerSceneDrawingForTopic(lastTopic);
   }
 
   async function testEmergencyAlert() {

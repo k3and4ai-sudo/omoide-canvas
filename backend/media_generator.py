@@ -92,6 +92,7 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
     """
     width, height = 1024, 768
     combined = f"{title} {elements}"
+    is_school = any(k in combined for k in ["高校", "文化祭", "学園祭", "学校", "教室", "黒板", "校舎", "中学", "小学校", "先生", "生徒", "部活", "運動会", "体育祭", "青春", "合唱", "模擬店"])
     is_sea = any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
     is_sakura = any(k in combined for k in ["桜", "春", "花", "菜の花", "入学", "卒業", "ピンク", "花見", "公園", "庭"])
     is_snow = any(k in combined for k in ["雪", "冬", "スキー", "こたつ", "正月", "北国", "白", "氷", "北海道", "新潟"])
@@ -100,7 +101,25 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
     base_image = Image.new("RGB", (width, height), color=(253, 248, 242))
     draw = ImageDraw.Draw(base_image)
 
-    if is_sea:
+    if is_school:
+        draw.rectangle([0, 0, width, 490], fill=(255, 243, 214))
+        draw.rectangle([0, 490, width, height], fill=(230, 204, 178))
+        # 校舎本体と屋根
+        draw.rectangle([180, 260, 844, 490], fill=(250, 240, 202), outline=(188, 108, 37), width=4)
+        draw.polygon([(150, 260), (512, 175), (874, 260)], fill=(214, 104, 83))
+        # 窓
+        for r in range(2):
+            for c in range(6):
+                wx = 220 + c * 98
+                wy = 290 + r * 90
+                draw.rectangle([wx, wy, wx + 60, wy + 55], fill=(168, 218, 220), outline=(188, 108, 37), width=2)
+        # 万国旗
+        flag_colors = [(224, 122, 95), (244, 162, 97), (129, 178, 154), (69, 123, 157), (233, 196, 106)]
+        for i in range(14):
+            fx = 80 + i * 64
+            fy = 160 + (i % 3) * 14
+            draw.polygon([(fx, fy), (fx + 34, fy + 8), (fx + 16, fy + 36)], fill=flag_colors[i % 5])
+    elif is_sea:
         draw.rectangle([0, 0, width, 420], fill=(168, 218, 220))
         draw.ellipse([740, 80, 860, 200], fill=(255, 243, 176))
         draw.rectangle([0, 420, width, 640], fill=(69, 123, 157))
