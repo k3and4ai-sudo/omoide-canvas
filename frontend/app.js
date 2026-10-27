@@ -924,8 +924,15 @@ ${levelRules}
             }
             const finishedAiTxt = state.currentAiTurnTranscript;
             state.currentAiTurnTranscript = '';
-            // AIが「絵を描いてみますね」「キャンバスに描きます」と言ったのにまだ描画されていない場合の補完
-            if (/(描いてみます|描きますね|キャンバスに.*描|絵にしてみます)/.test(finishedAiTxt)) {
+            // AIの返答から新しい情景が検出された場合、またはAIが「絵を描いてみますね」と言った場合の自動描画
+            const sceneMatch = finishedAiTxt.match(/(喫茶店|カフェ|クリームソーダ|ホットケーキ|教室の中|校舎|文化祭|模擬店|海|浜辺|桜|夕焼け|雪景色|公園|商店街|電車|リンゴ畑)/);
+            if (sceneMatch && sceneMatch[0] && !state.sessionTopics.includes(sceneMatch[0])) {
+              const detectedScene = `${sceneMatch[0]}の思い出の情景`;
+              state.sessionTopics.push(detectedScene);
+              if (detectedScene !== state.lastDrawnUtterance) {
+                triggerSceneDrawingForTopic(detectedScene);
+              }
+            } else if (/(描いてみます|描きますね|キャンバスに.*描|絵にしてみます)/.test(finishedAiTxt)) {
               const lastTopic = state.sessionTopics[state.sessionTopics.length - 1] || '思い出の風景';
               if (lastTopic !== state.lastDrawnUtterance) {
                 triggerSceneDrawingForTopic(lastTopic);
@@ -1384,12 +1391,6 @@ ${levelRules}
       recognition.maxAlternatives = 1;
 
       recognition.onresult = (event) => {
-        // AIがスピーカーから発話中の場合、またはノイズゲートしきい値未満の遠方テレビ音声の場合は破棄
-        if (state.isAiSpeaking) return;
-        if (state.noiseGateMode !== 'normal' && (Date.now() - state.lastVoiceActiveTime > 2500)) {
-          return;
-        }
-
         let interimTranscript = '';
         let finalTranscript = '';
 
@@ -1411,7 +1412,7 @@ ${levelRules}
             state.pendingUserTranscript = interimTranscript.trim();
           }
 
-          // ユーザーが話し終えた（700msの沈黙）を検知して処理
+          // ユーザーが話し終えた（600msの沈黙）を検知して処理
           if (state.speechDebounceTimer) {
             clearTimeout(state.speechDebounceTimer);
           }
@@ -2664,21 +2665,32 @@ ${elements}
   }
 
   async function drawCurrentConversationScene() {
-    let topic = state.sessionTopics[state.sessionTopics.length - 1] || '';
-    if (!topic && dom.userTranscriptText) {
-      const txt = dom.userTranscriptText.textContent || '';
-      if (!txt.includes('お話をはじめる') && !txt.includes('声が文字になります')) {
-        topic = txt;
+    let candidate = state.sessionTopics[state.sessionTopics.length - 1] || '';
+    if (!candidate && dom.userTranscriptText) {
+      const txt = (dom.userTranscriptText.textContent || '').replace(/[「」]/g, '').trim();
+      if (!txt.includes('お話をはじめる') && !txt.includes('声が文字になります') && txt.length >= 2) {
+        candidate = txt;
       }
     }
-    if (!topic) {
-      topic = '高校の文化祭の思い出';
+    if (!candidate && dom.aiTranscriptText) {
+      const aiTxt = dom.aiTranscriptText.textContent || '';
+      const m = aiTxt.match(/(喫茶店|カフェ|クリームソーダ|ホットケーキ|教室|校舎|文化祭|模擬店|海|桜|夕焼け|雪景色|公園|電車|リンゴ)/);
+      if (m && m[0]) {
+        candidate = `${m[0]}の情景`;
+      }
     }
-    await triggerSceneDrawingForTopic(topic);
+
+    // ワンタップで自由に入力・指定できる確認ダイアログ（そのままOKを押せば候補が描画される）
+    const promptMsg = '描きたい思い出の情景やお話の内容を入力してください\n（例：文化祭の喫茶店の中、クリームソーダ、昔の教室など）';
+    const userEntered = window.prompt(promptMsg, candidate || '文化祭の喫茶店の中');
+    const finalTopic = (userEntered !== null ? userEntered.trim() : candidate) || '思い出の風景';
+
+    state.sessionTopics.push(finalTopic);
+    await triggerSceneDrawingForTopic(finalTopic);
   }
 
   async function testGenerateSampleVisual() {
-    const lastTopic = state.sessionTopics[state.sessionTopics.length - 1] || '高校の文化祭の思い出';
+    const lastTopic = state.sessionTopics[state.sessionTopics.length - 1] || '文化祭の喫茶店の中';
     await triggerSceneDrawingForTopic(lastTopic);
   }
 
