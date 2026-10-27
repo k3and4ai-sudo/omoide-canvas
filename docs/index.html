@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261027_18">
+  <link rel="stylesheet" href="styles.css?v=20261027_19">
 </head>
 <body>
 
@@ -186,6 +186,53 @@
           <div class="subtitle-row ai-row">
             <span class="speaker-tag ai-tag">🤖 パートナー</span>
             <span class="subtitle-text" id="aiTranscriptText">こんにちは！今日もよろしくお願いします。</span>
+          </div>
+        </div>
+
+        <!-- 思い出情景メモ・収集インジケーター（収集中・確認中・描画準備完了をリアルタイム可視化） -->
+        <div class="scene-collector-panel" id="sceneCollectorPanel">
+          <div class="collector-header">
+            <div class="collector-status-pill" id="collectorStatusPill">
+              <span class="collector-status-icon" id="collectorStatusIcon">📝</span>
+              <span class="collector-status-label" id="collectorStatusLabel">思い出の情景を聞き取り中...</span>
+            </div>
+            <div class="collector-counter" id="collectorCounter">情景ディテール: <strong id="collectorDetailCount">0</strong> 件</div>
+          </div>
+
+          <div class="collector-cards-grid" id="collectorCardsGrid">
+            <div class="collector-card" id="cardTopic">
+              <span class="card-icon">🏷️</span>
+              <span class="card-title">話題</span>
+              <span class="card-val" id="valTopic">お話を聞いています</span>
+            </div>
+            <div class="collector-card" id="cardPlace">
+              <span class="card-icon">📍</span>
+              <span class="card-title">場所・舞台</span>
+              <span class="card-val" id="valPlace">聞き取り中</span>
+            </div>
+            <div class="collector-card collector-card-details" id="cardDetails">
+              <span class="card-icon">🎨</span>
+              <span class="card-title">情景ディテール</span>
+              <div class="card-tags-list" id="valDetailsList">
+                <span class="tag-placeholder">お話から特徴を集めています</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 確認・描画アクションバナー（AIが描画を確認した時や情景がまとまった時に出現） -->
+          <div class="collector-action-banner hidden" id="collectorActionBanner">
+            <div class="banner-message">
+              <span class="banner-sparkle">✨</span>
+              <span class="banner-text" id="collectorActionText">情景がまとまりました！キャンバスに描いてみましょうか？</span>
+            </div>
+            <div class="banner-buttons">
+              <button type="button" class="btn-confirm-draw" id="btnConfirmDraw">
+                🎨 はい、描いてください
+              </button>
+              <button type="button" class="btn-more-talk" id="btnMoreTalk">
+                🗣️ もう少しお話しする
+              </button>
+            </div>
           </div>
         </div>
 
@@ -498,6 +545,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261027_18"></script>
+  <script src="app.js?v=20261027_19"></script>
 </body>
 </html>

@@ -554,45 +554,61 @@ class LiveSessionManager:
                     if msg_type == "user_transcript":
                         user_text = data.get("text", "")
                         self.discussed_topics.append(user_text)
-                        
-                        # AIの共感返答を送信
-                        await self.websocket.send_json({"type": "avatar_state", "state": "speaking"})
-                        ai_reply = f"{user_text}ですか、とても素敵ですね！その頃の情景をキャンバスに描いてみますね。"
-                        await self.websocket.send_json({
-                            "type": "transcript",
-                            "role": "model",
-                            "text": ai_reply
-                        })
-                        await asyncio.sleep(2.0)
 
-                        # 絵を描く
-                        await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
-                        art = await generate_memory_visual_artifact(
-                            user_id=self.profile.user_id,
-                            dementia_level=self.profile.dementia_level,
-                            scene_type=SceneType.PAST_MEMORY,
-                            japanese_title=f"{user_text}の思い出",
-                            visual_elements=f"{user_text}、懐かしい風景、温かい日差し",
-                            ambient_sound=AmbientSoundType.AUTUMN_INSECTS
-                        )
-                        self.generated_memories.append(art)
-                        await self.websocket.send_json({
-                            "type": "new_media",
-                            "memory_id": art.memory_id,
-                            "title": art.title,
-                            "media_url": art.media_url,
-                            "media_format": "image",
-                            "ambient_sound": "autumn_insects"
-                        })
-                        await asyncio.sleep(1.0)
-                        await self.websocket.send_json({
-                            "type": "transcript",
-                            "role": "model",
-                            "text": f"{self.profile.call_name}さん、画面に絵が浮かびましたよ。こんな雰囲気でしたか？"
-                        })
+                        # ユーザーが同意・描画指示を出したか判定
+                        is_draw_confirmed = any(kw in user_text for kw in ["描いて", "お願い", "うん", "はい", "そうして", "絵にして", "キャンバス"])
+                        
                         await self.websocket.send_json({"type": "avatar_state", "state": "speaking"})
-                        await asyncio.sleep(2.0)
-                        await self.websocket.send_json({"type": "avatar_state", "state": "listening"})
+                        
+                        if is_draw_confirmed and len(self.discussed_topics) > 1:
+                            # 合意・指示による描画実行
+                            target_topic = self.discussed_topics[-2] if len(self.discussed_topics) >= 2 else user_text
+                            ai_reply = f"承知いたしました！それでは「{target_topic}」の情景をキャンバスに描いてみますね。"
+                            await self.websocket.send_json({
+                                "type": "transcript",
+                                "role": "model",
+                                "text": ai_reply
+                            })
+                            await asyncio.sleep(1.5)
+
+                            # 絵を描く
+                            await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
+                            art = await generate_memory_visual_artifact(
+                                user_id=self.profile.user_id,
+                                dementia_level=self.profile.dementia_level,
+                                scene_type=SceneType.PAST_MEMORY,
+                                japanese_title=f"{target_topic}の思い出",
+                                visual_elements=f"{target_topic}、懐かしい風景、温かい日差し",
+                                ambient_sound=AmbientSoundType.AUTUMN_INSECTS
+                            )
+                            self.generated_memories.append(art)
+                            await self.websocket.send_json({
+                                "type": "new_media",
+                                "memory_id": art.memory_id,
+                                "title": art.title,
+                                "media_url": art.media_url,
+                                "media_format": "image",
+                                "ambient_sound": "autumn_insects"
+                            })
+                            await asyncio.sleep(1.0)
+                            await self.websocket.send_json({
+                                "type": "transcript",
+                                "role": "model",
+                                "text": f"{self.profile.call_name}さん、画面に絵が浮かびましたよ。こんな雰囲気でしたか？"
+                            })
+                            await self.websocket.send_json({"type": "avatar_state", "state": "speaking"})
+                            await asyncio.sleep(2.0)
+                            await self.websocket.send_json({"type": "avatar_state", "state": "listening"})
+                        else:
+                            # ディテール収集・確認返答
+                            ai_reply = f"{user_text}ですね、とても素敵ですね！その頃の季節やお天気、どんな様子だったかもう少し教えていただけますか？まとまったらキャンバスに描いてみましょうね。"
+                            await self.websocket.send_json({
+                                "type": "transcript",
+                                "role": "model",
+                                "text": ai_reply
+                            })
+                            await asyncio.sleep(2.0)
+                            await self.websocket.send_json({"type": "avatar_state", "state": "listening"})
 
                     elif msg_type == "test_generate_visual":
                         await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})

@@ -63,7 +63,18 @@
     nextPlaybackTime: 0,
     currentProfile: null,
     ambientSoundNode: null,
-    recognition: null // Web Speech API 音声認識
+    recognition: null, // Web Speech API 音声認識
+    // 思い出情景メモ収集ステート（毎ターン自動描画の抑制・合意形成・高精度プロンプト構築用）
+    sceneCollector: {
+      topic: '',
+      place: '',
+      seasonWeather: '',
+      details: new Set(),
+      status: 'idle', // 'idle' | 'collecting' | 'ready' | 'confirming' | 'drawing' | 'drawn'
+      isAwaitingConfirmation: false,
+      lastConfirmedTopic: '',
+      drawConfirmedByUser: false
+    }
   };
 
   // DOM要素キャッシュ
@@ -110,6 +121,24 @@
     soundName: document.getElementById('soundName'),
     userTranscriptText: document.getElementById('userTranscriptText'),
     aiTranscriptText: document.getElementById('aiTranscriptText'),
+
+    // 思い出情景メモ・収集インジケーター要素
+    sceneCollectorPanel: document.getElementById('sceneCollectorPanel'),
+    collectorStatusPill: document.getElementById('collectorStatusPill'),
+    collectorStatusIcon: document.getElementById('collectorStatusIcon'),
+    collectorStatusLabel: document.getElementById('collectorStatusLabel'),
+    collectorCounter: document.getElementById('collectorCounter'),
+    collectorDetailCount: document.getElementById('collectorDetailCount'),
+    cardTopic: document.getElementById('cardTopic'),
+    valTopic: document.getElementById('valTopic'),
+    cardPlace: document.getElementById('cardPlace'),
+    valPlace: document.getElementById('valPlace'),
+    cardDetails: document.getElementById('cardDetails'),
+    valDetailsList: document.getElementById('valDetailsList'),
+    collectorActionBanner: document.getElementById('collectorActionBanner'),
+    collectorActionText: document.getElementById('collectorActionText'),
+    btnConfirmDraw: document.getElementById('btnConfirmDraw'),
+    btnMoreTalk: document.getElementById('btnMoreTalk'),
 
     // ステータスバー
     statusDot: document.getElementById('statusDot'),
@@ -189,6 +218,7 @@
   async function init() {
     setupEventListeners();
     initLoginModalState();
+    resetSceneCollector();
     await detectBackendAvailability();
     await fetchUserProfile();
     drawFlatOscilloscope(); // 初期オシロスコープ波形（水平線）描画
@@ -428,6 +458,16 @@
     dom.btnDiagEmergency.addEventListener('click', testEmergencyAlert);
     dom.btnDiagAvatar.addEventListener('click', testCycleAvatars);
     dom.btnDrawCurrentTopic?.addEventListener('click', drawCurrentConversationScene);
+
+    // 思い出情景メモ・合意形成ボタン群
+    dom.btnConfirmDraw?.addEventListener('click', () => {
+      executeConfirmedDrawing();
+    });
+    dom.btnMoreTalk?.addEventListener('click', () => {
+      state.sceneCollector.isAwaitingConfirmation = false;
+      state.sceneCollector.status = 'collecting';
+      renderSceneCollectorUI();
+    });
   }
 
   function setNoiseGateMode(mode) {
@@ -542,10 +582,18 @@
    背景から聞こえるテレビ番組の音声（ニュース、CM、ドラマ等）や遠くの第三者の声には絶対に反応せず、目の前の「${nickname}」が直接ゆっくり話しかけた言葉にのみ返答してください。
 ${levelRules}
 
-# 【思い出の映像化（キャンバス描画ツール呼び出し）ルール：積極呼出】
-・相手が思い出の風景、行きたい場所、昔の出来事（例：文化祭、教室、喫茶店の中、故郷、街、駅、海、山など）について話したり、情景の切り替えや修正希望（例：「喫茶店の中に切り替えたい」「〜を描いて」「〜を置いて」など）を口にしたら、直ちに会話を返しながら積極的に \`generate_memory_visual\` または \`refine_memory_visual\` ツールを呼び出してください。
-・ツール呼び出しを躊躇せず、会話が進むごとに相手の言葉に合わせてキャンバスの絵をどんどん新しく描き換えてください。
-・絵が表示されたら「${nickname}、キャンバスに絵が浮かびましたよ。いかがですか？」と温かく声をかけてください。
+# 【思い出の映像化（情景収集・描画前確認・合意形成）の絶対ルール】
+1. 勝手な即時描画の絶対禁止：
+   相手が昔の思い出の風景や場所（例：文化祭、教室、喫茶店の中、故郷、海、山など）を話し始めても、【絶対にすぐにツールを呼んで絵を描いてはいけません】。
+2. ディテールの優しい掘り下げ（情景情報の収集）：
+   まずは「どんな場所でしたか？」「季節やお天気はどうでしたか？」「どんなものが置いてありましたか？」「誰と行かれたんですか？」と、温かく関心を持って思い出の情景ディテールをじっくり聞き取ってください。
+3. 描画前の確認（合意形成ステップ）：
+   情景の特徴やディテールがまとまってきたら、必ず言葉で相手に描画の確認を入れてください：
+   例：「〇〇の風景ですね。とても素敵です！その情景をキャンバスに描いてみましょうか？」
+4. 描画の実行タイミング（完了合図）：
+   相手が「うん」「お願い」「描いて」「そうして」「はい」等と同意した時、あるいは相手から「絵を描いて」「キャンバスに映して」と指示された時のみ、はじめて \`generate_memory_visual\`（または \`refine_memory_visual\`）ツールを呼び出してください。
+5. 描画後の温かい声かけ：
+   絵が表示されたら「${nickname}、キャンバスに絵が浮かびましたよ。こんな雰囲気でしたか？」と温かく声をかけてください。
 
 # 【緊急通報（SOS）の絶対ルール】
 相手が「助けて」「苦しい」「痛い」等の発言をした場合は、まず「${nickname}、大丈夫ですか？ご家族に連絡を入れましょうか？」と確認し、本人が同意した場合のみ \`trigger_emergency_alert\` を呼び出してください。`;
@@ -601,6 +649,7 @@ ${levelRules}
       state.sessionStartTime = Date.now();
       state.sessionTopics = [];
       state.sessionMemories = [];
+      resetSceneCollector();
       updateStatus('マイクと接続を準備しています...', true);
       dom.btnSessionToggle.disabled = true;
 
@@ -905,38 +954,23 @@ ${levelRules}
           }
 
           if (sc.turnComplete || sc.turn_complete) {
-            let topicToDraw = '';
-            // 1. ユーザー自身の発話テキスト（認識できた場合）
+            // 1. ユーザー自身の発話テキスト（認識できた場合）から情景情報を抽出・蓄積
             if (state.currentUserTurnTranscript.trim()) {
               const uText = state.currentUserTurnTranscript.trim();
               state.currentUserTurnTranscript = '';
-              const isShortAck = /^(はい|いいえ|うん|ええ|ありがとう|こんにちは|おはよう|こんばんは|そうです|ちがいます|なるほど)$/.test(uText);
-              if (!isShortAck && uText.length >= 2) {
-                topicToDraw = uText;
-                state.sessionTopics.push(uText);
-              }
+              state.sessionTopics.push(uText);
+              updateSceneCollectorFromText(uText, 'user');
             }
 
-            // 2. ユーザー発話が空（スマホ等）の場合は、AIの返答音声から会話の話題・情景を自動抽出
+            // 2. AIの返答音声から情景情報および「描画確認」フレーズを抽出・蓄積
             const finishedAiTxt = state.currentAiTurnTranscript.trim();
             state.currentAiTurnTranscript = '';
-            if (!topicToDraw && finishedAiTxt) {
-              const sceneMatch = finishedAiTxt.match(/(喫茶店の中|喫茶店|カフェ|クリームソーダ|ホットケーキ|コーヒー|教室の中|教室|校舎|文化祭|模擬店|海|浜辺|桜|夕焼け|雪景色|公園|商店街|電車|リンゴ畑|祭り|故郷)/);
-              if (sceneMatch && sceneMatch[0]) {
-                topicToDraw = `${sceneMatch[0]}の思い出の情景`;
-                state.sessionTopics.push(topicToDraw);
-              } else if (finishedAiTxt.length >= 6) {
-                // 返答文の要約をトピックとして採用
-                topicToDraw = finishedAiTxt.replace(/[、。！!？?]/g, ' ').slice(0, 24);
-                state.sessionTopics.push(topicToDraw);
-              }
+            if (finishedAiTxt) {
+              updateSceneCollectorFromText(finishedAiTxt, 'ai');
             }
 
-            // 3. 話題が定まり、前回描いたものと異なれば即座にキャンバスを描画
-            if (topicToDraw && topicToDraw !== state.lastDrawnUtterance) {
-              logDiag(`対話から情景を検知して描画開始: 「${topicToDraw}」`);
-              triggerSceneDrawingForTopic(topicToDraw);
-            } else if (!state.isAiSpeaking && !state.isDrawingMedia) {
+            // 毎ターンの勝手な自動描画は行わず、情景収集と合意形成を優先
+            if (!state.isAiSpeaking && !state.isDrawingMedia) {
               setAvatarState('listening');
             }
           }
@@ -1428,32 +1462,28 @@ ${levelRules}
               logDiag(`発話完了を検知（デモ）: 「${textToSend}」`);
               const profile = state.currentProfile || DEFAULT_USER_PROFILE;
               const nickname = formatUserNickname(profile.call_name);
-              const aiReply = `${textToSend}ですね！お話しくださってありがとうございます。その情景をキャンバスにも描いてみますね。`;
-              dom.aiTranscriptText.textContent = aiReply;
-              speakTextWithWebSpeech(aiReply);
+              updateSceneCollectorFromText(textToSend, 'user');
+              const isApproval = /^(はい|うん|ええ|お願いします|お願い|描いて|そうして|やってみて)/.test(textToSend.trim()) ||
+                                 /(描いて|絵にして|キャンバス)/.test(textToSend);
               setTimeout(async () => {
                 if (!state.isSessionActive) return;
-                setAvatarState('drawing');
-                const art = await generateStandaloneMemoryArtifact({
-                  scene_type: 'past_memory',
-                  japanese_title: `${textToSend.slice(0, 14)}の風景`,
-                  visual_elements: `${textToSend}、懐かしい日本の風景、温かい日差し`,
-                  ambient_sound: 'autumn_insects'
-                });
-                displayGeneratedMedia(art);
-                const followUp = `${nickname}、キャンバスに「${textToSend.slice(0, 14)}」の絵が浮かびましたよ。いかがですか？`;
-                dom.aiTranscriptText.textContent = followUp;
-                speakTextWithWebSpeech(followUp);
-              }, 1800);
+                if (isApproval && state.sceneCollector.status !== 'drawing') {
+                  const reply = `承知いたしました！それでは「${state.sceneCollector.topic || '思い出'}」の情景をキャンバスに描いてみますね。`;
+                  dom.aiTranscriptText.textContent = reply;
+                  speakTextWithWebSpeech(reply);
+                  await executeConfirmedDrawing();
+                } else {
+                  const followUp = `${nickname}、${textToSend}ですね！その頃の季節やお天気、どんな様子だったかもう少し教えていただけますか？`;
+                  dom.aiTranscriptText.textContent = followUp;
+                  speakTextWithWebSpeech(followUp);
+                }
+              }, 1200);
               return;
             }
 
             if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-              // 会話した内容に合わせて毎回キャンバスを更新・描き直しする（短い相槌のみ除外）
-              const isShortAck = /^(はい|いいえ|うん|ええ|ありがとう|ありがとうございます|こんにちは|おはよう|こんばんは|そうです|ちがいます|なるほど)$/.test(textToSend.trim());
-              if (!isShortAck && textToSend.trim().length >= 2 && textToSend.trim() !== state.lastDrawnUtterance) {
-                triggerSceneDrawingForTopic(textToSend);
-              }
+              // 発話テキストから情景情報を抽出・蓄積（毎ターン自動描画は行わない）
+              updateSceneCollectorFromText(textToSend, 'user');
 
               if (state.isDirectGeminiWs) {
                 // Gemini直結時も、ブラウザで正確に聞き取れた日本語字幕テキストを送信して聞き間違いをゼロにする
@@ -2753,18 +2783,266 @@ ${elements}
   }
 
   // ============================================================================
+  // 思い出情景メモ・収集インジケーター ＆ 合意形成（描画回数抑制と高精度化）
+  // ============================================================================
+  function resetSceneCollector() {
+    state.sceneCollector = {
+      topic: '',
+      place: '',
+      seasonWeather: '',
+      details: new Set(),
+      status: 'idle',
+      isAwaitingConfirmation: false,
+      lastConfirmedTopic: '',
+      drawConfirmedByUser: false
+    };
+    renderSceneCollectorUI();
+  }
+
+  function updateSceneCollectorFromText(text, speaker = 'user') {
+    if (!text || typeof text !== 'string') return;
+    const clean = text.replace(/[「」『』]/g, '').trim();
+    if (clean.length < 2) return;
+
+    const sc = state.sceneCollector;
+    let changed = false;
+
+    // 1. AIが描画確認の呼びかけを行ったか検知
+    if (speaker === 'ai') {
+      const isConfirming = /(キャンバスに描いてみましょうか|描いてみましょうか|絵にしてみましょうか|描きましょうか|絵を描いてみましょうか|キャンバスに映してみましょうか|キャンバスに描いてみますか)/.test(clean);
+      if (isConfirming) {
+        sc.isAwaitingConfirmation = true;
+        sc.status = 'confirming';
+        renderSceneCollectorUI();
+        return;
+      }
+    }
+
+    // 2. ユーザーからの明示的描画リクエスト・または合意返答の検知
+    if (speaker === 'user') {
+      const isExplicitDrawCommand = /(絵を描いて|絵にして|絵描いて|描いてみて|キャンバスに描いて|キャンバスに出して|キャンバスに映して|描いてください)/.test(clean);
+      const isApproval = /^(はい|うん|ええ|お願いします|お願い|描いて|そうして|やってみて|いいよ|ぜひ|頼む|おねがい)/.test(clean) ||
+                         /^(そうですね|そうしよう|描こう)/.test(clean);
+
+      if (isExplicitDrawCommand || (sc.isAwaitingConfirmation && isApproval)) {
+        logDiag(`ユーザーの描画合意・指示を検知: 「${clean}」`);
+        sc.isAwaitingConfirmation = false;
+        executeConfirmedDrawing();
+        return;
+      }
+    }
+
+    // 3. 話題・テーマの抽出
+    const topicRegex = /(文化祭|模擬店|運動会|山登り|登山|ハイキング|お祭り|祭り|旅行|卒業式|入学式|紅葉狩り|お花見|散歩|ドライブ|仕事|授業|畑仕事|収穫)/;
+    const tm = clean.match(topicRegex);
+    if (tm) {
+      if (!sc.topic || tm[0].length >= sc.topic.length) {
+        sc.topic = tm[0];
+        changed = true;
+      }
+    }
+
+    // 4. 場所・舞台の抽出
+    const placeRegex = /(北アルプス|南アルプス|中央アルプス|槍ヶ岳|穂高岳|常念岳|富士山|八ヶ岳|美ヶ原|上高地|信州|松本|喫茶店の中|喫茶店|カフェ|純喫茶|教室の中|教室|校舎|学校|体育館|校庭|海|海岸|砂浜|波打ち際|港|駅|ホーム|公園|商店街|田んぼ|畑|リンゴ畑|りんご畑|庭|神社|お寺|故郷|実家)/;
+    const pm = clean.match(placeRegex);
+    if (pm) {
+      sc.place = pm[0];
+      if (!sc.topic) {
+        sc.topic = `${pm[0]}の思い出`;
+      }
+      changed = true;
+    }
+
+    // 5. 季節・天候・時間帯の抽出
+    const seasonRegex = /(春|夏|秋|冬|朝|昼|夕暮れ|夕方|夕焼け|夜|星空|快晴|青空|雲海|雪|残雪|新緑|紅葉|秋晴れ|澄み切った空)/;
+    const sm = clean.match(seasonRegex);
+    if (sm) {
+      if (!sc.seasonWeather) {
+        sc.seasonWeather = sm[0];
+        changed = true;
+      }
+    }
+
+    // 6. 情景ディテール（事物・要素）の抽出
+    const detailList = [
+      // 山・自然
+      '鋭い岩峰', '険しい岩肌', '切り立った岩', '尖った山頂', '白い雪渓', '連峰', '山脈', '岩肌', '雲海', '青空', '緑の山並み', 'ハイマツ',
+      // 喫茶店・カフェ
+      '丸い木製テーブル', '丸いテーブル', '赤い布張り椅子', '赤い椅子', '革張りソファー', 'カウンター席', '窓際の席', 'クリームソーダ', 'メロンソーダ', 'バニラアイス', '赤いチェリー', 'ホットケーキ', 'サイフォン', 'コーヒー', '珈琲', 'ティーカップ',
+      // 教室・学校
+      '黒板', 'チョーク', '木の机', '木の椅子', '教卓', '白いカーテン', '窓ガラス',
+      // 故郷・農村・庭
+      '赤いリンゴ', '実ったリンゴ', '小川のせせらぎ', '夕日', '黄金色の稲穂', '赤とんぼ', '桜並木'
+    ];
+
+    detailList.forEach(item => {
+      if (clean.includes(item)) {
+        if (!sc.details.has(item)) {
+          sc.details.add(item);
+          changed = true;
+        }
+      }
+    });
+
+    // 山が話題なら鋭い岩峰・雪渓を自動補強
+    if (/(槍ヶ岳|北アルプス|鋭い山|岩山|アルプス)/.test(clean) || (sc.place && /(槍ヶ岳|北アルプス)/.test(sc.place))) {
+      if (!sc.details.has('鋭い岩峰と雪渓')) {
+        sc.details.add('鋭い岩峰と雪渓');
+        changed = true;
+      }
+    }
+
+    // 喫茶店の中の場合の基本ディテール補強
+    if (clean.includes('喫茶店') || (sc.place && sc.place.includes('喫茶店'))) {
+      if (clean.includes('中') || clean.includes('店内') || clean.includes('テーブル')) {
+        if (!sc.details.has('温かい店内と木製テーブル')) {
+          sc.details.add('温かい店内と木製テーブル');
+          changed = true;
+        }
+      }
+    }
+
+    if (changed || sc.status === 'idle') {
+      if (sc.details.size >= 2 || (sc.place && sc.details.size >= 1)) {
+        sc.status = 'ready';
+      } else {
+        sc.status = 'collecting';
+      }
+      renderSceneCollectorUI();
+    }
+  }
+
+  function renderSceneCollectorUI() {
+    if (!dom.sceneCollectorPanel) return;
+
+    const sc = state.sceneCollector;
+    const isReady = (sc.status === 'ready' || sc.status === 'confirming');
+
+    if (isReady) {
+      dom.sceneCollectorPanel.classList.add('is-ready');
+    } else {
+      dom.sceneCollectorPanel.classList.remove('is-ready');
+    }
+
+    // ステータスバッジ
+    if (dom.collectorStatusIcon && dom.collectorStatusLabel) {
+      if (sc.status === 'drawing') {
+        dom.collectorStatusIcon.textContent = '🎨';
+        dom.collectorStatusLabel.textContent = 'キャンバスに絵を描いています...';
+      } else if (sc.status === 'drawn') {
+        dom.collectorStatusIcon.textContent = '🖼️';
+        dom.collectorStatusLabel.textContent = '思い出の絵が完成しました';
+      } else if (sc.status === 'confirming') {
+        dom.collectorStatusIcon.textContent = '❓';
+        dom.collectorStatusLabel.textContent = 'パートナーが描画を確認中...';
+      } else if (sc.status === 'ready') {
+        dom.collectorStatusIcon.textContent = '✨';
+        dom.collectorStatusLabel.textContent = '情景がまとまりました（いつでも描けます）';
+      } else {
+        dom.collectorStatusIcon.textContent = '📝';
+        dom.collectorStatusLabel.textContent = '思い出の情景を聞き取り中...';
+      }
+    }
+
+    // ディテール件数
+    if (dom.collectorDetailCount) {
+      dom.collectorDetailCount.textContent = sc.details.size;
+    }
+
+    // 話題・場所
+    if (dom.valTopic) {
+      dom.valTopic.textContent = sc.topic || 'お話を聞いています';
+      dom.valTopic.title = sc.topic || '';
+    }
+    if (dom.valPlace) {
+      dom.valPlace.textContent = sc.place || (sc.seasonWeather ? `${sc.seasonWeather}の情景` : '聞き取り中');
+      dom.valPlace.title = sc.place || '';
+    }
+
+    // 情景ディテールタグ一覧
+    if (dom.valDetailsList) {
+      if (sc.details.size === 0) {
+        dom.valDetailsList.innerHTML = '<span class="tag-placeholder">お話から特徴を集めています</span>';
+      } else {
+        dom.valDetailsList.innerHTML = Array.from(sc.details)
+          .map(d => `<span class="detail-tag">・${d}</span>`)
+          .join('');
+      }
+    }
+
+    // 確認・描画アクションバナー
+    if (dom.collectorActionBanner) {
+      if (sc.status === 'confirming' || (sc.status === 'ready' && !state.isDrawingMedia)) {
+        dom.collectorActionBanner.classList.remove('hidden');
+        if (dom.collectorActionText) {
+          if (sc.status === 'confirming') {
+            dom.collectorActionText.textContent = `パートナーが「${sc.topic || 'この情景'}をキャンバスに描いてみましょうか？」と確認しています`;
+          } else {
+            dom.collectorActionText.textContent = `「${sc.topic || '思い出'}」の情景がまとまりました！キャンバスに描いてみましょうか？`;
+          }
+        }
+      } else {
+        dom.collectorActionBanner.classList.add('hidden');
+      }
+    }
+
+    // ワンタップ描画ボタンのラベル・スタイル更新
+    if (dom.btnDrawCurrentTopic) {
+      if (sc.status === 'ready' || sc.status === 'confirming') {
+        dom.btnDrawCurrentTopic.textContent = '✨ 準備OK！この情景を描く';
+        dom.btnDrawCurrentTopic.style.background = 'linear-gradient(135deg, #d97706 0%, #b45309 100%)';
+      } else if (sc.status === 'drawing') {
+        dom.btnDrawCurrentTopic.textContent = '🎨 描画中...';
+        dom.btnDrawCurrentTopic.style.background = '';
+      } else {
+        dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
+        dom.btnDrawCurrentTopic.style.background = '';
+      }
+    }
+  }
+
+  async function executeConfirmedDrawing(manualTopic = '') {
+    if (state.isDrawingMedia) return;
+
+    const sc = state.sceneCollector;
+    const topic = manualTopic || sc.topic || sc.place || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '思い出の風景');
+
+    // 収集された情景情報を総合して高精細プロンプトを作成
+    const detailsArray = Array.from(sc.details);
+    const elementsParts = [];
+    if (sc.place) elementsParts.push(`【場所・舞台】: ${sc.place}`);
+    if (sc.seasonWeather) elementsParts.push(`【季節・天候・時間】: ${sc.seasonWeather}`);
+    if (detailsArray.length > 0) elementsParts.push(`【情景ディテール】: ${detailsArray.join('、')}`);
+    elementsParts.push('温かい水彩画風、昭和のノスタルジー、澄み切った光と優しい陰影');
+
+    const combinedElements = elementsParts.join(' / ');
+
+    sc.status = 'drawing';
+    sc.isAwaitingConfirmation = false;
+    renderSceneCollectorUI();
+
+    logDiag(`合意形成・確定によりキャンバス描画を実行します: 「${topic}」`);
+    await triggerSceneDrawingForTopic(topic, combinedElements);
+
+    sc.status = 'drawn';
+    renderSceneCollectorUI();
+  }
+
+  // ============================================================================
   // 動作診断・テストツール ＆ ワンタップ「今の話題を絵にする」
   // ============================================================================
-  async function triggerSceneDrawingForTopic(rawTopic) {
+  async function triggerSceneDrawingForTopic(rawTopic, customElements = '') {
     const cleanTopic = (rawTopic || '').replace(/[「」]/g, '').trim() || '思い出の風景';
     state.lastDrawnUtterance = cleanTopic;
     const mySeqId = ++state.drawSequenceId;
 
-    // これまでの会話履歴（直近3発話）を合成して、「高校の文化祭」→「喫茶店の中」→「窓際に赤い花」のように絵が会話に沿って進化・修正されるようにする
-    const recentContext = state.sessionTopics.slice(-3).join('、');
-    const combinedElements = recentContext
-      ? `【最新の描きたい情景（最優先）】: ${cleanTopic} / 【直前までの会話の流れ】: ${recentContext}`
-      : cleanTopic;
+    let combinedElements = customElements;
+    if (!combinedElements) {
+      const recentContext = state.sessionTopics.slice(-3).join('、');
+      combinedElements = recentContext
+        ? `【描きたい情景】: ${cleanTopic} / 【会話の流れ】: ${recentContext}`
+        : cleanTopic;
+    }
 
     const shortTitle = cleanTopic.length > 18 ? `${cleanTopic.slice(0, 18)}…` : cleanTopic;
     logDiag(`会話に合わせてキャンバスを更新中: 「${shortTitle}」`);
@@ -2793,7 +3071,7 @@ ${elements}
       if (mySeqId === state.drawSequenceId) {
         if (dom.btnDrawCurrentTopic) {
           dom.btnDrawCurrentTopic.disabled = false;
-          dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
+          renderSceneCollectorUI();
         }
         setAvatarState(state.isSessionActive ? 'listening' : 'idle');
       }
@@ -2801,7 +3079,8 @@ ${elements}
   }
 
   async function drawCurrentConversationScene() {
-    let candidate = state.sessionTopics[state.sessionTopics.length - 1] || '';
+    const sc = state.sceneCollector;
+    let candidate = sc.topic || sc.place || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '');
     if (!candidate && dom.userTranscriptText) {
       const txt = (dom.userTranscriptText.textContent || '').replace(/[「」]/g, '').trim();
       if (!txt.includes('お話をはじめる') && !txt.includes('声が文字になります') && txt.length >= 2) {
@@ -2810,19 +3089,25 @@ ${elements}
     }
     if (!candidate && dom.aiTranscriptText) {
       const aiTxt = dom.aiTranscriptText.textContent || '';
-      const m = aiTxt.match(/(喫茶店|カフェ|クリームソーダ|ホットケーキ|教室|校舎|文化祭|模擬店|海|桜|夕焼け|雪景色|公園|電車|リンゴ)/);
+      const m = aiTxt.match(/(槍ヶ岳|北アルプス|山登り|山頂|喫茶店|カフェ|クリームソーダ|ホットケーキ|教室|校舎|文化祭|模擬店|海|桜|夕焼け|雪景色|公園|電車|リンゴ)/);
       if (m && m[0]) {
         candidate = `${m[0]}の情景`;
       }
     }
 
+    // 準備完了状態のときはプロンプトダイアログなしでそのまま即座に確定描画！
+    if (sc.status === 'ready' || sc.status === 'confirming') {
+      await executeConfirmedDrawing(candidate);
+      return;
+    }
+
     // ワンタップで自由に入力・指定できる確認ダイアログ（そのままOKを押せば候補が描画される）
-    const promptMsg = '描きたい思い出の情景やお話の内容を入力してください\n（例：文化祭の喫茶店の中、クリームソーダ、昔の教室など）';
+    const promptMsg = '描きたい思い出の情景やお話の内容を入力してください\n（例：北アルプス槍ヶ岳の鋭い岩峰、文化祭の喫茶店の中など）';
     const userEntered = window.prompt(promptMsg, candidate || '文化祭の喫茶店の中');
     const finalTopic = (userEntered !== null ? userEntered.trim() : candidate) || '思い出の風景';
 
     state.sessionTopics.push(finalTopic);
-    await triggerSceneDrawingForTopic(finalTopic);
+    await executeConfirmedDrawing(finalTopic);
   }
 
   async function testGenerateSampleVisual() {
