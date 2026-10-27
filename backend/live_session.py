@@ -55,6 +55,8 @@ class LiveSessionManager:
         self.discussed_topics: List[str] = []
         self.start_time: Optional[float] = None
         self.current_ai_turn_text: str = ""
+        self.current_user_turn_text: str = ""
+        self.last_drawn_topic: str = ""
         self.tool_called_in_turn: bool = False
 
     async def run(self):
@@ -288,17 +290,36 @@ class LiveSessionManager:
                         if input_trans and getattr(input_trans, "text", None):
                             user_txt = input_trans.text.strip()
                             if user_txt:
+                                self.current_user_turn_text += user_txt
                                 logger.info(f"Gemini input_transcription: {user_txt}")
-                                self.discussed_topics.append(user_txt)
                                 await self.websocket.send_json({
                                     "type": "transcript",
                                     "role": "user",
-                                    "text": user_txt
+                                    "text": self.current_user_turn_text
                                 })
 
                         # Gemini 側の返答音声文字起こし
                         output_trans = getattr(server_content, "output_transcription", None)
                         if output_trans and getattr(output_trans, "text", None):
+                            if self.current_user_turn_text.strip():
+                                full_user_utt = self.current_user_turn_text.strip()
+                                self.discussed_topics.append(full_user_utt)
+                                self.current_user_turn_text = ""
+                                # ユーザーの発話が完了しAIが返答を開始した時点で、会話内容に合わせてキャンバスを更新
+                                if len(full_user_utt) >= 3 and full_user_utt != self.last_drawn_topic and not self.tool_called_in_turn:
+                                    self.last_drawn_topic = full_user_utt
+                                    recent_ctx = "、".join(self.discussed_topics[-3:])
+                                    await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
+                                    asyncio.create_task(
+                                        self._handle_media_generation(session, "auto_call", {
+                                            "scene_type": "past_memory",
+                                            "japanese_title": full_user_utt[:18],
+                                            "visual_elements": f"【最新の描きたい情景（最優先）】: {full_user_utt} / 【会話の文脈】: {recent_ctx}",
+                                            "media_format": "image",
+                                            "ambient_sound": "autumn_insects"
+                                        })
+                                    )
+
                             ai_txt = output_trans.text.strip()
                             if ai_txt:
                                 self.current_ai_turn_text += ai_txt

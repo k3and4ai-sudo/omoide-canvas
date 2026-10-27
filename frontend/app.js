@@ -40,6 +40,8 @@
     sessionStartTime: null,         // セッション開始時刻（日報計算用）
     sessionTopics: [],              // セッション中の話題リスト
     sessionMemories: [],            // セッション中に生成した絵画リスト
+    lastDrawnUtterance: '',         // 最後にキャンバス描画した発話テキスト
+    drawSequenceId: 0,              // 描画リクエスト連番（最新の発話を常に優先反映するため）
     currentAiTurnTranscript: '',    // Gemini直結時のAI字幕バッファ
     currentUserTurnTranscript: '',  // Gemini直結時のユーザー字幕バッファ
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
@@ -898,8 +900,13 @@ ${levelRules}
           const outputTrans = sc.outputTranscription || sc.output_transcription;
           if (outputTrans && outputTrans.text) {
             if (state.currentUserTurnTranscript.trim()) {
-              state.sessionTopics.push(state.currentUserTurnTranscript.trim());
+              const completedUserText = state.currentUserTurnTranscript.trim();
+              state.sessionTopics.push(completedUserText);
               state.currentUserTurnTranscript = '';
+              // ユーザーの発話が完了してAIが返答を始めた瞬間、その発話内容に合わせて必ずキャンバスを書き換える
+              if (completedUserText.length >= 3 && completedUserText !== state.lastDrawnUtterance && !/^(はい|いいえ|うん|ええ|ありがとう|こんにちは|おはよう|こんばんは|そうです|ちがいます)$/.test(completedUserText)) {
+                triggerSceneDrawingForTopic(completedUserText);
+              }
             }
             state.currentAiTurnTranscript += outputTrans.text;
             const cleanAiTxt = state.currentAiTurnTranscript.trim();
@@ -909,19 +916,22 @@ ${levelRules}
           }
 
           if (sc.turnComplete || sc.turn_complete) {
+            if (state.currentUserTurnTranscript.trim()) {
+              const completedUserText = state.currentUserTurnTranscript.trim();
+              state.sessionTopics.push(completedUserText);
+              state.currentUserTurnTranscript = '';
+              if (completedUserText.length >= 3 && completedUserText !== state.lastDrawnUtterance) {
+                triggerSceneDrawingForTopic(completedUserText);
+              }
+            }
             const finishedAiTxt = state.currentAiTurnTranscript;
             state.currentAiTurnTranscript = '';
-            // AIが「絵を描いてみますね」「キャンバスに描きます」と言ったのにツール呼び出しイベントが省略された場合の自動補完
-            if (/(描いてみます|描きますね|キャンバスに.*描|絵にしてみます)/.test(finishedAiTxt) && !state.isDrawingMedia) {
+            // AIが「絵を描いてみますね」「キャンバスに描きます」と言ったのにまだ描画されていない場合の補完
+            if (/(描いてみます|描きますね|キャンバスに.*描|絵にしてみます)/.test(finishedAiTxt)) {
               const lastTopic = state.sessionTopics[state.sessionTopics.length - 1] || '思い出の風景';
-              logDiag(`発言内容から水彩画生成を自動開始: 「${lastTopic}」`);
-              setAvatarState('drawing');
-              generateStandaloneMemoryArtifact({
-                scene_type: 'past_memory',
-                japanese_title: `${lastTopic.slice(0, 16)}の風景`,
-                visual_elements: `${lastTopic}、温かい水彩画の風景`,
-                ambient_sound: 'autumn_insects'
-              }).then(art => displayGeneratedMedia(art));
+              if (lastTopic !== state.lastDrawnUtterance) {
+                triggerSceneDrawingForTopic(lastTopic);
+              }
             } else if (!state.isAiSpeaking && !state.isDrawingMedia) {
               setAvatarState('listening');
             }
@@ -1441,9 +1451,9 @@ ${levelRules}
             }
 
             if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-              // ユーザーの発話の中に場所・室内・喫茶店・風景・描画希望が含まれていれば即座に裏で水彩画生成を開始
-              const shouldAutoDraw = /(描いて|書いて|絵に|キャンバス|切り替|変えて|喫茶店|カフェ|コーヒー|紅茶|クリームソーダ|ケーキ|店|部屋|教室|黒板|文化祭|高校|中学|小学校|学校|昔|子供の頃|若い頃|故郷|ふるさと|旅行|温泉|旅館|電車|駅|海|山|川|桜|祭り|花火|雪|畑|風景|景色)/.test(textToSend);
-              if (shouldAutoDraw && !state.isDrawingMedia) {
+              // 会話した内容に合わせて毎回キャンバスを更新・描き直しする（短い相槌のみ除外）
+              const isShortAck = /^(はい|いいえ|うん|ええ|ありがとう|ありがとうございます|こんにちは|おはよう|こんばんは|そうです|ちがいます|なるほど)$/.test(textToSend.trim());
+              if (!isShortAck && textToSend.trim().length >= 3 && textToSend.trim() !== state.lastDrawnUtterance) {
                 triggerSceneDrawingForTopic(textToSend);
               }
 
@@ -2005,8 +2015,24 @@ ${levelRules}
 
   async function handleDirectMediaGeneration(ws, callId, funcName, args) {
     try {
-      const artifact = await generateStandaloneMemoryArtifact(args);
-      displayGeneratedMedia(artifact);
+      const mySeqId = ++state.drawSequenceId;
+      const latestUserTopic = state.sessionTopics[state.sessionTopics.length - 1] || '';
+      const rawElements = args.visual_elements || args.updated_visual_elements || args.user_feedback || args.japanese_title || latestUserTopic;
+      if (latestUserTopic) {
+        state.lastDrawnUtterance = latestUserTopic;
+      }
+      const enrichedArgs = {
+        ...args,
+        japanese_title: args.japanese_title || args.user_feedback || latestUserTopic.slice(0, 18) || '思い出の風景',
+        visual_elements: latestUserTopic
+          ? `【最新の会話内容（最優先）】: ${latestUserTopic} / 【AI情景描写】: ${rawElements}`
+          : rawElements
+      };
+
+      const artifact = await generateStandaloneMemoryArtifact(enrichedArgs);
+      if (mySeqId === state.drawSequenceId) {
+        displayGeneratedMedia(artifact);
+      }
 
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
@@ -2113,11 +2139,7 @@ ${levelRules}
         case 'transcript':
           // 文字起こし字幕の更新（チャンクで届く場合は繋げて読みやすく表示）
           if (data.role === 'model' && data.text) {
-            if (dom.aiTranscriptText.textContent.includes('こんにちは！今日もよろしくお願いします')) {
-              dom.aiTranscriptText.textContent = data.text;
-            } else {
-              dom.aiTranscriptText.textContent = data.text;
-            }
+            dom.aiTranscriptText.textContent = data.text;
             // シミュレーションモード時はブラウザ音声合成で喋らせる！
             if (state.isSimulation) {
               speakTextWithWebSpeech(data.text);
@@ -2559,8 +2581,17 @@ ${levelRules}
   // ============================================================================
   async function triggerSceneDrawingForTopic(rawTopic) {
     const cleanTopic = (rawTopic || '').replace(/[「」]/g, '').trim() || '思い出の風景';
-    const shortTitle = cleanTopic.length > 16 ? `${cleanTopic.slice(0, 16)}…` : cleanTopic;
-    logDiag(`キャンバス描画を開始: 「${shortTitle}」`);
+    state.lastDrawnUtterance = cleanTopic;
+    const mySeqId = ++state.drawSequenceId;
+
+    // これまでの会話履歴（直近3発話）を合成して、「高校の文化祭」→「喫茶店の中」→「窓際に赤い花」のように絵が会話に沿って進化・修正されるようにする
+    const recentContext = state.sessionTopics.slice(-3).join('、');
+    const combinedElements = recentContext
+      ? `【最新の描きたい情景（最優先）】: ${cleanTopic} / 【直前までの会話の流れ】: ${recentContext}`
+      : cleanTopic;
+
+    const shortTitle = cleanTopic.length > 18 ? `${cleanTopic.slice(0, 18)}…` : cleanTopic;
+    logDiag(`会話に合わせてキャンバスを更新中: 「${shortTitle}」`);
     setAvatarState('drawing');
     if (dom.btnDrawCurrentTopic) {
       dom.btnDrawCurrentTopic.disabled = true;
@@ -2570,18 +2601,23 @@ ${levelRules}
       const art = await generateStandaloneMemoryArtifact({
         scene_type: 'past_memory',
         japanese_title: shortTitle,
-        visual_elements: `${cleanTopic}、温かい水彩画の風景、懐かしい日本の情景`,
+        visual_elements: combinedElements,
         ambient_sound: 'autumn_insects'
       });
-      displayGeneratedMedia(art);
+      // より新しい発話の描画が走っていなければキャンバスに反映
+      if (mySeqId === state.drawSequenceId) {
+        displayGeneratedMedia(art);
+      }
     } catch (e) {
       console.error('triggerSceneDrawingForTopic error:', e);
     } finally {
-      if (dom.btnDrawCurrentTopic) {
-        dom.btnDrawCurrentTopic.disabled = false;
-        dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
+      if (mySeqId === state.drawSequenceId) {
+        if (dom.btnDrawCurrentTopic) {
+          dom.btnDrawCurrentTopic.disabled = false;
+          dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
+        }
+        setAvatarState(state.isSessionActive ? 'listening' : 'idle');
       }
-      setAvatarState(state.isSessionActive ? 'listening' : 'idle');
     }
   }
 
