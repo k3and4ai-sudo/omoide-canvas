@@ -726,6 +726,12 @@ ${levelRules}
    相手が「うん」「お願い」「描いて」「そうして」「はい」等と同意した時、あるいは相手から「絵を描いて」「キャンバスに映して」と指示された時のみ、はじめて \`generate_memory_visual\`（または \`refine_memory_visual\`）ツールを呼び出してください。
 5. 描画後の温かい声かけ：
    絵が表示されたら「${nickname}、キャンバスに絵が浮かびましたよ。こんな雰囲気でしたか？」と温かく声をかけてください。
+6. 【最重要】絵の修正・描き直し（refine_memory_visual）ルール：
+   相手が描かれた絵を見て、「もう少し〜にして」「〜を変えて」「〜を追加して」「夕焼けにして」「もっと鋭く」「〜を置いて」など、
+   修正や変更の要望を口にしたら、相手の要望をそのまま復唱して「かしこまりました！〇〇ですね、早速描き直してみますね。」と温かく答えながら、
+   直ちに \`refine_memory_visual\` ツールを呼び出してください。
+   その際、\`user_feedback\` に相手の具体的な修正希望（例：「夕焼けの空にする」「窓際に赤い花を置く」など）を、
+   \`updated_visual_elements\` に修正後の全体情景を詳しく指定してください。
 
 # 【緊急通報（SOS）の絶対ルール】
 相手が「助けて」「苦しい」「痛い」等の発言をした場合は、まず「${nickname}、大丈夫ですか？ご家族に連絡を入れましょうか？」と確認し、本人が同意した場合のみ \`trigger_emergency_alert\` を呼び出してください。`;
@@ -1119,13 +1125,21 @@ ${levelRules}
             logDiag(`AIツール呼び出し: ${funcName} (${args.japanese_title || ''})`);
 
             if (funcName === 'generate_memory_visual' || funcName === 'refine_memory_visual') {
-              logDiag(`AIツール呼び出しを受信して描画を開始します: 「${args.japanese_title || ''}」`);
+              const isRefinement = (funcName === 'refine_memory_visual');
+              const feedback = args.user_feedback || '';
+              const rawTitle = args.japanese_title || (isRefinement && feedback ? `${feedback}に修正` : '') || state.sceneCollector.topic || '思い出の情景';
+              const rawElements = args.updated_visual_elements || args.visual_elements || feedback || '';
+
+              logDiag(`AIツール呼び出し(${funcName}): 「${rawTitle}」 / 修正指示: 「${feedback}」`);
               dismissCanvasError();
 
               // 情景情報を情景メモに統合
-              if (args.japanese_title) state.sceneCollector.topic = args.japanese_title;
-              if (args.visual_elements) {
-                const parts = args.visual_elements.split(/[、,，/]/);
+              state.sceneCollector.topic = rawTitle;
+              if (feedback) {
+                state.sceneCollector.details.add(`【修正指示】${feedback}`);
+              }
+              if (rawElements) {
+                const parts = rawElements.split(/[、,，/]/);
                 parts.forEach(p => {
                   const cp = p.trim();
                   if (cp.length >= 2 && cp.length <= 15 && !cp.includes('描きたい情景') && !cp.includes('会話')) {
@@ -1138,7 +1152,13 @@ ${levelRules}
 
               // アバターを描画中にして即座に画像生成を実行！
               setAvatarState('drawing');
-              handleDirectMediaGeneration(ws, callId, funcName, args);
+              handleDirectMediaGeneration(ws, callId, funcName, {
+                ...args,
+                japanese_title: rawTitle,
+                visual_elements: rawElements,
+                user_feedback: feedback,
+                is_refinement: isRefinement
+              });
             } else if (funcName === 'trigger_emergency_alert') {
               handleDirectEmergencyAlert(ws, callId, funcName, args);
             }
@@ -1730,10 +1750,17 @@ ${levelRules}
     canvas.height = 600;
     const ctx = canvas.getContext('2d');
 
-    // 最新の描きたい情景を最優先でテーマ判定する
-    const latestMatch = (elements || '').match(/【最新の描きたい情景（最優先）】:\s*([^/]+)/);
-    const primaryTopic = (latestMatch ? latestMatch[1].trim() : (title || elements || '')).toLowerCase();
-    const combined = `${primaryTopic} ${title || ''} ${elements || ''}`;
+    // 最優先の修正指示または最新の会話内容を最優先でテーマ判定する
+    const refineMatch = (elements || '').match(/【最優先の修正指示[^】]*】:\s*([^/]+)/);
+    const latestMatch = (elements || '').match(/【最新の会話内容[^】]*】:\s*([^/]+)/);
+    const feedbackText = refineMatch ? refineMatch[1].trim() : '';
+    const primaryTopic = (feedbackText || (latestMatch ? latestMatch[1].trim() : (title || elements || ''))).toLowerCase();
+    const combined = `${feedbackText} ${primaryTopic} ${title || ''} ${elements || ''}`.toLowerCase();
+
+    const isSunset = /(夕焼け|夕暮れ|夕方|夕日|茜色|夕刻|赤く染ま|モルゲンロート|アーベントロート|秋|赤とんぼ|紅葉|もみじ)/.test(combined);
+    const isFlower = /(花|バラ|薔薇|カーネーション|ひまわり|チューリップ|花瓶|一輪挿し|赤い花)/.test(combined);
+    const isCoffee = /(コーヒー|珈琲|ブレンド|エスプレッソ|カップ)/.test(combined);
+    const isCreamSoda = /(クリームソーダ|ソーダ|メロンソーダ)/.test(combined);
 
     const isCafe = /(喫茶店|カフェ|コーヒー|珈琲|紅茶|クリームソーダ|ホットケーキ|ナポリタン|パフェ|模擬店の中|店内|テーブル|カップ|茶店|純喫茶|お茶|注文|メニュー|カウンター)/.test(primaryTopic) ||
                    (/(喫茶店|カフェ|コーヒー|珈琲|紅茶|クリームソーダ|ホットケーキ|ナポリタン|パフェ|模擬店の中|店内|テーブル|カップ|茶店|純喫茶)/.test(combined) && !/(校舎の外|学校全体|グラウンド|校門)/.test(primaryTopic));
@@ -1746,11 +1773,16 @@ ${levelRules}
     const isSea = !isMountain && /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
     const isSakura = !isMountain && /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
     const isSnow = !isMountain && /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
-    const isSunset = /(夕焼け|夕方|夕日|秋|赤とんぼ|紅葉|もみじ|祭り|花火)/.test(combined);
 
     // 1. テーマ別の水彩空・背景グラデーション
     const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    if (isMountain) {
+    if (isMountain && isSunset) {
+      // 夕日に燃える山（アーベントロート）のドラマチックな茜色・黄昏グラデーション
+      skyGrad.addColorStop(0, '#4a154b');
+      skyGrad.addColorStop(0.3, '#c84b31');
+      skyGrad.addColorStop(0.65, '#f4a261');
+      skyGrad.addColorStop(1, '#ffdda1');
+    } else if (isMountain) {
       skyGrad.addColorStop(0, '#2b6cb0');
       skyGrad.addColorStop(0.35, '#63b3ed');
       skyGrad.addColorStop(0.7, '#bee3f8');
@@ -1782,8 +1814,9 @@ ${levelRules}
       skyGrad.addColorStop(0.6, '#e2ebf0');
       skyGrad.addColorStop(1, '#f8fafc');
     } else if (isSunset) {
-      skyGrad.addColorStop(0, '#f4a261');
-      skyGrad.addColorStop(0.5, '#f6bd60');
+      skyGrad.addColorStop(0, '#e76f51');
+      skyGrad.addColorStop(0.45, '#f4a261');
+      skyGrad.addColorStop(0.75, '#e9c46a');
       skyGrad.addColorStop(1, '#84a59d');
     } else {
       skyGrad.addColorStop(0, '#f5e6d7');
@@ -1793,13 +1826,25 @@ ${levelRules}
     ctx.fillStyle = skyGrad;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 2. 太陽・月（屋外のみ）
+    // 2. 太陽・夕日（屋外のみ）
     if (!isCafe && !isClassroom) {
       ctx.save();
-      ctx.fillStyle = isSunset ? 'rgba(231, 111, 81, 0.75)' : 'rgba(255, 238, 173, 0.75)';
-      ctx.beginPath();
-      ctx.arc(650, 130, 52, 0, Math.PI * 2);
-      ctx.fill();
+      if (isSunset) {
+        // 大きく真っ赤に染まる夕日と光輪
+        ctx.fillStyle = 'rgba(235, 75, 45, 0.88)';
+        ctx.beginPath();
+        ctx.arc(680, 185, 62, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(244, 162, 97, 0.38)';
+        ctx.beginPath();
+        ctx.arc(680, 185, 96, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = 'rgba(255, 238, 173, 0.75)';
+        ctx.beginPath();
+        ctx.arc(650, 130, 52, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.restore();
     }
 
@@ -1908,6 +1953,40 @@ ${levelRules}
       ctx.beginPath();
       ctx.arc(482, 338, 6, 0, Math.PI * 2);
       ctx.fill();
+
+      // 窓際・テーブルの花瓶と赤いお花（ユーザーの修正指示「お花を置いて」に忠実に対応）
+      if (isFlower) {
+        // テーブル上の花瓶
+        ctx.fillStyle = 'rgba(230, 245, 255, 0.85)';
+        ctx.strokeStyle = '#457b9d';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(385, 415, 12, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillRect(377, 385, 16, 30);
+        ctx.strokeRect(377, 385, 16, 30);
+        // 緑の茎
+        ctx.strokeStyle = '#2d6a4f';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(385, 385);
+        ctx.lineTo(385, 352);
+        ctx.stroke();
+        // 赤いバラ・カーネーションの花
+        ctx.fillStyle = '#e63946';
+        ctx.beginPath();
+        ctx.arc(385, 348, 14, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#d90429';
+        ctx.beginPath();
+        ctx.arc(382, 345, 9, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ff758f';
+        ctx.beginPath();
+        ctx.arc(387, 344, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // 黒板メニューボード
       ctx.fillStyle = '#2d4739';
@@ -2035,8 +2114,17 @@ ${levelRules}
       ctx.fill();
     } else if (isMountain) {
       // 鋭く尖った雄大な岩山・北アルプス連峰（槍ヶ岳・穂高・剱岳のような切り立った鋭利な岩峰と険しい稜線）
-      // 1. 遠景の険しいギザギザ連峰（薄紫ブルーの鋭角シルエット）
-      ctx.fillStyle = '#5c6d82';
+      // 夕焼け（アーベントロート）と青空の動的カラーパレット
+      const distantColor = isSunset ? '#6a2c4e' : '#5c6d82';
+      const mainLeftColor = isSunset ? '#e76f51' : '#9cb3c9'; // 夕日に赤く燃える主峰
+      const mainRightColor = isSunset ? '#3a102a' : '#2c3e50'; // 深い岩陰
+      const subLeftColor = isSunset ? '#d9480f' : '#829ab1';
+      const subRightColor = isSunset ? '#29091e' : '#1a2530';
+      const snowColor = isSunset ? '#ffcad4' : '#ffffff';     // 夕照に淡いピンクに染まる雪渓
+      const forestColor = isSunset ? '#230c22' : '#1e293b';
+
+      // 1. 遠景の険しいギザギザ連峰（シルエット）
+      ctx.fillStyle = distantColor;
       ctx.beginPath();
       ctx.moveTo(0, 440);
       ctx.lineTo(60, 230);
@@ -2055,8 +2143,8 @@ ${levelRules}
       ctx.fill();
 
       // 2. 中景：切り立った鋭角な主岩峰（槍ヶ岳・剱岳のような鋭利な三角錐）
-      // 左側斜面（朝日のハイライト・明るい青灰色）
-      ctx.fillStyle = '#9cb3c9';
+      // 左側斜面（ハイライト）
+      ctx.fillStyle = mainLeftColor;
       ctx.beginPath();
       ctx.moveTo(110, 460);
       ctx.lineTo(380, 75); // 天を突く鋭い主峰の頂点！
@@ -2064,8 +2152,8 @@ ${levelRules}
       ctx.closePath();
       ctx.fill();
 
-      // 右側斜面（切り立った深い岩陰・濃紺）
-      ctx.fillStyle = '#2c3e50';
+      // 右側斜面（切り立った深い岩陰）
+      ctx.fillStyle = mainRightColor;
       ctx.beginPath();
       ctx.moveTo(380, 75);
       ctx.lineTo(600, 460);
@@ -2074,7 +2162,7 @@ ${levelRules}
       ctx.fill();
 
       // 鋭い第二岩峰（険しい針峰）
-      ctx.fillStyle = '#829ab1';
+      ctx.fillStyle = subLeftColor;
       ctx.beginPath();
       ctx.moveTo(460, 450);
       ctx.lineTo(620, 115); // 鋭い山頂
@@ -2082,7 +2170,7 @@ ${levelRules}
       ctx.closePath();
       ctx.fill();
 
-      ctx.fillStyle = '#1a2530';
+      ctx.fillStyle = subRightColor;
       ctx.beginPath();
       ctx.moveTo(620, 115);
       ctx.lineTo(760, 450);
@@ -2091,7 +2179,7 @@ ${levelRules}
       ctx.fill();
 
       // 3. 切り立った岩肌のシャープな亀裂・稜線（ドラマチックな陰影線）
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.strokeStyle = isSunset ? 'rgba(255, 220, 180, 0.55)' : 'rgba(255, 255, 255, 0.45)';
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(380, 75);
@@ -2100,7 +2188,7 @@ ${levelRules}
       ctx.lineTo(260, 460);
       ctx.stroke();
 
-      ctx.strokeStyle = 'rgba(15, 23, 42, 0.6)';
+      ctx.strokeStyle = isSunset ? 'rgba(40, 10, 30, 0.7)' : 'rgba(15, 23, 42, 0.6)';
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(380, 75);
@@ -2109,8 +2197,8 @@ ${levelRules}
       ctx.lineTo(490, 460);
       ctx.stroke();
 
-      // 4. 山頂の尖った万年雪・鋭い氷河雪渓（純白のシャープな冠雪）
-      ctx.fillStyle = '#ffffff';
+      // 4. 山頂の尖った万年雪・鋭い氷河雪渓（純白または夕照ピンクのシャープな冠雪）
+      ctx.fillStyle = snowColor;
       ctx.beginPath();
       ctx.moveTo(380, 75);
       ctx.lineTo(350, 155);
@@ -2130,18 +2218,24 @@ ${levelRules}
       ctx.closePath();
       ctx.fill();
 
-      // 5. 山腹にたなびく幻想的な雲海（白い霧）
+      // 5. 山腹にたなびく幻想的な雲海
       const cloudGrad = ctx.createLinearGradient(0, 360, 0, 450);
-      cloudGrad.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
-      cloudGrad.addColorStop(0.5, 'rgba(240, 248, 255, 0.6)');
-      cloudGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      if (isSunset) {
+        cloudGrad.addColorStop(0, 'rgba(255, 210, 170, 0.85)');
+        cloudGrad.addColorStop(0.5, 'rgba(244, 162, 97, 0.6)');
+        cloudGrad.addColorStop(1, 'rgba(244, 162, 97, 0)');
+      } else {
+        cloudGrad.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+        cloudGrad.addColorStop(0.5, 'rgba(240, 248, 255, 0.6)');
+        cloudGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      }
       ctx.fillStyle = cloudGrad;
       ctx.fillRect(0, 360, canvas.width, 90);
 
       // 6. 麓の針葉樹林（深い原生林のモミの木）
-      ctx.fillStyle = '#1e293b';
+      ctx.fillStyle = forestColor;
       ctx.fillRect(0, 445, canvas.width, 155);
-      const pineColors = ['#0d2818', '#1b4332', '#2d6a4f'];
+      const pineColors = isSunset ? ['#1e0a1b', '#2c1028', '#381632'] : ['#0d2818', '#1b4332', '#2d6a4f'];
       for (let tx = 8; tx < 796; tx += 22) {
         const th = 45 + (tx % 23) * 3;
         const ty = 436 + (tx % 13) * 2;
@@ -2221,6 +2315,8 @@ ${levelRules}
     const title = args.japanese_title || '思い出の風景';
     const elements = args.visual_elements || args.updated_visual_elements || title;
     const ambientSound = args.ambient_sound || 'autumn_insects';
+    const feedback = (args.user_feedback || '').trim();
+    const isRefinement = !!args.is_refinement || !!feedback;
     const finalPrompt = buildSafePromptJS(profile.dementia_level || 'mild', sceneType, elements);
 
     let mediaDataUrl = '';
@@ -2242,6 +2338,10 @@ ${levelRules}
               body: JSON.stringify({
                 contents: [{ parts: [{ text: `You are an expert art director. Convert the following nostalgic scene description into a highly detailed English image prompt for FLUX:
 "${elements}"
+${isRefinement && feedback ? `\nCRITICAL USER MODIFICATION / CORRECTION (TOP PRIORITY):
+The user explicitly requested to modify or correct the previous drawing: "${feedback}".
+You MUST override conflicting previous elements and make this modification the most prominent feature!
+(e.g., if requesting sunset, change entire sky to dramatic glowing red-orange sunset and reflect twilight on mountains; if adding flowers, prominently place beautiful flowers in a vase on the table).` : ''}
 Guidelines:
 - Warm, nostalgic, fine art watercolor and oil painting style, masterpiece, rich texture, beautiful natural lighting.
 - If mountains or rocks are mentioned (e.g. sharp mountain, alps), depict extremely sharp, towering, jagged rocky alpine peaks (like Mount Yari / Matterhorn) with dramatic light and shadow, crisp silhouettes, pristine snow crevices.
@@ -2309,6 +2409,10 @@ Guidelines:
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
 ${elements}
+
+${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正・変更指示（絶対厳守！）】
+ユーザーは直前の絵に対して「${feedback}」という明確な修正を求めています。
+前回の絵と矛盾する要素（例：青空から夕焼けへの変更、花の追加、特定モチーフの変更など）がある場合は、必ずこの修正指示を最優先で上書き・反映してください！夕焼けなら燃えるような茜色・黄金色の夕空と夕日に染まる情景（アーベントロート）を、花ならテーブルや窓際に美しい花瓶とお花を描いてください。` : ''}
 
 【最重要造形ルール】
 1. ユーザーがお話しした具体的なモチーフ・特徴・造形を100%忠実に描いてください。
@@ -2394,17 +2498,31 @@ ${elements}
   async function handleDirectMediaGeneration(ws, callId, funcName, args) {
     try {
       const mySeqId = ++state.drawSequenceId;
+      const isRefinement = (funcName === 'refine_memory_visual') || !!args.user_feedback;
+      const feedback = (args.user_feedback || '').trim();
       const latestUserTopic = state.sessionTopics[state.sessionTopics.length - 1] || '';
-      const rawElements = args.visual_elements || args.updated_visual_elements || args.user_feedback || args.japanese_title || latestUserTopic;
-      if (latestUserTopic) {
-        state.lastDrawnUtterance = latestUserTopic;
+      const rawElements = args.visual_elements || args.updated_visual_elements || feedback || latestUserTopic;
+
+      let combinedElements = '';
+      if (isRefinement && feedback) {
+        // 修正指示がある場合は、前回の絵に対する変更点を絶対最優先で明記！
+        combinedElements = `【最優先の修正指示（直前の絵をこの通りに変更・描き直し）】: ${feedback} / 【修正後の全体情景】: ${rawElements}`;
+        state.lastDrawnUtterance = feedback;
+      } else {
+        combinedElements = latestUserTopic
+          ? `【最新の会話内容（最優先）】: ${latestUserTopic} / 【情景描写】: ${rawElements}`
+          : rawElements;
+        if (latestUserTopic) state.lastDrawnUtterance = latestUserTopic;
       }
+
+      const finalTitle = args.japanese_title || (isRefinement && feedback ? `${feedback}に修正` : '') || latestUserTopic.slice(0, 18) || '思い出の風景';
+
       const enrichedArgs = {
         ...args,
-        japanese_title: args.japanese_title || args.user_feedback || latestUserTopic.slice(0, 18) || '思い出の風景',
-        visual_elements: latestUserTopic
-          ? `【最新の会話内容（最優先）】: ${latestUserTopic} / 【AI情景描写】: ${rawElements}`
-          : rawElements
+        japanese_title: finalTitle,
+        visual_elements: combinedElements,
+        user_feedback: feedback,
+        is_refinement: isRefinement
       };
 
       const artifact = await generateStandaloneMemoryArtifact(enrichedArgs);
