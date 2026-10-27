@@ -120,6 +120,55 @@ body {
   color: var(--text-main);
 }
 
+/* AIクォータ・利用状況モニターバッジ */
+.quota-monitor-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f0f7f3;
+  border: 1.5px solid #a3cfb8;
+  color: #1b533a;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.quota-monitor-badge:hover {
+  background: #e2f2e8;
+  transform: translateY(-1px);
+}
+
+.quota-monitor-badge.quota-warning {
+  background: #fff8e6;
+  border-color: #f3c769;
+  color: #8c5b05;
+}
+
+.quota-monitor-badge.quota-exceeded {
+  background: #fdeeee;
+  border-color: #f5a3a3;
+  color: #b91c1c;
+  animation: pulseQuota 2s infinite;
+}
+
+@keyframes pulseQuota {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.04); }
+}
+
+.quota-icon {
+  font-size: 14px;
+}
+
+.quota-text {
+  font-family: 'Noto Sans JP', sans-serif;
+  letter-spacing: 0.02em;
+}
+
 /* ==========================================================================
    メインレイアウト（ご本人用「認知負荷ゼロ」2画面構成）
    ========================================================================== */
@@ -580,6 +629,79 @@ body {
   font-size: 18px;
   color: var(--primary);
   font-weight: 500;
+}
+
+.drawing-subtext {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 6px;
+  font-family: 'Noto Sans JP', sans-serif;
+  animation: pulseCollector 1.5s infinite;
+}
+
+/* 描画エラー通知バナー */
+.canvas-error-banner {
+  position: absolute;
+  top: 16px;
+  left: 20px;
+  right: 20px;
+  background: linear-gradient(135deg, #fff2f2 0%, #fee2e2 100%);
+  border: 1.5px solid #f87171;
+  border-radius: 12px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+  z-index: 10;
+  animation: bannerSlideDown 0.3s ease-out;
+}
+
+.canvas-error-banner.hidden {
+  display: none !important;
+}
+
+.error-banner-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.error-banner-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.error-banner-title {
+  display: block;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #991b1b;
+  margin-bottom: 2px;
+}
+
+.error-banner-desc {
+  font-size: 13px;
+  color: #7f1d1d;
+  line-height: 1.4;
+  margin: 0;
+  word-break: break-all;
+}
+
+.btn-dismiss-error {
+  background: transparent;
+  border: none;
+  font-size: 16px;
+  color: #991b1b;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+
+.btn-dismiss-error:hover {
+  background: rgba(185, 28, 28, 0.1);
 }
 
 /* リアルタイム文字起こし・字幕パネル（レイアウト高さ固定で文字増減時の画面ちらつき防止） */

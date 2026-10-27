@@ -84,6 +84,8 @@
     btnToggleCaregiver: document.getElementById('btnToggleCaregiver'),
     btnOpenLoginModal: document.getElementById('btnOpenLoginModal'),
     apiKeyStatusBadge: document.getElementById('apiKeyStatusBadge'),
+    quotaMonitorBadge: document.getElementById('quotaMonitorBadge'),
+    quotaText: document.getElementById('quotaText'),
     loginModal: document.getElementById('loginModal'),
     loginApiKeyForm: document.getElementById('loginApiKeyForm'),
     inputSessionApiKey: document.getElementById('inputSessionApiKey'),
@@ -114,6 +116,12 @@
     memoryImage: document.getElementById('memoryImage'),
     memoryVideo: document.getElementById('memoryVideo'),
     drawingOverlay: document.getElementById('drawingOverlay'),
+    drawingText: document.getElementById('drawingText'),
+    drawingSubtext: document.getElementById('drawingSubtext'),
+    canvasErrorBanner: document.getElementById('canvasErrorBanner'),
+    canvasErrorTitle: document.getElementById('canvasErrorTitle'),
+    canvasErrorDesc: document.getElementById('canvasErrorDesc'),
+    btnDismissError: document.getElementById('btnDismissError'),
     captionTitle: document.getElementById('captionTitle'),
     captionTag: document.getElementById('captionTag'),
     btnDrawCurrentTopic: document.getElementById('btnDrawCurrentTopic'),
@@ -166,6 +174,125 @@
   const STORAGE_KEY_PROFILE = 'omoide_user_profile_v2';
   const STORAGE_KEY_MEMORIES = 'omoide_memories_v2';
   const STORAGE_KEY_REPORTS = 'omoide_reports_v2';
+  const STORAGE_KEY_QUOTA = 'omoide_quota_tracker_v2';
+  const DAILY_GEMINI_LIMIT = 1500; // Google AI Studio 無料枠目安 (RPD)
+
+  // ============================================================================
+  // AIクォータ・利用状況モニター ＆ 画面エラー通知システム
+  // ============================================================================
+  function getTodayKey() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function loadQuotaTracker() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_QUOTA);
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (data && data.date === getTodayKey()) {
+          return data;
+        }
+      }
+    } catch (e) {}
+    return {
+      date: getTodayKey(),
+      requestCount: 0,
+      remainingReported: null,
+      limitReported: DAILY_GEMINI_LIMIT,
+      isRateLimited: false,
+      lastStatus: 200,
+      lastErrorMsg: ''
+    };
+  }
+
+  function saveQuotaTracker(tracker) {
+    try {
+      localStorage.setItem(STORAGE_KEY_QUOTA, JSON.stringify(tracker));
+    } catch (e) {}
+  }
+
+  function recordApiCall(headers = null, status = 200, errorMsg = '') {
+    const tracker = loadQuotaTracker();
+    tracker.requestCount++;
+    tracker.lastStatus = status;
+
+    if (headers) {
+      try {
+        const rem = headers.get ? headers.get('x-ratelimit-remaining-requests') : headers['x-ratelimit-remaining-requests'];
+        const lim = headers.get ? headers.get('x-ratelimit-limit-requests') : headers['x-ratelimit-limit-requests'];
+        if (rem !== null && rem !== undefined) tracker.remainingReported = parseInt(rem, 10);
+        if (lim !== null && lim !== undefined) tracker.limitReported = parseInt(lim, 10);
+      } catch (e) {}
+    }
+
+    if (status === 429) {
+      tracker.isRateLimited = true;
+      tracker.lastErrorMsg = '429 Quota Exceeded (本日上限)';
+    } else if (status >= 400) {
+      tracker.lastErrorMsg = errorMsg || `HTTP ${status}`;
+    }
+
+    saveQuotaTracker(tracker);
+    renderQuotaUI();
+  }
+
+  function renderQuotaUI() {
+    if (!dom.quotaText || !dom.quotaMonitorBadge) return;
+    const tracker = loadQuotaTracker();
+
+    if (tracker.isRateLimited) {
+      dom.quotaMonitorBadge.className = 'quota-monitor-badge quota-exceeded';
+      dom.quotaText.textContent = `⚠️ クォータ上限到達 (本日 ${tracker.requestCount}回)`;
+      dom.quotaMonitorBadge.title = 'Google AI Studio の本日分無料枠クォータ上限に達しました。ローカル水彩画エンジンで動作中（明日未明にリセット）';
+    } else {
+      const limit = tracker.limitReported || DAILY_GEMINI_LIMIT;
+      const remaining = tracker.remainingReported !== null
+        ? tracker.remainingReported
+        : Math.max(0, limit - tracker.requestCount);
+      const percent = Math.max(0, Math.min(100, Math.round((remaining / limit) * 100)));
+
+      if (percent <= 15) {
+        dom.quotaMonitorBadge.className = 'quota-monitor-badge quota-warning';
+      } else {
+        dom.quotaMonitorBadge.className = 'quota-monitor-badge';
+      }
+      dom.quotaText.textContent = `AI残量: ${percent}% (本日 ${tracker.requestCount}/${limit}回)`;
+      dom.quotaMonitorBadge.title = `本日のAI呼び出し回数: ${tracker.requestCount}回 / 目安上限: ${limit}回 (残り約 ${remaining}回)\nクリックで詳細を表示します`;
+    }
+  }
+
+  function showCanvasError(title, message, isWarning = false) {
+    if (!dom.canvasErrorBanner) return;
+    if (dom.canvasErrorTitle) dom.canvasErrorTitle.textContent = title;
+    if (dom.canvasErrorDesc) dom.canvasErrorDesc.textContent = message;
+    dom.canvasErrorBanner.classList.remove('hidden');
+    dom.canvasErrorBanner.style.borderColor = isWarning ? '#f59e0b' : '#ef4444';
+    logDiag(`[画面エラー通知] ${title}: ${message}`);
+  }
+
+  function dismissCanvasError() {
+    if (!dom.canvasErrorBanner) return;
+    dom.canvasErrorBanner.classList.add('hidden');
+  }
+
+  function showQuotaDetailsModal() {
+    const tracker = loadQuotaTracker();
+    const limit = tracker.limitReported || DAILY_GEMINI_LIMIT;
+    const remaining = tracker.remainingReported !== null
+      ? tracker.remainingReported
+      : Math.max(0, limit - tracker.requestCount);
+    const msg = [
+      '【📊 AIクォータ・利用状況モニター】',
+      `・日付: ${tracker.date}`,
+      `・本日の生成リクエスト回数: ${tracker.requestCount} 回`,
+      `・クォータ目安上限: ${limit} 回 / 日 (Google AI Studio 無料枠)`,
+      `・推計残りリクエスト: 約 ${remaining} 回`,
+      `・最新ステータス: ${tracker.isRateLimited ? '⚠️ 429 レート制限中 (ローカル水彩画に自動切替)' : '✅ 正常稼働中'}`,
+      tracker.lastErrorMsg ? `・最新のエラー: ${tracker.lastErrorMsg}` : '',
+      '\n※万が一クォータ上限（429）に達した場合でも、端末内のローカル高精細水彩画エンジンが自動で即座に代行描画します。'
+    ].filter(Boolean).join('\n');
+    alert(msg);
+  }
 
   const DEFAULT_USER_PROFILE = {
     user_id: 'default_user',
@@ -219,6 +346,7 @@
     setupEventListeners();
     initLoginModalState();
     resetSceneCollector();
+    renderQuotaUI();
     await detectBackendAvailability();
     await fetchUserProfile();
     drawFlatOscilloscope(); // 初期オシロスコープ波形（水平線）描画
@@ -468,6 +596,10 @@
       state.sceneCollector.status = 'collecting';
       renderSceneCollectorUI();
     });
+
+    // エラーバナー閉じる ＆ クォータ詳細モニター
+    dom.btnDismissError?.addEventListener('click', dismissCanvasError);
+    dom.quotaMonitorBadge?.addEventListener('click', showQuotaDetailsModal);
   }
 
   function setNoiseGateMode(mode) {
@@ -2124,11 +2256,11 @@ ${levelRules}
     const apiKey = (state.sessionApiKey || '').trim();
 
     if (apiKey) {
-      // Step 0: FLUX / Pollinations 超高精細AI画像生成（Nano Banana 級の圧倒的な描写力・自由度）
-      // (完全無料・制限なし。会話の微妙なニュアンスや鋭い山・質感・光と影を最高峰クオリティで描画)
+      // Step 0: FLUX / Pollinations 超高精細AI画像生成（Nano Banana 級の描写力）
       try {
+        if (dom.drawingSubtext) dom.drawingSubtext.textContent = '1/3: AI画像生成エンジンに問い合わせ中...';
         logDiag('FLUX 超高精細画像生成エンジンを呼び出し中...');
-        // Gemini 2.5 Flash に最適な英語プロンプトを瞬時生成させる（0.8秒）
+
         let fluxPrompt = '';
         try {
           const transRes = await fetch(
@@ -2149,11 +2281,20 @@ Guidelines:
               })
             }
           );
+          recordApiCall(transRes.headers, transRes.status);
           if (transRes.ok) {
             const transData = await transRes.json();
             fluxPrompt = (transData?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+          } else {
+            if (transRes.status === 429) {
+              showCanvasError('Google AI Studio クォータ上限 (429 Too Many Requests)', '無料枠の利用上限に達しました。ローカル水彩画エンジンで即座に描画します。', true);
+            } else if (transRes.status === 400 || transRes.status === 403) {
+              showCanvasError(`Gemini API エラー (${transRes.status})`, 'APIキーが無効または制限されています。画面右上のキー設定をご確認ください。');
+            }
           }
-        } catch (tErr) {}
+        } catch (tErr) {
+          console.warn('Prompt translation error:', tErr);
+        }
 
         if (!fluxPrompt) {
           fluxPrompt = `Warm nostalgic watercolor fine art, ${elements}, extremely detailed, dramatic lighting`;
@@ -2162,18 +2303,19 @@ Guidelines:
         const seed = Math.floor(Math.random() * 999999);
         const fluxUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fluxPrompt)}?width=1024&height=768&model=flux&nologo=true&seed=${seed}`;
 
-        // 画像のロード完了を最大2.5秒待機（FLUXが混雑・402レートリミット時は即座にSVG/Canvasへフォールバック）
+        // 画像のロード完了を最大2.5秒待機
         if (!state.pollinationsBlocked) {
           const imgLoaded = await new Promise((resolve) => {
             const testImg = new Image();
             const timer = setTimeout(() => {
-              state.pollinationsBlocked = true; // 混雑または402制限時は次回以降待機せず即時描画
+              state.pollinationsBlocked = true;
               resolve(false);
             }, 2500);
             testImg.onload = () => { clearTimeout(timer); resolve(true); };
             testImg.onerror = () => {
               clearTimeout(timer);
               state.pollinationsBlocked = true;
+              showCanvasError('外部画像生成 (FLUX) 混雑', '外部サーバーの混雑または利用制限を検知しました。ローカル水彩画エンジンで描画します。', true);
               resolve(false);
             };
             testImg.src = fluxUrl;
@@ -2189,8 +2331,10 @@ Guidelines:
       }
 
       // Step 1: Gemini 2.5 Flash によるオーダーメイドSVG水彩画生成（フォールバック）
-      try {
-        const svgPrompt = `あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
+      if (!mediaDataUrl) {
+        try {
+          if (dom.drawingSubtext) dom.drawingSubtext.textContent = '2/3: Gemini 2.5 Flash SVG描画を試行中...';
+          const svgPrompt = `あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
 ${elements}
@@ -2204,34 +2348,44 @@ ${elements}
 3. 人物のリアルな顔は描かず、後ろ姿や遠景、あるいは情景・静物を美しく描いてください。
 4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
 
-        const resSvg = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: svgPrompt }] }],
-              generationConfig: { temperature: 0.4, maxOutputTokens: 2500 }
-            })
+          const resSvg = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: svgPrompt }] }],
+                generationConfig: { temperature: 0.4, maxOutputTokens: 2500 }
+              })
+            }
+          );
+          recordApiCall(resSvg.headers, resSvg.status);
+          if (resSvg.ok) {
+            const dataSvg = await resSvg.json();
+            const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            const svgMatch = rawText.match(/<svg[\s\S]*?<\/svg>/i);
+            if (svgMatch && svgMatch[0]) {
+              const cleanSvg = svgMatch[0];
+              mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
+              logDiag('Gemini 2.5 Flash によるオーダーメイド水彩画(SVG)の描画に成功しました！');
+            }
+          } else {
+            if (resSvg.status === 429) {
+              showCanvasError('Google AI Studio クォータ上限 (429 Too Many Requests)', '無料枠の利用上限（1500回/日または15回/分）に達しました。ローカル水彩画エンジンで描画します。', true);
+            } else if (resSvg.status === 400 || resSvg.status === 403) {
+              showCanvasError(`Gemini API エラー (${resSvg.status})`, 'APIキーが無効または制限されています。画面右上のキー設定をご確認ください。');
+            }
           }
-        );
-        if (resSvg.ok) {
-          const dataSvg = await resSvg.json();
-          const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          const svgMatch = rawText.match(/<svg[\s\S]*?<\/svg>/i);
-          if (svgMatch && svgMatch[0]) {
-            const cleanSvg = svgMatch[0];
-            mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
-            logDiag('Gemini 2.5 Flash によるオーダーメイド水彩画(SVG)の描画に成功しました！');
-          }
+        } catch (svgErr) {
+          console.warn('Gemini SVG generation warning:', svgErr);
         }
-      } catch (svgErr) {
-        console.warn('Gemini SVG generation warning:', svgErr);
       }
     }
 
-    // Step 3: テーマ別水彩画キャンバス描画フォールバック
+    // Step 3: テーマ別水彩画キャンバス描画フォールバック（外部APIエラー・クォータ制限時も100%確実に絵を出す！）
     if (!mediaDataUrl) {
+      if (dom.drawingSubtext) dom.drawingSubtext.textContent = '3/3: 高精細ローカル水彩画エンジンで描画中...';
+      logDiag('ローカル水彩画エンジンでフォールバック描画を実行します。');
       mediaDataUrl = await renderFallbackWatercolorDataUrl(title, elements);
     }
 
@@ -2516,7 +2670,7 @@ ${elements}
   function setAvatarState(avatarState) {
     if (avatarState === 'drawing') {
       state.isDrawingMedia = true;
-    } else if (avatarState === 'idle') {
+    } else {
       state.isDrawingMedia = false;
     }
 
@@ -2531,19 +2685,19 @@ ${elements}
     switch (avatarState) {
       case 'idle':
         nextLabel = `${pName}：準備完了`;
-        dom.drawingOverlay.classList.add('hidden');
+        dom.drawingOverlay?.classList.add('hidden');
         break;
       case 'listening':
         nextLabel = `${pName}：お話を聞いています...`;
-        if (!state.isDrawingMedia) dom.drawingOverlay.classList.add('hidden');
+        dom.drawingOverlay?.classList.add('hidden');
         break;
       case 'speaking':
         nextLabel = `${pName}：お話し中...`;
-        if (!state.isDrawingMedia) dom.drawingOverlay.classList.add('hidden');
+        dom.drawingOverlay?.classList.add('hidden');
         break;
       case 'drawing':
         nextLabel = `${pName}：絵を描いています...`;
-        dom.drawingOverlay.classList.remove('hidden');
+        dom.drawingOverlay?.classList.remove('hidden');
         break;
     }
 
@@ -3049,14 +3203,18 @@ ${elements}
   }
 
   async function executeConfirmedDrawing(manualTopic = '') {
-    if (state.isDrawingMedia) return;
+    // ユーザーからの直接指示・承諾時はビジーロックを解除して即時実行
+    state.isDrawingMedia = false;
+    dismissCanvasError();
 
     const sc = state.sceneCollector;
-    const topic = manualTopic || sc.topic || sc.place || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '思い出の風景');
+    const pArgs = sc.pendingArgs?.args;
+    const topic = manualTopic || pArgs?.japanese_title || sc.topic || sc.place || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '思い出の風景');
 
     // 収集された情景情報を総合して高精細プロンプトを作成
     const detailsArray = Array.from(sc.details);
     const elementsParts = [];
+    if (pArgs?.visual_elements) elementsParts.push(`【AI情景描写】: ${pArgs.visual_elements}`);
     if (sc.place) elementsParts.push(`【場所・舞台】: ${sc.place}`);
     if (sc.seasonWeather) elementsParts.push(`【季節・天候・時間】: ${sc.seasonWeather}`);
     if (detailsArray.length > 0) elementsParts.push(`【情景ディテール】: ${detailsArray.join('、')}`);
@@ -3066,6 +3224,7 @@ ${elements}
 
     sc.status = 'drawing';
     sc.isAwaitingConfirmation = false;
+    sc.pendingArgs = null;
     renderSceneCollectorUI();
 
     logDiag(`合意形成・確定によりキャンバス描画を実行します: 「${topic}」`);
@@ -3114,7 +3273,21 @@ ${elements}
       }
     } catch (e) {
       console.error('triggerSceneDrawingForTopic error:', e);
+      showCanvasError('描画処理エラー', '画像の描画中にエラーが発生しました。ローカル水彩画エンジンで復旧します。', true);
+      try {
+        const fallbackUrl = await renderFallbackWatercolorDataUrl(shortTitle, combinedElements);
+        displayGeneratedMedia({
+          title: shortTitle,
+          media_format: 'image',
+          media_url: fallbackUrl,
+          ambient_sound: 'none'
+        });
+      } catch (fbErr) {
+        console.error('Fallback render error:', fbErr);
+      }
     } finally {
+      state.isDrawingMedia = false;
+      dom.drawingOverlay?.classList.add('hidden');
       if (mySeqId === state.drawSequenceId) {
         if (dom.btnDrawCurrentTopic) {
           dom.btnDrawCurrentTopic.disabled = false;

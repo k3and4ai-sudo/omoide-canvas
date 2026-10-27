@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261027_20">
+  <link rel="stylesheet" href="styles.css?v=20261027_21">
 </head>
 <body>
 
@@ -20,10 +20,15 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="描画確認ガード・情景メモ収集適用済み">v20261027_20</span>
+      <span class="app-version-badge" title="描画確認ガード・クォータモニター適用済み">v20261027_21</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
+      <!-- AIクォータ・利用状況モニター -->
+      <div class="quota-monitor-badge" id="quotaMonitorBadge" title="Gemini AI クォータ・利用状況モニター（クリックで詳細表示）">
+        <span class="quota-icon">📊</span>
+        <span class="quota-text" id="quotaText">AI残量: 100% (本日 0/1500回)</span>
+      </div>
       <a href="Omoide_Canvas_User_Manual.pdf" target="_blank" rel="noopener noreferrer" class="btn-subtle" title="おもいでキャンバス 取扱説明書（PDF）を開く" style="text-decoration: none;">
         📘 取扱説明書
       </a>
@@ -171,10 +176,21 @@
           <!-- 動画メディア（シネマグラフ表示） -->
           <video id="memoryVideo" class="memory-visual hidden" autoplay loop muted playsinline></video>
 
-          <!-- 描画中ローディング演出（水彩がにじむエフェクト） -->
+          <!-- エラー通知バナー（API制限・クォータ上限・通信エラーをわかりやすく表示） -->
+          <div id="canvasErrorBanner" class="canvas-error-banner hidden" role="alert">
+            <span class="error-banner-icon">⚠️</span>
+            <div class="error-banner-content">
+              <strong class="error-banner-title" id="canvasErrorTitle">描画AIエラー</strong>
+              <p class="error-banner-desc" id="canvasErrorDesc">エラーが発生しました</p>
+            </div>
+            <button type="button" class="btn-dismiss-error" id="btnDismissError" title="閉じる">✕</button>
+          </div>
+
+          <!-- 描画中ローディング演出（水彩がにじむエフェクト ＆ 進行ステップ表示） -->
           <div id="drawingOverlay" class="drawing-overlay hidden">
             <div class="watercolor-spinner"></div>
-            <p class="drawing-text">絵の具をといて、情景を描いています...</p>
+            <p class="drawing-text" id="drawingText">絵の具をといて、情景を描いています...</p>
+            <p class="drawing-subtext" id="drawingSubtext">AI画像生成エンジンに接続中...</p>
           </div>
         </div>
 
@@ -546,6 +562,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261027_20"></script>
+  <script src="app.js?v=20261027_21"></script>
 </body>
 </html>
