@@ -1558,15 +1558,24 @@ ${levelRules}
     const isCafe = /(喫茶店|カフェ|コーヒー|珈琲|紅茶|クリームソーダ|ホットケーキ|ナポリタン|パフェ|模擬店の中|店内|テーブル|カップ|茶店|純喫茶|お茶|注文|メニュー|カウンター)/.test(primaryTopic) ||
                    (/(喫茶店|カフェ|コーヒー|珈琲|紅茶|クリームソーダ|ホットケーキ|ナポリタン|パフェ|模擬店の中|店内|テーブル|カップ|茶店|純喫茶)/.test(combined) && !/(校舎の外|学校全体|グラウンド|校門)/.test(primaryTopic));
     const isClassroom = !isCafe && (/(教室の中|教室|黒板|机|教壇|授業|窓際)/.test(primaryTopic) || /(教室の中|黒板|教壇)/.test(combined));
-    const isSchool = !isCafe && !isClassroom && /(高校|文化祭|学園祭|学校|校舎|中学|小学校|先生|生徒|部活|運動会|体育祭|青春|合唱|バンド|模擬店)/.test(combined);
-    const isSea = /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
-    const isSakura = /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
-    const isSnow = /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
+    const isMountain = !isCafe && !isClassroom && (
+      /(山|アルプス|連峰|峰|岳|頂|鋭い|尖|険しい|登山|岩山|富士山|北アルプス|南アルプス|八ヶ岳|岩峰|稜線)/.test(primaryTopic) ||
+      (/(山|アルプス|連峰|峰|岳|頂|鋭い|尖|険しい|登山|岩山|富士山|岩峰|稜線)/.test(combined) && !/(校舎|学校|教室|喫茶店|カフェ|海)/.test(combined))
+    );
+    const isSchool = !isCafe && !isClassroom && !isMountain && /(高校|文化祭|学園祭|学校|校舎|中学|小学校|先生|生徒|部活|運動会|体育祭|青春|合唱|バンド|模擬店)/.test(combined);
+    const isSea = !isMountain && /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
+    const isSakura = !isMountain && /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
+    const isSnow = !isMountain && /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
     const isSunset = /(夕焼け|夕方|夕日|秋|赤とんぼ|紅葉|もみじ|祭り|花火)/.test(combined);
 
     // 1. テーマ別の水彩空・背景グラデーション
     const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    if (isCafe) {
+    if (isMountain) {
+      skyGrad.addColorStop(0, '#2b6cb0');
+      skyGrad.addColorStop(0.35, '#63b3ed');
+      skyGrad.addColorStop(0.7, '#bee3f8');
+      skyGrad.addColorStop(1, '#ebf8ff');
+    } else if (isCafe) {
       skyGrad.addColorStop(0, '#f3e5d8');
       skyGrad.addColorStop(0.65, '#e6ccb2');
       skyGrad.addColorStop(1, '#ddb892');
@@ -1844,6 +1853,97 @@ ${levelRules}
       ctx.lineTo(295, 310);
       ctx.closePath();
       ctx.fill();
+    } else if (isMountain) {
+      // 鋭く尖った雄大な岩山・北アルプス連峰（槍ヶ岳・穂高のような鋭利な岩峰・三角錐と険しい稜線）
+      // 1. 遠景の険しいギザギザ連峰（薄紫ブルー）
+      ctx.fillStyle = '#65778e';
+      ctx.beginPath();
+      ctx.moveTo(0, 440);
+      ctx.lineTo(70, 240);
+      ctx.lineTo(130, 290);
+      ctx.lineTo(220, 180);
+      ctx.lineTo(290, 250);
+      ctx.lineTo(400, 100); // 鋭い山頂
+      ctx.lineTo(490, 210);
+      ctx.lineTo(590, 130);
+      ctx.lineTo(670, 230);
+      ctx.lineTo(750, 160);
+      ctx.lineTo(800, 220);
+      ctx.lineTo(800, 480);
+      ctx.lineTo(0, 480);
+      ctx.closePath();
+      ctx.fill();
+
+      // 2. 中景：鋭角に尖った主峰（左：日向の岩肌、右：険しい影）
+      ctx.fillStyle = '#94a3b8';
+      ctx.beginPath();
+      ctx.moveTo(140, 460);
+      ctx.lineTo(390, 95); // 鋭く天を突く頂点！
+      ctx.lineTo(390, 460);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = '#334155';
+      ctx.beginPath();
+      ctx.moveTo(390, 95);
+      ctx.lineTo(610, 460);
+      ctx.lineTo(390, 460);
+      ctx.closePath();
+      ctx.fill();
+
+      // 鋭い第二岩峰
+      ctx.fillStyle = '#7c8ba1';
+      ctx.beginPath();
+      ctx.moveTo(480, 450);
+      ctx.lineTo(630, 140);
+      ctx.lineTo(630, 450);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = '#1e293b';
+      ctx.beginPath();
+      ctx.moveTo(630, 140);
+      ctx.lineTo(770, 450);
+      ctx.lineTo(630, 450);
+      ctx.closePath();
+      ctx.fill();
+
+      // 3. 山頂の尖った万年雪・鋭い雪渓
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(390, 95);
+      ctx.lineTo(365, 170);
+      ctx.lineTo(380, 155);
+      ctx.lineTo(390, 185);
+      ctx.lineTo(405, 160);
+      ctx.lineTo(420, 175);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(630, 140);
+      ctx.lineTo(610, 195);
+      ctx.lineTo(625, 185);
+      ctx.lineTo(630, 210);
+      ctx.lineTo(645, 190);
+      ctx.closePath();
+      ctx.fill();
+
+      // 4. 麓の針葉樹林（深い緑のモミの木）
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(0, 445, canvas.width, 155);
+      const pineColors = ['#0f3d2e', '#1e4d3a', '#2d6a4f'];
+      for (let tx = 10; tx < 795; tx += 26) {
+        const th = 42 + (tx % 19) * 3;
+        const ty = 438 + (tx % 13) * 2;
+        ctx.fillStyle = pineColors[tx % pineColors.length];
+        ctx.beginPath();
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(tx - 13, ty + th);
+        ctx.lineTo(tx + 13, ty + th);
+        ctx.closePath();
+        ctx.fill();
+      }
     } else {
       ctx.fillStyle = isSnow ? '#b8c9d9' : isSakura ? '#95b8a6' : '#81b29a';
       ctx.beginPath();
@@ -1921,16 +2021,19 @@ ${levelRules}
       // Step 1: Gemini 2.5 Flash によるオーダーメイドSVG水彩画生成（最優先・高速1.5秒）
       // (全APIキーで100%確実に利用可能。ユーザーの会話内容・修正希望通りの情景や小物を忠実に描画)
       try {
-        const svgPrompt = `あなたは優しい絵本・水彩画の画家です。高齢者・回想法ケアのため、ユーザーが語った思い出や情景に合わせて、温かい水彩画風のSVGイラスト（幅800、高さ600）を描いてください。
-描く情景・会話内容：
+        const svgPrompt = `あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
+
+【描く情景・ユーザーの言葉（最優先遵守）】:
 ${elements}
 
-【要件】
-1. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。
-2. 昭和レトロ・温かみのあるパステル調の水彩グラデーション（<linearGradient>, <radialGradient>）や柔らかな色合いを使用してください。
-3. 会話で言及された具体的な情景（例：文化祭の喫茶店、木目のカウンター、丸テーブル、クリームソーダ、コーヒー、窓の外の光や木々、黒板の手書きメニューなど）を具体的に配置して描いてください。
-4. 人物の顔は描かず、後ろ姿か遠景のシルエット、あるいは温かい情景・静物を中心に描いてください。
-5. 余計な説明文やコードブロック（\`\`\`xml や \`\`\`svg など）は含めず、純粋な <svg>...</svg> のみを出力してください。`;
+【最重要造形ルール】
+1. ユーザーがお話しした具体的なモチーフ・特徴・造形を100%忠実に描いてください。
+   - 山について語られている場合（「山が鋭い」「尖った山」「北アルプス」「岩山」「連峰」など）：なだらかな丸い丘に絶対せず、必ず鋭角な三角形・ギザギザの険しい岩峰・切り立った山頂・陰影・雪渓をシャープなポリゴンやパス（<polygon>, <path>）でダイナミックに描いてください！
+   - 喫茶店や店内について語られている場合：木目テーブル、コーヒー、クリームソーダ、ペンダントライト、窓などを描いてください。
+   - 学校や教室、海、季節など、会話に出てきた情景を主役として具体的に配置してください。
+2. 背景には美しいグラデーション（<linearGradient>, <radialGradient>）を使い、温かく情緒的な水彩画の雰囲気にしてください。
+3. 人物のリアルな顔は描かず、後ろ姿や遠景、あるいは情景・静物を美しく描いてください。
+4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
 
         const resSvg = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,

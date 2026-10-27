@@ -101,16 +101,40 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
     cafe_keywords = ["喫茶店", "カフェ", "コーヒー", "珈琲", "紅茶", "クリームソーダ", "ホットケーキ", "ナポリタン", "パフェ", "模擬店の中", "店内", "テーブル", "カップ", "茶店", "純喫茶", "お茶", "注文", "メニュー", "カウンター"]
     is_cafe = any(k in primary_topic for k in cafe_keywords) or (any(k in combined for k in cafe_keywords) and not any(k in primary_topic for k in ["校舎の外", "学校全体", "グラウンド", "校門"]))
     is_classroom = (not is_cafe) and (any(k in primary_topic for k in ["教室の中", "教室", "黒板", "机", "教壇", "授業", "窓際"]) or any(k in combined for k in ["教室の中", "黒板", "教壇"]))
-    is_school = (not is_cafe and not is_classroom) and any(k in combined for k in ["高校", "文化祭", "学園祭", "学校", "校舎", "中学", "小学校", "先生", "生徒", "部活", "運動会", "体育祭", "青春", "合唱", "模擬店"])
-    is_sea = any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
-    is_sakura = any(k in combined for k in ["桜", "春", "花", "菜の花", "入学", "卒業", "ピンク", "花見", "公園", "庭"])
-    is_snow = any(k in combined for k in ["雪", "冬", "スキー", "こたつ", "正月", "北国", "白", "氷", "北海道", "新潟"])
+    is_mountain = (not is_cafe and not is_classroom) and (
+        any(k in primary_topic for k in ["山", "アルプス", "連峰", "峰", "岳", "頂", "鋭い", "尖", "険しい", "登山", "岩山", "富士山", "北アルプス", "南アルプス", "八ヶ岳", "岩峰", "稜線"]) or
+        (any(k in combined for k in ["山", "アルプス", "連峰", "峰", "岳", "頂", "鋭い", "尖", "険しい", "登山", "岩山", "富士山", "岩峰", "稜線"]) and not any(k in combined for k in ["校舎", "学校", "教室", "喫茶店", "カフェ", "海"]))
+    )
+    is_school = (not is_cafe and not is_classroom and not is_mountain) and any(k in combined for k in ["高校", "文化祭", "学園祭", "学校", "校舎", "中学", "小学校", "先生", "生徒", "部活", "運動会", "体育祭", "青春", "合唱", "模擬店"])
+    is_sea = (not is_mountain) and any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
+    is_sakura = (not is_mountain) and any(k in combined for k in ["桜", "春", "花", "菜の花", "入学", "卒業", "ピンク", "花見", "公園", "庭"])
+    is_snow = (not is_mountain) and any(k in combined for k in ["雪", "冬", "スキー", "こたつ", "正月", "北国", "白", "氷", "北海道", "新潟"])
     is_sunset = any(k in combined for k in ["夕焼け", "夕方", "夕日", "秋", "赤とんぼ", "紅葉", "もみじ", "祭り", "花火"])
 
     base_image = Image.new("RGB", (width, height), color=(253, 248, 242))
     draw = ImageDraw.Draw(base_image)
 
-    if is_cafe:
+    if is_mountain:
+        # 高山の青空
+        draw.rectangle([0, 0, width, height], fill=(190, 227, 248))
+        # 遠景の険しい連峰
+        draw.polygon([(0, 560), (90, 310), (170, 370), (280, 230), (370, 320), (512, 130), (630, 270), (760, 170), (860, 300), (960, 210), (1024, 280), (1024, 620), (0, 620)], fill=(101, 119, 142))
+        # 中景の鋭利な主峰（左：日向、右：険しい影）
+        draw.polygon([(180, 590), (500, 120), (500, 590)], fill=(148, 163, 184))
+        draw.polygon([(500, 120), (780, 590), (500, 590)], fill=(51, 65, 85))
+        # 鋭い第二峰
+        draw.polygon([(610, 580), (810, 180), (810, 580)], fill=(124, 139, 161))
+        draw.polygon([(810, 180), (990, 580), (810, 580)], fill=(30, 41, 59))
+        # 山頂の尖った雪渓
+        draw.polygon([(500, 120), (470, 220), (490, 200), (500, 240), (520, 210), (540, 230)], fill=(255, 255, 255))
+        draw.polygon([(810, 180), (785, 250), (800, 235), (810, 270), (830, 245)], fill=(255, 255, 255))
+        # 麓の針葉樹林
+        draw.rectangle([0, 570, width, height], fill=(30, 41, 59))
+        for tx in range(15, 1010, 34):
+            th = 55 + (tx % 19) * 4
+            ty = 560 + (tx % 13) * 2
+            draw.polygon([(tx, ty), (tx - 16, ty + th), (tx + 16, ty + th)], fill=(45, 106, 79))
+    elif is_cafe:
         draw.rectangle([0, 0, width, 460], fill=(243, 229, 216))
         draw.rectangle([0, 460, width, height], fill=(176, 137, 104))
         # アーチ窓
@@ -268,16 +292,19 @@ async def generate_memory_visual_artifact(
         # (Imagen 3 クォータ制限時や無料枠でも、ユーザーの会話内容通りの情景を100%動的に描画する)
         if not image_generated:
             try:
-                svg_prompt = f"""あなたは優しい絵本・水彩画の画家です。高齢者・回想法ケアのため、ユーザーが語った思い出や情景に合わせて、温かい水彩画風のSVGイラスト（幅800、高さ600）を描いてください。
-描く情景・会話内容：
+                svg_prompt = f"""あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
+
+【描く情景・ユーザーの言葉（最優先遵守）】:
 {visual_elements}
 
-【要件】
-1. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。
-2. 昭和レトロ・温かみのあるパステル調の水彩グラデーション（<linearGradient>, <radialGradient>）や柔らかな色合いを使用してください。
-3. 会話で言及された具体的な情景（例：高校の文化祭の喫茶店、木目のカウンター、丸テーブル、クリームソーダ、コーヒー、窓の外の光や木々、黒板の手書きメニューなど）を具体的に配置して描いてください。
-4. 人物の顔は描かず、後ろ姿か遠景のシルエット、あるいは温かい情景・静物を中心に描いてください。
-5. 余計な説明文やコードブロック（```xml や ```svg など）は含めず、純粋な <svg>...</svg> のみを出力してください。"""
+【最重要造形ルール】
+1. ユーザーがお話しした具体的なモチーフ・特徴・造形を100%忠実に描いてください。
+   - 山について語られている場合（「山が鋭い」「尖った山」「北アルプス」「岩山」「連峰」など）：なだらかな丸い丘に絶対せず、必ず鋭角な三角形・ギザギザの険しい岩峰・切り立った山頂・陰影・雪渓をシャープなポリゴンやパス（<polygon>, <path>）でダイナミックに描いてください！
+   - 喫茶店や店内について語られている場合：木目テーブル、コーヒー、クリームソーダ、ペンダントライト、窓などを描いてください。
+   - 学校や教室、海、季節など、会話に出てきた情景を主役として具体的に配置してください。
+2. 背景には美しいグラデーション（<linearGradient>, <radialGradient>）を使い、温かく情緒的な水彩画の雰囲気にしてください。
+3. 人物のリアルな顔は描かず、後ろ姿や遠景、あるいは情景・静物を美しく描いてください。
+4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（```xml 等）は一切含めないでください。"""
 
                 svg_res = client.models.generate_content(
                     model="gemini-2.5-flash",
