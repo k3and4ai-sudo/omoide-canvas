@@ -379,26 +379,34 @@ class LiveSessionManager:
                             call_id = call.id
                             logger.info(f"Tool call received: {func_name} with args: {args}")
 
-                            if func_name == "generate_memory_visual":
-                                # アバターをお絵描き中に変更
-                                await self.websocket.send_json({
-                                    "type": "avatar_state",
-                                    "state": "drawing"
-                                })
+                            if func_name in ("generate_memory_visual", "refine_memory_visual"):
+                                title = args.get("japanese_title", "思い出の風景")
+                                elements = args.get("visual_elements", "")
+                                logger.info(f"AI tool call: {func_name} for '{title}'. Verifying confirmation guard...")
 
-                                # 会話を止めないようバックグラウンドで画像生成を実行
-                                asyncio.create_task(
-                                    self._handle_media_generation(session, call_id, args)
+                                # Gemini側へは直ちに情景記憶完了を返送（会話を継続させ、AIに確認を促す）
+                                await session.send(
+                                    input=types.LiveClientRealtimeToolResponse(
+                                        function_responses=[
+                                            types.FunctionResponse(
+                                                id=call_id,
+                                                name=func_name,
+                                                response={
+                                                    "status": "scene_recorded_awaiting_approval",
+                                                    "title": title,
+                                                    "message": "情景情報を記憶しました。ご本人に「キャンバスに描いてみましょうか？」と尋ねて確認してください。"
+                                                }
+                                            )
+                                        ]
+                                    )
                                 )
 
-                            elif func_name == "refine_memory_visual":
+                                # クライアントに確認待ちイベントを通知（画面上に確認バナーと情景メモを表示）
                                 await self.websocket.send_json({
-                                    "type": "avatar_state",
-                                    "state": "drawing"
+                                    "type": "scene_ready_for_confirmation",
+                                    "title": title,
+                                    "visual_elements": elements
                                 })
-                                asyncio.create_task(
-                                    self._handle_media_refinement(session, call_id, args)
-                                )
 
                             elif func_name == "trigger_emergency_alert":
                                 asyncio.create_task(
