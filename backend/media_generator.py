@@ -288,6 +288,37 @@ async def generate_memory_visual_artifact(
             except Exception as nb_err:
                 logger.warning(f"Nano Banana ({nb_model}) skipped: {nb_err}")
 
+        # 2. FLUX / Pollinations 超高精細画像生成（無料・Nano Banana級の圧倒的描写力）を試行
+        if not image_generated:
+            try:
+                import urllib.request
+                import urllib.parse
+                import random
+                flux_prompt = f"Warm nostalgic watercolor fine art, {visual_elements}, extremely detailed, dramatic lighting"
+                try:
+                    p_res = client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=f'Convert into detailed English image prompt for FLUX: "{visual_elements}". If mountain is mentioned, depict extremely sharp, towering, jagged rocky alpine peaks with dramatic light and shadow. Output prompt only.'
+                    )
+                    if p_res and p_res.text:
+                        flux_prompt = p_res.text.strip().replace('"', '')
+                except Exception:
+                    pass
+
+                seed = random.randint(1000, 999999)
+                url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(flux_prompt)}?width=1024&height=768&model=flux&nologo=true&seed={seed}"
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=9) as resp:
+                    if resp.status == 200:
+                        img_bytes = resp.read()
+                        if len(img_bytes) > 5000:
+                            with open(file_path, "wb") as f:
+                                f.write(img_bytes)
+                            image_generated = True
+                            logger.info(f"FLUX generation succeeded: {file_path}")
+            except Exception as flux_err:
+                logger.warning(f"FLUX generation failed: {flux_err}")
+
         # 3. Gemini 2.5 Flash によるオーダーメイドSVG生成を試行
         # (Imagen 3 クォータ制限時や無料枠でも、ユーザーの会話内容通りの情景を100%動的に描画する)
         if not image_generated:

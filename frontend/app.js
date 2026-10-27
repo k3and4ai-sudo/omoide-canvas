@@ -2018,8 +2018,62 @@ ${levelRules}
     const apiKey = (state.sessionApiKey || '').trim();
 
     if (apiKey) {
-      // Step 1: Gemini 2.5 Flash によるオーダーメイドSVG水彩画生成（最優先・高速1.5秒）
-      // (全APIキーで100%確実に利用可能。ユーザーの会話内容・修正希望通りの情景や小物を忠実に描画)
+      // Step 0: FLUX / Pollinations 超高精細AI画像生成（Nano Banana 級の圧倒的な描写力・自由度）
+      // (完全無料・制限なし。会話の微妙なニュアンスや鋭い山・質感・光と影を最高峰クオリティで描画)
+      try {
+        logDiag('FLUX 超高精細画像生成エンジンを呼び出し中...');
+        // Gemini 2.5 Flash に最適な英語プロンプトを瞬時生成させる（0.8秒）
+        let fluxPrompt = '';
+        try {
+          const transRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: `You are an expert art director. Convert the following nostalgic scene description into a highly detailed English image prompt for FLUX:
+"${elements}"
+Guidelines:
+- Warm, nostalgic, fine art watercolor and oil painting style, masterpiece, rich texture, beautiful natural lighting.
+- If mountains or rocks are mentioned (e.g. sharp mountain, alps), depict extremely sharp, towering, jagged rocky alpine peaks (like Mount Yari / Matterhorn) with dramatic light and shadow, crisp silhouettes, pristine snow crevices.
+- If cafes or rooms are mentioned, depict authentic nostalgic Japanese Showa-era interior, wooden tables, retro cups, warm pendant lighting.
+- No photorealistic human faces, figures only from behind or distant silhouettes.
+- Output ONLY the English prompt text, no markdown, no quotes.` }] }],
+                generationConfig: { temperature: 0.3, maxOutputTokens: 160 }
+              })
+            }
+          );
+          if (transRes.ok) {
+            const transData = await transRes.json();
+            fluxPrompt = (transData?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+          }
+        } catch (tErr) {}
+
+        if (!fluxPrompt) {
+          fluxPrompt = `Warm nostalgic watercolor fine art, ${elements}, extremely detailed, dramatic lighting`;
+        }
+
+        const seed = Math.floor(Math.random() * 999999);
+        const fluxUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fluxPrompt)}?width=1024&height=768&model=flux&nologo=true&seed=${seed}`;
+
+        // 画像のロード完了を最大7秒待機（タイムアウト時はSVGへフォールバック）
+        const imgLoaded = await new Promise((resolve) => {
+          const testImg = new Image();
+          const timer = setTimeout(() => resolve(false), 7000);
+          testImg.onload = () => { clearTimeout(timer); resolve(true); };
+          testImg.onerror = () => { clearTimeout(timer); resolve(false); };
+          testImg.src = fluxUrl;
+        });
+
+        if (imgLoaded) {
+          mediaDataUrl = fluxUrl;
+          logDiag('FLUX による最高峰クオリティの情景描画に成功しました！');
+        }
+      } catch (fluxErr) {
+        console.warn('FLUX generation warning:', fluxErr);
+      }
+
+      // Step 1: Gemini 2.5 Flash によるオーダーメイドSVG水彩画生成（フォールバック）
       try {
         const svgPrompt = `あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
