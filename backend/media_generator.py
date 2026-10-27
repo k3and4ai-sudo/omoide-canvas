@@ -92,7 +92,9 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
     """
     width, height = 1024, 768
     combined = f"{title} {elements}"
-    is_school = any(k in combined for k in ["高校", "文化祭", "学園祭", "学校", "教室", "黒板", "校舎", "中学", "小学校", "先生", "生徒", "部活", "運動会", "体育祭", "青春", "合唱", "模擬店"])
+    is_cafe = any(k in combined for k in ["喫茶店", "カフェ", "コーヒー", "珈琲", "紅茶", "クリームソーダ", "ホットケーキ", "ナポリタン", "パフェ", "店内", "テーブル", "カップ", "純喫茶"])
+    is_classroom = any(k in combined for k in ["教室の中", "教室", "黒板", "机", "教壇", "授業"])
+    is_school = (not is_cafe and not is_classroom) and any(k in combined for k in ["高校", "文化祭", "学園祭", "学校", "校舎", "中学", "小学校", "先生", "生徒", "部活", "運動会", "体育祭", "青春", "合唱", "模擬店"])
     is_sea = any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
     is_sakura = any(k in combined for k in ["桜", "春", "花", "菜の花", "入学", "卒業", "ピンク", "花見", "公園", "庭"])
     is_snow = any(k in combined for k in ["雪", "冬", "スキー", "こたつ", "正月", "北国", "白", "氷", "北海道", "新潟"])
@@ -101,7 +103,25 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
     base_image = Image.new("RGB", (width, height), color=(253, 248, 242))
     draw = ImageDraw.Draw(base_image)
 
-    if is_school:
+    if is_cafe:
+        draw.rectangle([0, 0, width, 460], fill=(243, 229, 216))
+        draw.rectangle([0, 460, width, height], fill=(176, 137, 104))
+        # アーチ窓
+        draw.rounded_rectangle([640, 130, 910, 410], radius=90, fill=(216, 243, 220), outline=(127, 85, 57), width=6)
+        # ペンダントライト
+        for lx in [320, 550]:
+            draw.line([(lx, 0), (lx, 170)], fill=(92, 61, 46), width=4)
+            draw.polygon([(lx - 55, 215), (lx, 165), (lx + 55, 215)], fill=(244, 162, 97))
+        # 白い丸テーブルとコーヒー＆クリームソーダ
+        draw.ellipse([180, 470, 820, 660], fill=(255, 253, 249), outline=(212, 163, 115), width=5)
+        draw.rectangle([340, 500, 405, 555], fill=(255, 255, 255), outline=(108, 88, 76), width=3)
+        draw.polygon([(580, 450), (630, 450), (620, 555), (590, 555)], fill=(82, 183, 136))
+        draw.ellipse([585, 430, 625, 470], fill=(255, 250, 224))
+    elif is_classroom:
+        draw.rectangle([0, 0, width, 520], fill=(253, 248, 240))
+        draw.rectangle([0, 520, width, height], fill=(200, 159, 120))
+        draw.rectangle([180, 160, 844, 430], fill=(45, 90, 67), outline=(164, 113, 72), width=10)
+    elif is_school:
         draw.rectangle([0, 0, width, 490], fill=(255, 243, 214))
         draw.rectangle([0, 490, width, height], fill=(230, 204, 178))
         # 校舎本体と屋根

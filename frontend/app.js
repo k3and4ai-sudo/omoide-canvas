@@ -1441,8 +1441,8 @@ ${levelRules}
             }
 
             if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-              // ユーザーの発話の中に「絵を描いて」「文化祭」「昔〜」「行った」「思い出」など情景や描画希望が含まれていれば即座に裏で水彩画生成も開始
-              const shouldAutoDraw = /(描いて|書いて|絵に|キャンバス|文化祭|高校|中学|小学校|学校|昔|子供の頃|若い頃|故郷|ふるさと|旅行|海|山|川|桜|祭り|花火|雪|畑|風景|景色)/.test(textToSend);
+              // ユーザーの発話の中に場所・室内・喫茶店・風景・描画希望が含まれていれば即座に裏で水彩画生成を開始
+              const shouldAutoDraw = /(描いて|書いて|絵に|キャンバス|切り替|変えて|喫茶店|カフェ|コーヒー|紅茶|クリームソーダ|ケーキ|店|部屋|教室|黒板|文化祭|高校|中学|小学校|学校|昔|子供の頃|若い頃|故郷|ふるさと|旅行|温泉|旅館|電車|駅|海|山|川|桜|祭り|花火|雪|畑|風景|景色)/.test(textToSend);
               if (shouldAutoDraw && !state.isDrawingMedia) {
                 triggerSceneDrawingForTopic(textToSend);
               }
@@ -1545,15 +1545,25 @@ ${levelRules}
     const ctx = canvas.getContext('2d');
     const combined = `${title || ''} ${elements || ''}`;
 
-    const isSchool = /(高校|文化祭|学園祭|学校|教室|黒板|校舎|中学|小学校|先生|生徒|部活|運動会|体育祭|青春|合唱|バンド|模擬店)/.test(combined);
+    const isCafe = /(喫茶店|カフェ|コーヒー|珈琲|紅茶|クリームソーダ|ホットケーキ|ナポリタン|パフェ|模擬店の中|店内|テーブル|カップ|茶店|純喫茶)/.test(combined);
+    const isClassroom = /(教室の中|教室|黒板|机|教壇|授業|窓際)/.test(combined);
+    const isSchool = !isCafe && !isClassroom && /(高校|文化祭|学園祭|学校|校舎|中学|小学校|先生|生徒|部活|運動会|体育祭|青春|合唱|バンド|模擬店)/.test(combined);
     const isSea = /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
     const isSakura = /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
     const isSnow = /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
     const isSunset = /(夕焼け|夕方|夕日|秋|赤とんぼ|紅葉|もみじ|祭り|花火)/.test(combined);
 
-    // 1. テーマ別の水彩空グラデーション
+    // 1. テーマ別の水彩空・背景グラデーション
     const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    if (isSchool) {
+    if (isCafe) {
+      skyGrad.addColorStop(0, '#f3e5d8');
+      skyGrad.addColorStop(0.65, '#e6ccb2');
+      skyGrad.addColorStop(1, '#ddb892');
+    } else if (isClassroom) {
+      skyGrad.addColorStop(0, '#fdf8f0');
+      skyGrad.addColorStop(0.7, '#f4ebe1');
+      skyGrad.addColorStop(1, '#d8c3a5');
+    } else if (isSchool) {
       skyGrad.addColorStop(0, '#fff3d6');
       skyGrad.addColorStop(0.55, '#fdebd0');
       skyGrad.addColorStop(1, '#e8d5b7');
@@ -1583,16 +1593,158 @@ ${levelRules}
     ctx.fillStyle = skyGrad;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 2. 太陽・月
-    ctx.save();
-    ctx.fillStyle = isSunset ? 'rgba(231, 111, 81, 0.75)' : 'rgba(255, 238, 173, 0.75)';
-    ctx.beginPath();
-    ctx.arc(650, 130, 52, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
+    // 2. 太陽・月（屋外のみ）
+    if (!isCafe && !isClassroom) {
+      ctx.save();
+      ctx.fillStyle = isSunset ? 'rgba(231, 111, 81, 0.75)' : 'rgba(255, 238, 173, 0.75)';
+      ctx.beginPath();
+      ctx.arc(650, 130, 52, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
 
     // 3. テーマ別の風景モチーフ描画
-    if (isSchool) {
+    if (isCafe) {
+      // 喫茶店・模擬店カフェの室内風景（木目壁・アーチ窓・ペンダントライト・テーブル・珈琲とクリームソーダ）
+      // 腰壁（レンガ・木目調）
+      ctx.fillStyle = '#b08968';
+      ctx.fillRect(0, 360, canvas.width, 240);
+
+      // レトロなアーチ窓（外の緑と光が見える）
+      ctx.fillStyle = '#d8f3dc';
+      ctx.strokeStyle = '#7f5539';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(500, 110, 210, 210, [105, 105, 8, 8]) : ctx.rect(500, 110, 210, 210);
+      ctx.fill();
+      ctx.stroke();
+      // 窓の十字格子
+      ctx.beginPath();
+      ctx.moveTo(605, 110);
+      ctx.lineTo(605, 320);
+      ctx.moveTo(500, 220);
+      ctx.lineTo(710, 220);
+      ctx.stroke();
+
+      // 温かいオレンジ色のレトロペンダントライト（2灯）
+      const lampX = [250, 430];
+      for (const lx of lampX) {
+        ctx.strokeStyle = '#5c3d2e';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(lx, 0);
+        ctx.lineTo(lx, 135);
+        ctx.stroke();
+        // ランプシェード
+        ctx.fillStyle = '#f4a261';
+        ctx.beginPath();
+        ctx.moveTo(lx - 42, 165);
+        ctx.lineTo(lx, 128);
+        ctx.lineTo(lx + 42, 165);
+        ctx.closePath();
+        ctx.fill();
+        // 灯りの光輪
+        ctx.fillStyle = 'rgba(255, 225, 148, 0.38)';
+        ctx.beginPath();
+        ctx.arc(lx, 180, 68, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 喫茶店の丸テーブル（白いテーブルクロス掛け）
+      ctx.fillStyle = '#8d5b4c';
+      ctx.fillRect(365, 440, 36, 160);
+      ctx.fillStyle = '#fffdf9';
+      ctx.strokeStyle = '#d4a373';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.ellipse(385, 435, 250, 68, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // 珈琲カップ＆ソーサーと湯気
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#6c584c';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(295, 435, 44, 14, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(270, 395, 50, 36);
+      ctx.strokeRect(270, 395, 50, 36);
+      ctx.fillStyle = '#6f4e37';
+      ctx.beginPath();
+      ctx.ellipse(295, 396, 23, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
+      // 湯気
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.lineWidth = 2.5;
+      for (let s = -10; s <= 10; s += 10) {
+        ctx.beginPath();
+        ctx.moveTo(295 + s, 382);
+        ctx.quadraticCurveTo(288 + s, 365, 298 + s, 350);
+        ctx.stroke();
+      }
+
+      // 懐かしいメロンクリームソーダ（緑のソーダ＋バニラアイス＋赤いさくらんぼ）
+      ctx.fillStyle = '#52b788';
+      ctx.strokeStyle = '#74c69d';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(455, 355);
+      ctx.lineTo(495, 355);
+      ctx.lineTo(488, 430);
+      ctx.lineTo(462, 430);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // バニラアイス
+      ctx.fillStyle = '#fffae0';
+      ctx.beginPath();
+      ctx.arc(475, 354, 17, 0, Math.PI * 2);
+      ctx.fill();
+      // 赤いチェリー
+      ctx.fillStyle = '#e63946';
+      ctx.beginPath();
+      ctx.arc(482, 338, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 黒板メニューボード
+      ctx.fillStyle = '#2d4739';
+      ctx.strokeStyle = '#bc6c25';
+      ctx.lineWidth = 4;
+      ctx.fillRect(75, 195, 130, 145);
+      ctx.strokeRect(75, 195, 130, 145);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 15px "Noto Sans JP", sans-serif';
+      ctx.fillText('☕ 喫茶 憩い', 92, 228);
+      ctx.font = '13px "Noto Sans JP", sans-serif';
+      ctx.fillText('・ブレンド珈琲', 88, 258);
+      ctx.fillText('・クリームソーダ', 88, 284);
+      ctx.fillText('・ホットケーキ', 88, 310);
+    } else if (isClassroom) {
+      // 懐かしい教室の中（大きな黒板・チョーク・木の机・窓からの日差し）
+      ctx.fillStyle = '#c89f78';
+      ctx.fillRect(0, 410, canvas.width, 190);
+      // 黒板
+      ctx.fillStyle = '#2d5a43';
+      ctx.strokeStyle = '#a47148';
+      ctx.lineWidth = 8;
+      ctx.fillRect(140, 130, 520, 210);
+      ctx.strokeRect(140, 130, 520, 210);
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.font = 'bold 22px "Noto Sans JP", sans-serif';
+      ctx.fillText('懐かしい教室の思い出', 290, 235);
+      // 木の机
+      for (let c = 0; c < 3; c++) {
+        const dx = 160 + c * 185;
+        ctx.fillStyle = '#d4a373';
+        ctx.fillRect(dx, 430, 120, 22);
+        ctx.strokeStyle = '#8d5b4c';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(dx, 430, 120, 22);
+      }
+    } else if (isSchool) {
       // 校庭の大地
       ctx.fillStyle = '#e6ccb2';
       ctx.fillRect(0, 390, canvas.width, 210);
