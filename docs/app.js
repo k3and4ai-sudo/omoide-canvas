@@ -878,6 +878,7 @@ ${levelRules}
       state.sessionStartTime = Date.now();
       state.sessionTopics = [];
       state.sessionMemories = [];
+      state.isAiSpeaking = true; // 接続〜最初の挨拶完了までマイクを完全保護（エコー遮断ガード）
       clearCanvasState();
       updateStatus('マイクと接続を準備しています...', true);
       dom.btnSessionToggle.disabled = true;
@@ -3034,18 +3035,8 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
           break;
 
         case 'interrupted':
-          // ユーザーが発話したことをGeminiが検知（バージイン）。AIの残余再生を即座に中断してユーザー待機へ切り替え
-          logDiag('ユーザー発話を検知したため、AI音声出力を中断して待機します。');
-          if (state.audioContextOut) {
-            state.nextPlaybackTime = state.audioContextOut.currentTime;
-          }
-          if (state.aiSpeechEndTimer) {
-            clearTimeout(state.aiSpeechEndTimer);
-          }
-          state.isAiSpeaking = false;
-          if (!state.isDrawingMedia) {
-            setAvatarState('listening');
-          }
+          // Gemini側で割り込みを検知した場合でも、スピーカー再生キューに残っている音声は途中で破棄せず最後まで温かく話し切らせる（エコー誤検知による発話中断の完全防止）
+          logDiag('Gemini割り込み通知を受信（再生キュー終了後に自然に待機状態へ移行します）');
           break;
 
         case 'new_media':

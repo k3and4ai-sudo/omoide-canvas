@@ -59,6 +59,9 @@ class LiveSessionManager:
         self.current_user_turn_text: str = ""
         self.last_drawn_topic: str = ""
         self.tool_called_in_turn: bool = False
+        self.echo_guard_until: float = time.time() + 6.0  # セッション開始時〜最初の挨拶完了まで完全保護
+        self.ai_playback_until: float = 0.0              # AI返答音声の推定再生完了時刻
+        self.echo_dropped_packets: int = 0               # エコーガードにより遮断したマイクパケット数
 
     async def run(self):
         """セッションの開始・メインループ管理（ユーザー自身のセッションAPIキーを使用）"""
@@ -164,6 +167,8 @@ class LiveSessionManager:
                     f"あなたの性格（{partner.personality if partner else '優しく穏やか'}）らしく、短く温かく最初の挨拶を声に出して話しかけてください。"
                 )
                 try:
+                    # 最初の挨拶を発話している間（約6.0秒）はスピーカー音をマイクが拾って中断しないようエコーガードを設定
+                    self.echo_guard_until = time.time() + 6.0
                     await session.send(input=initial_greeting_prompt, end_of_turn=True)
                 except Exception as greet_err:
                     logger.warning(f"Initial greeting trigger warning: {greet_err}")
@@ -196,6 +201,13 @@ class LiveSessionManager:
             try:
                 message = await self.websocket.receive()
                 if "bytes" in message and message["bytes"]:
+                    # AI発話中（スピーカー出音・部屋の残響期間）はマイクPCMをGeminiに絶対に送らない！
+                    # （スピーカー音をマイクが拾ってAIが自己中断・バージインしてしまうエコー干渉を100%完全遮断）
+                    if time.time() < self.echo_guard_until:
+                        self.echo_dropped_packets += 1
+                        if self.echo_dropped_packets % 50 == 1:
+                            logger.info(f"[EchoGuard] Shielded mic input ({self.echo_dropped_packets} chunks dropped, {self.echo_guard_until - time.time():.1f}s remaining)")
+                        continue
                     # Raw PCM 16kHz 音声ストリーム
                     pcm_data = message["bytes"]
                     await session.send_realtime_input(
@@ -291,7 +303,11 @@ class LiveSessionManager:
                     if server_content is not None:
                         # ユーザーによる発話割り込み（バージイン検知時）
                         if getattr(server_content, "interrupted", False):
-                            logger.info("Gemini Live response interrupted by user speech.")
+                            # AIがまだスピーカーから声を出している最中の場合は、PCスピーカー音のエコー誤検知であるため無視して完走させる！
+                            if time.time() < self.echo_guard_until:
+                                logger.info("Ignored false-positive interruption during active AI speech output (echo protected).")
+                                continue
+                            logger.info("Gemini Live response interrupted by actual user speech.")
                             self.current_ai_turn_text = ""
                             await self.websocket.send_json({
                                 "type": "interrupted"
@@ -301,8 +317,14 @@ class LiveSessionManager:
                         model_turn = server_content.model_turn
                         if model_turn is not None:
                             for part in model_turn.parts:
-                                # 1. 合成音声データ (PCM 24kHz)
+                                # 1. 合成音声データ (PCM 24kHz Mono: 1秒あたり48,000バイト)
                                 if part.inline_data is not None:
+                                    now = time.time()
+                                    chunk_len = len(part.inline_data.data)
+                                    chunk_sec = chunk_len / 48000.0
+                                    self.ai_playback_until = max(self.ai_playback_until, now) + chunk_sec
+                                    # スピーカーからの出音および部屋の残響をマイクが拾う期間を完全遮断（+1.2秒ガード）
+                                    self.echo_guard_until = self.ai_playback_until + 1.2
                                     await self.websocket.send_bytes(part.inline_data.data)
 
                                 # 文字起こしテキスト (字幕) ※内部思考テキスト（**...）は除外
