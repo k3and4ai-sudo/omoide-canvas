@@ -1140,6 +1140,29 @@ body {
   flex-shrink: 0;
 }
 
+.btn-clear-canvas {
+  background: #ffffff;
+  color: #718096;
+  border: 1.5px solid #cbd5e0;
+  border-radius: var(--radius-full);
+  padding: 6px 13px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-clear-canvas:hover {
+  background: #fff5f5;
+  color: #c53030;
+  border-color: #feb2b2;
+  transform: translateY(-1px);
+}
+
 .btn-draw-now {
   background: linear-gradient(135deg, var(--primary) 0%, #2c5e4f 100%);
   color: #ffffff;

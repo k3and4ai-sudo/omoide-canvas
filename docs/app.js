@@ -129,6 +129,7 @@
     btnDismissError: document.getElementById('btnDismissError'),
     captionTitle: document.getElementById('captionTitle'),
     captionTag: document.getElementById('captionTag'),
+    btnClearCanvas: document.getElementById('btnClearCanvas'),
     btnDrawCurrentTopic: document.getElementById('btnDrawCurrentTopic'),
     soundIndicator: document.getElementById('soundIndicator'),
     soundName: document.getElementById('soundName'),
@@ -353,7 +354,7 @@
   async function init() {
     setupEventListeners();
     initLoginModalState();
-    resetSceneCollector();
+    clearCanvasState();
     renderQuotaUI();
     await detectBackendAvailability();
     await fetchUserProfile();
@@ -415,7 +416,7 @@
     }
     // ブラウザから直接 Google Gemini API エンドポイントでキーの有効性を検証（トンネル・バックエンド不要）
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash?key=${encodeURIComponent(rawKey)}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash?key=${encodeURIComponent(rawKey)}`;
       const res = await fetch(url);
       if (res.ok) {
         const masked = `${rawKey.slice(0, 6)}...${rawKey.slice(-4)}`;
@@ -594,6 +595,7 @@
     dom.btnDiagEmergency.addEventListener('click', testEmergencyAlert);
     dom.btnDiagAvatar.addEventListener('click', testCycleAvatars);
     dom.btnDrawCurrentTopic?.addEventListener('click', drawCurrentConversationScene);
+    dom.btnClearCanvas?.addEventListener('click', clearCanvasState);
 
     // 思い出情景メモ・合意形成ボタン群
     dom.btnConfirmDraw?.addEventListener('click', () => {
@@ -788,6 +790,55 @@ ${levelRules}
     }
   }
 
+  // ============================================================================
+  // キャンバスの完全初期化（白紙に戻して、ゼロから新しいお話の絵を作る）
+  // ============================================================================
+  function clearCanvasState() {
+    state.hasDrawnImage = false;
+    state.lastUserModification = '';
+    state.lastDrawnUtterance = '';
+    state.pollinationsBlocked = false;
+    if (state.pendingRefineTimer) {
+      clearTimeout(state.pendingRefineTimer);
+      state.pendingRefineTimer = null;
+    }
+
+    if (dom.memoryImage) {
+      dom.memoryImage.src = '';
+      dom.memoryImage.classList.add('hidden');
+      dom.memoryImage.classList.remove('refreshing');
+    }
+    if (dom.memoryVideo) {
+      try { dom.memoryVideo.pause(); } catch (e) {}
+      dom.memoryVideo.src = '';
+      dom.memoryVideo.classList.add('hidden');
+    }
+    if (dom.canvasPlaceholder) {
+      dom.canvasPlaceholder.classList.remove('hidden');
+    }
+    if (dom.captionTitle) {
+      dom.captionTitle.textContent = 'お話に出てきた風景をここに描きます';
+    }
+    if (dom.captionTag) {
+      dom.captionTag.textContent = '思い出';
+    }
+    if (dom.btnDrawCurrentTopic) {
+      dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
+      dom.btnDrawCurrentTopic.style.background = '';
+      dom.btnDrawCurrentTopic.disabled = false;
+    }
+    if (dom.collectorRefineBar) {
+      dom.collectorRefineBar.classList.add('hidden');
+    }
+    if (dom.canvasUpdateToast) {
+      dom.canvasUpdateToast.classList.add('hidden');
+    }
+    dismissCanvasError();
+    stopSyntheticAmbientSound();
+    resetSceneCollector();
+    logDiag('キャンバスを白紙（初期状態）にリセットしました。ゼロから新しいお話の絵を描く準備が整いました。');
+  }
+
   async function startSession() {
     if (!state.isLoggedIn) {
       openLoginModal();
@@ -798,13 +849,7 @@ ${levelRules}
       state.sessionStartTime = Date.now();
       state.sessionTopics = [];
       state.sessionMemories = [];
-      state.hasDrawnImage = false;
-      state.lastUserModification = '';
-      if (state.pendingRefineTimer) {
-        clearTimeout(state.pendingRefineTimer);
-        state.pendingRefineTimer = null;
-      }
-      resetSceneCollector();
+      clearCanvasState();
       updateStatus('マイクと接続を準備しています...', true);
       dom.btnSessionToggle.disabled = true;
 
@@ -2357,32 +2402,33 @@ ${levelRules}
     const apiKey = (state.sessionApiKey || '').trim();
 
     if (apiKey) {
-      // Step 0: FLUX / Pollinations 超高精細AI画像生成（Nano Banana 級の描写力）
+      // Step 0: 超高精細AI画像生成（Pollinations turbo: 高速・高品質でユーザーの言葉通りの絵を描く）
       try {
-        if (dom.drawingSubtext) dom.drawingSubtext.textContent = '1/3: AI画像生成エンジンに問い合わせ中...';
-        logDiag('FLUX 超高精細画像生成エンジンを呼び出し中...');
+        if (dom.drawingSubtext) dom.drawingSubtext.textContent = 'AI画家がお話の情景を描いています（約5〜8秒）...';
+        logDiag(`AI情景描画を開始します: 「${title}」 - 内容: 「${elements}」`);
 
         let fluxPrompt = '';
         try {
           const transRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                contents: [{ parts: [{ text: `You are an expert art director. Convert the following nostalgic scene description into a highly detailed English image prompt for FLUX:
+                contents: [{ parts: [{ text: `You are an expert art director. Convert the following nostalgic Japanese scene description into a highly detailed English image prompt:
 "${elements}"
 ${isRefinement && feedback ? `\nCRITICAL USER MODIFICATION / CORRECTION (TOP PRIORITY):
 The user explicitly requested to modify or correct the previous drawing: "${feedback}".
 You MUST override conflicting previous elements and make this modification the most prominent feature!
 (e.g., if requesting sunset, change entire sky to dramatic glowing red-orange sunset and reflect twilight on mountains; if adding flowers, prominently place beautiful flowers in a vase on the table).` : ''}
 Guidelines:
-- Warm, nostalgic, fine art watercolor and oil painting style, masterpiece, rich texture, beautiful natural lighting.
+- Warm, nostalgic, fine art watercolor storybook painting style, masterpiece, rich texture, beautiful natural lighting.
+- Faithfully include all specific objects, places, times, seasons, and colors mentioned by the user.
 - If mountains or rocks are mentioned (e.g. sharp mountain, alps), depict extremely sharp, towering, jagged rocky alpine peaks (like Mount Yari / Matterhorn) with dramatic light and shadow, crisp silhouettes, pristine snow crevices.
 - If cafes or rooms are mentioned, depict authentic nostalgic Japanese Showa-era interior, wooden tables, retro cups, warm pendant lighting.
 - No photorealistic human faces, figures only from behind or distant silhouettes.
 - Output ONLY the English prompt text, no markdown, no quotes.` }] }],
-                generationConfig: { temperature: 0.3, maxOutputTokens: 160 }
+                generationConfig: { temperature: 0.3, maxOutputTokens: 200 }
               })
             }
           );
@@ -2402,43 +2448,41 @@ Guidelines:
         }
 
         if (!fluxPrompt) {
-          fluxPrompt = `Warm nostalgic watercolor fine art, ${elements}, extremely detailed, dramatic lighting`;
+          fluxPrompt = `Warm nostalgic Japanese watercolor painting, ${elements}, Showa-era style, beautiful natural lighting, masterpiece`;
         }
 
+        logDiag(`生成プロンプト: ${fluxPrompt}`);
         const seed = Math.floor(Math.random() * 999999);
-        const fluxUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fluxPrompt)}?width=1024&height=768&model=flux&nologo=true&seed=${seed}`;
+        const fluxUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fluxPrompt)}?width=1024&height=768&model=turbo&nologo=true&seed=${seed}`;
 
-        // 画像のロード完了を最大2.5秒待機
-        if (!state.pollinationsBlocked) {
-          const imgLoaded = await new Promise((resolve) => {
-            const testImg = new Image();
-            const timer = setTimeout(() => {
-              state.pollinationsBlocked = true;
-              resolve(false);
-            }, 2500);
-            testImg.onload = () => { clearTimeout(timer); resolve(true); };
-            testImg.onerror = () => {
-              clearTimeout(timer);
-              state.pollinationsBlocked = true;
-              showCanvasError('外部画像生成 (FLUX) 混雑', '外部サーバーの混雑または利用制限を検知しました。ローカル水彩画エンジンで描画します。', true);
-              resolve(false);
-            };
-            testImg.src = fluxUrl;
-          });
+        // 画像のロード完了を最大12秒待機（turboモデルなら約6〜8秒でロード完了）
+        const imgLoaded = await new Promise((resolve) => {
+          const testImg = new Image();
+          const timer = setTimeout(() => {
+            logDiag('AI画像生成待機タイムアウト（12秒経過）のためフォールバックへ移行します。');
+            resolve(false);
+          }, 12000);
+          testImg.onload = () => { clearTimeout(timer); resolve(true); };
+          testImg.onerror = () => {
+            clearTimeout(timer);
+            resolve(false);
+          };
+          testImg.src = fluxUrl;
+        });
 
-          if (imgLoaded) {
-            mediaDataUrl = fluxUrl;
-            logDiag('FLUX による最高峰クオリティの情景描画に成功しました！');
-          }
+        if (imgLoaded) {
+          mediaDataUrl = fluxUrl;
+          dismissCanvasError();
+          logDiag('最高峰クオリティのAI情景描画に成功しました！');
         }
       } catch (fluxErr) {
-        console.warn('FLUX generation warning:', fluxErr);
+        console.warn('Image generation warning:', fluxErr);
       }
 
-      // Step 1: Gemini 2.5 Flash によるオーダーメイドSVG水彩画生成（フォールバック）
+      // Step 1: Gemini 3.8 Flash によるオーダーメイドSVG水彩画生成（フォールバック）
       if (!mediaDataUrl) {
         try {
-          if (dom.drawingSubtext) dom.drawingSubtext.textContent = '2/3: Gemini 2.5 Flash SVG描画を試行中...';
+          if (dom.drawingSubtext) dom.drawingSubtext.textContent = '2/3: Gemini 3.8 Flash SVG描画を試行中...';
           const svgPrompt = `あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
@@ -2458,13 +2502,13 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
 
           const resSvg = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 contents: [{ parts: [{ text: svgPrompt }] }],
-                generationConfig: { temperature: 0.4, maxOutputTokens: 2500 }
+                generationConfig: { temperature: 0.4, maxOutputTokens: 3500 }
               })
             }
           );
@@ -2852,12 +2896,6 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     const title = mediaData.title || '思い出の情景';
     dom.captionTitle.textContent = title;
     dom.captionTag.textContent = mediaData.media_format === 'video' ? '動く絵本' : '水彩画';
-
-    // 「今の話題を絵にする」ボタンのラベルを「この内容で描き直す」へ更新
-    if (dom.btnDrawCurrentTopic) {
-      dom.btnDrawCurrentTopic.textContent = '🎨 この内容で描き直す';
-      dom.btnDrawCurrentTopic.title = '現在の会話や修正指示を反映して絵を描き直します';
-    }
 
     if (mediaData.media_format === 'video') {
       dom.memoryImage.classList.add('hidden');
@@ -3488,7 +3526,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       }
     }
 
-    // ワンタップ描画ボタンのラベル・スタイル更新
+    // ワンタップ描画ボタンのラベル・スタイル更新（常に「今の話題を絵にする」でゼロから描画可能）
     if (dom.btnDrawCurrentTopic) {
       if (sc.status === 'drawing') {
         dom.btnDrawCurrentTopic.textContent = '🎨 描画中...';
@@ -3496,9 +3534,6 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       } else if (sc.status === 'ready' || sc.status === 'confirming') {
         dom.btnDrawCurrentTopic.textContent = '✨ 準備OK！この情景を描く';
         dom.btnDrawCurrentTopic.style.background = 'linear-gradient(135deg, #d97706 0%, #b45309 100%)';
-      } else if (state.hasDrawnImage) {
-        dom.btnDrawCurrentTopic.textContent = '🎨 この内容で描き直す';
-        dom.btnDrawCurrentTopic.style.background = 'linear-gradient(135deg, #2c5e4f 0%, #1f4539 100%)';
       } else {
         dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
         dom.btnDrawCurrentTopic.style.background = '';
@@ -3633,16 +3668,12 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
     const finalTopic = candidate || '思い出の風景';
 
-    // すでに絵が描かれている場合は「描き直し（修正）」として実行！
-    if (state.hasDrawnImage) {
-      logDiag(`「この内容で描き直す」が押されました: 「${finalTopic}」の再描画を開始します。`);
-      state.sessionTopics.push(finalTopic);
-      await executeRefineDrawing(finalTopic);
-    } else {
-      logDiag(`「今の話題を絵にする」が押されました: 「${finalTopic}」の描画を即座に開始します。`);
-      state.sessionTopics.push(finalTopic);
-      await executeConfirmedDrawing(finalTopic);
-    }
+    // 「今の話題を絵にする」は、常に現在の会話内容から新しい情景をゼロから描画（新規作成）！
+    // 直前の絵の要素に引きずられず、今話している話題そのものを忠実に絵にします。
+    logDiag(`「今の話題を絵にする」が押されました: 「${finalTopic}」の新規描画を開始します。`);
+    state.lastUserModification = ''; // 新規描画なので直前の修正指示はクリア
+    state.sessionTopics.push(finalTopic);
+    await executeConfirmedDrawing(finalTopic);
   }
 
   async function testGenerateSampleVisual() {
