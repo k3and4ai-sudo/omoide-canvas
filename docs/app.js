@@ -20,11 +20,11 @@
   const SAMPLE_RATE_IN = 16000;   // マイク入力サンプリングレート
   const SAMPLE_RATE_OUT = 24000;  // Gemini返答音声サンプリングレート
 
-  // 周囲音・テレビ音声カットモード別のRMSしきい値設定（スマホマイク最適チューニング版）
+  // 周囲音・テレビ音声カットモード別のRMSしきい値設定（高齢者の発話テンポ・息継ぎに最適化したミリ秒基準）
   const NOISE_GATE_PRESETS = {
-    normal: { rms: 0.0022, vuThresholdPercent: 3, hangoverChunks: 12, eosSilenceChunks: 14, label: '標準感度' },
-    tv_cut: { rms: 0.0045, vuThresholdPercent: 7, hangoverChunks: 12, eosSilenceChunks: 14, label: 'テレビ・周囲音カット' },
-    strict: { rms: 0.0100, vuThresholdPercent: 14, hangoverChunks: 10, eosSilenceChunks: 12, label: '強めカット' }
+    normal: { rms: 0.0022, vuThresholdPercent: 3, hangoverMs: 380, eosSilenceMs: 1400, label: '標準感度' },
+    tv_cut: { rms: 0.0045, vuThresholdPercent: 7, hangoverMs: 380, eosSilenceMs: 1500, label: 'テレビ・周囲音カット' },
+    strict: { rms: 0.0100, vuThresholdPercent: 14, hangoverMs: 320, eosSilenceMs: 1600, label: '強めカット' }
   };
 
   const state = {
@@ -1429,6 +1429,7 @@ ${levelRules}
     // バッファサイズ 1024 サンプル（約21ms〜64ms毎）で超低遅延ストリーミング
     const bufferSize = 1024;
     const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+    const chunkMs = (bufferSize / actualSampleRate) * 1000;
 
     let vadSilenceChunks = 0;
     let voiceHangoverChunks = 0;
@@ -1445,7 +1446,7 @@ ${levelRules}
 
       if (!state.isSessionActive || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
 
-      // AI発話中はエコー防止のためバッファをクリアして送信しない
+      // AI発話中（および発話直後のエコー残響期間）はマイク入力を完全に破棄して送信しない（バージイン誤検知の完全遮断）
       if (state.isAiSpeaking) {
         preSpeechRingBuffer = [];
         voiceHangoverChunks = 0;
@@ -1479,6 +1480,9 @@ ${levelRules}
       }
       const rms = Math.sqrt(sumSq / downsampledData.length);
       const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.tv_cut;
+      const targetHangoverChunks = Math.max(3, Math.round((preset.hangoverMs || 380) / chunkMs));
+      const targetEosChunks = Math.max(8, Math.round((preset.eosSilenceMs || 1400) / chunkMs));
+      const minChunksForUtterance = Math.max(3, Math.round(250 / chunkMs));
 
       if (rms > preset.rms) {
         // 発話開始時、直前3チャンク（約120ms）のプリバッファを先に送信して語頭欠けを完全防止
@@ -1489,7 +1493,7 @@ ${levelRules}
           }
           preSpeechRingBuffer = [];
         }
-        voiceHangoverChunks = preset.hangoverChunks;
+        voiceHangoverChunks = targetHangoverChunks;
         isSpeakingUtterance = true;
         vadSilenceChunks = 0;
         state.lastVoiceActiveTime = Date.now();
@@ -1508,13 +1512,13 @@ ${levelRules}
           preSpeechRingBuffer.shift();
         }
 
-        // ユーザーが話し終えた直後の沈黙を検知したら、即座に EOS (audio_stream_end) を送ってAIに爆速返答させる
+        // 高齢者のゆったりした発話・息継ぎに配慮し、十分な沈黙（約1.4秒）を検知した時のみEOSを送信
         if (isSpeakingUtterance) {
           vadSilenceChunks++;
-          if (vadSilenceChunks >= preset.eosSilenceChunks) {
+          if (vadSilenceChunks >= targetEosChunks) {
             isSpeakingUtterance = false;
             vadSilenceChunks = 0;
-            if (chunksSentInUtterance >= 3) {
+            if (chunksSentInUtterance >= minChunksForUtterance) {
               sendEosSignal();
             }
             chunksSentInUtterance = 0;
@@ -2834,6 +2838,21 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
           setAvatarState(data.state);
           break;
 
+        case 'interrupted':
+          // ユーザーが発話したことをGeminiが検知（バージイン）。AIの残余再生を即座に中断してユーザー待機へ切り替え
+          logDiag('ユーザー発話を検知したため、AI音声出力を中断して待機します。');
+          if (state.audioContextOut) {
+            state.nextPlaybackTime = state.audioContextOut.currentTime;
+          }
+          if (state.aiSpeechEndTimer) {
+            clearTimeout(state.aiSpeechEndTimer);
+          }
+          state.isAiSpeaking = false;
+          if (!state.isDrawingMedia) {
+            setAvatarState('listening');
+          }
+          break;
+
         case 'new_media':
           displayGeneratedMedia(data);
           break;
@@ -2889,7 +2908,8 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     if (state.aiSpeechEndTimer) {
       clearTimeout(state.aiSpeechEndTimer);
     }
-    const remainingMs = Math.max(150, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 180);
+    // スピーカーからの出音・部屋の反響をマイクが拾ってバージイン誤検知するのを防ぐため、+500msの余韻マージン（Echo Hangover）を確保
+    const remainingMs = Math.max(250, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 500);
     state.aiSpeechEndTimer = setTimeout(() => {
       state.isAiSpeaking = false;
       if (!state.isDrawingMedia) {

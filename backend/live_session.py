@@ -230,19 +230,18 @@ class LiveSessionManager:
                             logger.debug(f"audio_stream_end notice: {eos_err}")
 
                     elif msg_type == "user_transcript":
-                        # ブラウザ音声認識で確定した字幕テキストをGeminiへ補足通知し、聞き間違いを防止
+                        # ブラウザ音声認識で確定した字幕テキスト（話題記録・情景抽出用）
                         user_text = data.get("text", "").strip()
                         if user_text:
-                            logger.info(f"User transcript received: {user_text}")
+                            logger.info(f"User transcript received (for history/scene): {user_text}")
                             # 挨拶やマイク確認以外の実質的な話題のみ履歴に追加
                             noise_words = ["聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト", "こんにちは", "こんばんは", "おはよう"]
                             if not any(w in user_text for w in noise_words) and len(user_text) >= 2:
                                 self.discussed_topics.append(user_text)
-                            try:
-                                await session.send(input=f"（ユーザーの発言：「{user_text}」※この発言内容にそのまま直接答えてください）", end_of_turn=True)
-                            except Exception as tr_err:
-                                logger.debug(f"Transcript forward notice: {tr_err}")
-                            # ※ここでは勝手な自動描画は絶対に呼び出さない（クォータ保護・会話優先）
+                            # ※リアルタイム音声ストリーム（PCM）がGemini Liveに常時送られているため、
+                            # ここで session.send(..., end_of_turn=True) を送ると「1回の発言が2回重複入力」となり、
+                            # AIが返答中に自分の発話を途中で強制中断して混乱する原因となる。
+                            # したがって、ここではテキストによる会話ターン割り込みは送信しない。
 
                     elif msg_type == "request_confirmed_draw":
                         # ユーザーが画面上で「🎨 今の話題を絵にする」または「🎨 はい、描いてください」を押した時のみ描画を実行
@@ -290,6 +289,15 @@ class LiveSessionManager:
 
                     server_content = response.server_content
                     if server_content is not None:
+                        # ユーザーによる発話割り込み（バージイン検知時）
+                        if getattr(server_content, "interrupted", False):
+                            logger.info("Gemini Live response interrupted by user speech.")
+                            self.current_ai_turn_text = ""
+                            await self.websocket.send_json({
+                                "type": "interrupted"
+                            })
+                            continue
+
                         model_turn = server_content.model_turn
                         if model_turn is not None:
                             for part in model_turn.parts:
