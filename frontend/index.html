@@ -20,7 +20,7 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="対話修正忠実反映・夕焼けアーベントロート対応">v20261027_23</span>
+      <span class="app-version-badge" title="描き直し確実反映・クロスフェード更新・修正フォールバック強化">v20261028_01</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
@@ -176,6 +176,12 @@
           <!-- 動画メディア（シネマグラフ表示） -->
           <video id="memoryVideo" class="memory-visual hidden" autoplay loop muted playsinline></video>
 
+          <!-- 更新完了トースト演出 -->
+          <div id="canvasUpdateToast" class="canvas-update-toast hidden">
+            <span class="toast-sparkle">✨</span>
+            <span id="canvasUpdateToastText">情景を新しく描き直しました</span>
+          </div>
+
           <!-- エラー通知バナー（API制限・クォータ上限・通信エラーをわかりやすく表示） -->
           <div id="canvasErrorBanner" class="canvas-error-banner hidden" role="alert">
             <span class="error-banner-icon">⚠️</span>
@@ -234,6 +240,14 @@
                 <span class="tag-placeholder">お話から特徴を集めています</span>
               </div>
             </div>
+          </div>
+
+          <!-- 描き直し・修正アクション（絵が描かれた後にいつでも最新情景で描き直せる） -->
+          <div class="collector-refine-bar hidden" id="collectorRefineBar">
+            <span class="refine-hint" id="refineHintText">💡 「夕焼けにして」「お花を置いて」と声で修正するか、ボタンを押して描き直せます</span>
+            <button type="button" class="btn-refine-now" id="btnRefineNow" title="集まった情景や修正指示を反映して再描画します">
+              🎨 この内容で描き直す
+            </button>
           </div>
 
           <!-- 確認・描画アクションバナー（AIが描画を確認した時や情景がまとまった時に出現） -->

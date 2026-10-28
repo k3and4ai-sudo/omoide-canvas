@@ -42,6 +42,9 @@
     sessionMemories: [],            // セッション中に生成した絵画リスト
     lastDrawnUtterance: '',         // 最後にキャンバス描画した発話テキスト
     drawSequenceId: 0,              // 描画リクエスト連番（最新の発話を常に優先反映するため）
+    hasDrawnImage: false,           // キャンバスに1枚以上の絵が描画完了しているか
+    lastUserModification: '',       // 直近で検知された修正指示テキスト
+    pendingRefineTimer: null,       // AIツール呼び出しスキップ時の描き直し自動トリガータイマー
     currentAiTurnTranscript: '',    // Gemini直結時のAI字幕バッファ
     currentUserTurnTranscript: '',  // Gemini直結時のユーザー字幕バッファ
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
@@ -118,6 +121,8 @@
     drawingOverlay: document.getElementById('drawingOverlay'),
     drawingText: document.getElementById('drawingText'),
     drawingSubtext: document.getElementById('drawingSubtext'),
+    canvasUpdateToast: document.getElementById('canvasUpdateToast'),
+    canvasUpdateToastText: document.getElementById('canvasUpdateToastText'),
     canvasErrorBanner: document.getElementById('canvasErrorBanner'),
     canvasErrorTitle: document.getElementById('canvasErrorTitle'),
     canvasErrorDesc: document.getElementById('canvasErrorDesc'),
@@ -147,6 +152,9 @@
     collectorActionText: document.getElementById('collectorActionText'),
     btnConfirmDraw: document.getElementById('btnConfirmDraw'),
     btnMoreTalk: document.getElementById('btnMoreTalk'),
+    collectorRefineBar: document.getElementById('collectorRefineBar'),
+    btnRefineNow: document.getElementById('btnRefineNow'),
+    refineHintText: document.getElementById('refineHintText'),
 
     // ステータスバー
     statusDot: document.getElementById('statusDot'),
@@ -596,6 +604,9 @@
       state.sceneCollector.status = 'collecting';
       renderSceneCollectorUI();
     });
+    dom.btnRefineNow?.addEventListener('click', () => {
+      executeRefineDrawing();
+    });
 
     // エラーバナー閉じる ＆ クォータ詳細モニター
     dom.btnDismissError?.addEventListener('click', dismissCanvasError);
@@ -787,6 +798,12 @@ ${levelRules}
       state.sessionStartTime = Date.now();
       state.sessionTopics = [];
       state.sessionMemories = [];
+      state.hasDrawnImage = false;
+      state.lastUserModification = '';
+      if (state.pendingRefineTimer) {
+        clearTimeout(state.pendingRefineTimer);
+        state.pendingRefineTimer = null;
+      }
       resetSceneCollector();
       updateStatus('マイクと接続を準備しています...', true);
       dom.btnSessionToggle.disabled = true;
@@ -1125,8 +1142,15 @@ ${levelRules}
             logDiag(`AIツール呼び出し: ${funcName} (${args.japanese_title || ''})`);
 
             if (funcName === 'generate_memory_visual' || funcName === 'refine_memory_visual') {
+              if (state.pendingRefineTimer) {
+                clearTimeout(state.pendingRefineTimer);
+                state.pendingRefineTimer = null;
+              }
               const isRefinement = (funcName === 'refine_memory_visual');
               const feedback = args.user_feedback || '';
+              if (feedback) {
+                state.lastUserModification = feedback;
+              }
               const rawTitle = args.japanese_title || (isRefinement && feedback ? `${feedback}に修正` : '') || state.sceneCollector.topic || '思い出の情景';
               const rawElements = args.updated_visual_elements || args.visual_elements || feedback || '';
 
@@ -1254,6 +1278,10 @@ ${levelRules}
     if (state.speechDebounceTimer) {
       clearTimeout(state.speechDebounceTimer);
       state.speechDebounceTimer = null;
+    }
+    if (state.pendingRefineTimer) {
+      clearTimeout(state.pendingRefineTimer);
+      state.pendingRefineTimer = null;
     }
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -1633,11 +1661,17 @@ ${levelRules}
               const profile = state.currentProfile || DEFAULT_USER_PROFILE;
               const nickname = formatUserNickname(profile.call_name);
               updateSceneCollectorFromText(textToSend, 'user');
+              const mod = detectModificationIntent(textToSend);
               const isApproval = /^(はい|うん|ええ|お願いします|お願い|描いて|そうして|やってみて)/.test(textToSend.trim()) ||
                                  /(描いて|絵にして|キャンバス)/.test(textToSend);
               setTimeout(async () => {
                 if (!state.isSessionActive) return;
-                if (isApproval && state.sceneCollector.status !== 'drawing') {
+                if (mod) {
+                  const reply = `かしこまりました！「${mod}」ですね、早速描き直してみますね。`;
+                  dom.aiTranscriptText.textContent = reply;
+                  speakTextWithWebSpeech(reply);
+                  await executeRefineDrawing(mod);
+                } else if (isApproval && state.sceneCollector.status !== 'drawing') {
                   const reply = `承知いたしました！それでは「${state.sceneCollector.topic || '思い出'}」の情景をキャンバスに描いてみますね。`;
                   dom.aiTranscriptText.textContent = reply;
                   speakTextWithWebSpeech(reply);
@@ -2798,23 +2832,62 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
   // ============================================================================
   // 生成メディアのクロスフェード表示 ＆ 環境音連動
   // ============================================================================
+  function showCanvasUpdateToast(title = '') {
+    if (!dom.canvasUpdateToast) return;
+    if (dom.canvasUpdateToastText) {
+      dom.canvasUpdateToastText.textContent = title ? `✨ 「${title}」を描き直しました` : '✨ 新しい情景を描き直しました';
+    }
+    dom.canvasUpdateToast.classList.remove('hidden');
+    setTimeout(() => {
+      dom.canvasUpdateToast?.classList.add('hidden');
+    }, 3800);
+  }
+
   function displayGeneratedMedia(mediaData) {
     state.isDrawingMedia = false;
+    state.hasDrawnImage = true;
     dom.canvasPlaceholder.classList.add('hidden');
     dom.drawingOverlay.classList.add('hidden');
 
-    dom.captionTitle.textContent = mediaData.title || '思い出の情景';
+    const title = mediaData.title || '思い出の情景';
+    dom.captionTitle.textContent = title;
     dom.captionTag.textContent = mediaData.media_format === 'video' ? '動く絵本' : '水彩画';
+
+    // 「今の話題を絵にする」ボタンのラベルを「この内容で描き直す」へ更新
+    if (dom.btnDrawCurrentTopic) {
+      dom.btnDrawCurrentTopic.textContent = '🎨 この内容で描き直す';
+      dom.btnDrawCurrentTopic.title = '現在の会話や修正指示を反映して絵を描き直します';
+    }
 
     if (mediaData.media_format === 'video') {
       dom.memoryImage.classList.add('hidden');
       dom.memoryVideo.src = mediaData.media_url;
       dom.memoryVideo.classList.remove('hidden');
       dom.memoryVideo.play();
+      showCanvasUpdateToast(title);
     } else {
       dom.memoryVideo.classList.add('hidden');
-      dom.memoryImage.src = mediaData.media_url;
-      dom.memoryImage.classList.remove('hidden');
+      
+      // 画像クロスフェード：新しい画像をプリロードしてからスムーズに更新
+      const newImg = new Image();
+      newImg.onload = () => {
+        dom.memoryImage.classList.remove('refreshing');
+        dom.memoryImage.src = mediaData.media_url;
+        dom.memoryImage.classList.remove('hidden');
+        showCanvasUpdateToast(title);
+      };
+      newImg.onerror = () => {
+        dom.memoryImage.classList.remove('refreshing');
+        dom.memoryImage.src = mediaData.media_url;
+        dom.memoryImage.classList.remove('hidden');
+        showCanvasUpdateToast(title);
+      };
+
+      // 既存の絵が表示されていたらリフレッシュ演出（フェードアウト）
+      if (!dom.memoryImage.classList.contains('hidden') && dom.memoryImage.src) {
+        dom.memoryImage.classList.add('refreshing');
+      }
+      newImg.src = mediaData.media_url;
     }
 
     // 環境音の再生
@@ -2827,7 +2900,8 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       stopSyntheticAmbientSound();
     }
 
-    logDiag(`新しい情景を表示しました: ${mediaData.title}`);
+    renderSceneCollectorUI();
+    logDiag(`新しい情景を表示しました: ${title}`);
   }
 
   function getSoundLabel(type) {
@@ -3089,6 +3163,111 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     renderSceneCollectorUI();
   }
 
+  // ============================================================================
+  // ユーザーの絵の修正・変更指示（「夕焼けにして」「花を置いて」等）の検知・自動実行
+  // ============================================================================
+  function detectModificationIntent(rawText) {
+    if (!rawText || typeof rawText !== 'string') return null;
+    const clean = rawText.replace(/[「」『』]/g, '').trim();
+    if (clean.length < 2) return null;
+
+    // 1. 明示的な修正・変更リクエスト構文
+    const modPatterns = [
+      /(.+?)(?:にしてほしい|にしてくれ|にしてください|にしてよ|にして|に変えてほしい|に変えてくれ|に変えてください|に変えて|に描き直して|に描きかえて)/,
+      /(.+?)(?:を追加して|を足して|を置いて|を入れて|を描いてほしい|を描き足して|を描いてみて)/,
+      /(?:もっと|もうちょっと)(.+?)(?:にして|に変えて|を描いて)/,
+      /(?:もう一度|もう一回|新しく)(.+?)(?:描いて|描き直して)/,
+      /(.+?)(?:夕焼け|夕暮れ|夕方|朝焼け|夜空|星空|雪景色|雨|青空|秋|春|夏|冬)(?:にして|に変えて)?/
+    ];
+
+    for (const pat of modPatterns) {
+      const match = clean.match(pat);
+      if (match) {
+        return clean;
+      }
+    }
+
+    // 単独の修正キーワード
+    if (/(描き直して|描きかえて|書き直して|直して|変えてみて|ちょっと違う|前の絵と違う)/.test(clean)) {
+      return clean;
+    }
+
+    // すでに絵が表示されている状態での単体名詞・特徴修正
+    if (state.hasDrawnImage && /(夕焼け|夕暮れ|夕日|茜色|アーベントロート|赤い花|花瓶|花を|コーヒー|珈琲|クリームソーダ|雪山|紅葉)/.test(clean)) {
+      return clean;
+    }
+
+    return null;
+  }
+
+  function handleUserModificationDetected(feedback) {
+    if (!feedback) return;
+    logDiag(`ユーザーの絵の修正指示を検知: 「${feedback}」`);
+    state.lastUserModification = feedback;
+    state.sceneCollector.details.add(`【修正指示】${feedback}`);
+
+    if (dom.refineHintText) {
+      dom.refineHintText.textContent = `💡 修正指示: 「${feedback}」を反映します`;
+    }
+    renderSceneCollectorUI();
+
+    // 既存のフォールバックタイマーがあればリセット
+    if (state.pendingRefineTimer) {
+      clearTimeout(state.pendingRefineTimer);
+      state.pendingRefineTimer = null;
+    }
+
+    // Gemini Live API が相槌だけでツール（refine_memory_visual）をスキップした場合の安全網（2.2秒）
+    state.pendingRefineTimer = setTimeout(async () => {
+      state.pendingRefineTimer = null;
+      if (!state.isSessionActive && !state.hasDrawnImage) return;
+      logDiag(`Gemini Live ツール未発行のため、クライアントから描き直しを自動実行: 「${feedback}」`);
+      await executeRefineDrawing(feedback);
+    }, 2200);
+  }
+
+  async function executeRefineDrawing(feedbackText = '') {
+    if (state.pendingRefineTimer) {
+      clearTimeout(state.pendingRefineTimer);
+      state.pendingRefineTimer = null;
+    }
+
+    const feedback = feedbackText || state.lastUserModification || '修正・描き直し';
+    state.lastUserModification = feedback;
+    state.isDrawingMedia = false;
+    dismissCanvasError();
+
+    const sc = state.sceneCollector;
+    const baseTopic = sc.topic || sc.place || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '思い出の風景');
+    const title = `${feedback.slice(0, 12)}に修正`;
+
+    // 収集されたディテールに修正指示を最優先で組み込む
+    const detailsArray = Array.from(sc.details);
+    const elementsParts = [
+      `【最優先の修正指示（直前の絵をこの通りに変更・描き直し）】: ${feedback}`,
+      `【元の情景話題】: ${baseTopic}`
+    ];
+    if (sc.place) elementsParts.push(`【場所・舞台】: ${sc.place}`);
+    if (sc.seasonWeather) elementsParts.push(`【季節・天候・時間】: ${sc.seasonWeather}`);
+    if (detailsArray.length > 0) elementsParts.push(`【情景ディテール】: ${detailsArray.join('、')}`);
+    elementsParts.push('温かい水彩画風、昭和のノスタルジー、澄み切った光と優しい陰影');
+
+    const combinedElements = elementsParts.join(' / ');
+
+    sc.status = 'drawing';
+    renderSceneCollectorUI();
+    setAvatarState('drawing');
+
+    logDiag(`修正指示を反映して再描画を開始: 「${title}」`);
+    await triggerSceneDrawingForTopic(title, combinedElements, {
+      is_refinement: true,
+      user_feedback: feedback
+    });
+
+    sc.status = 'drawn';
+    renderSceneCollectorUI();
+  }
+
   function updateSceneCollectorFromText(text, speaker = 'user') {
     if (!text || typeof text !== 'string') return;
     const clean = text.replace(/[「」『』]/g, '').trim();
@@ -3115,6 +3294,13 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
     // 2. ユーザーからの明示的描画リクエスト・または合意返答の検知
     if (speaker === 'user') {
+      // 絵の修正・描き直し指示を最優先で検知
+      const modIntent = detectModificationIntent(clean);
+      if (modIntent) {
+        handleUserModificationDetected(modIntent);
+        return;
+      }
+
       const isExplicitDrawCommand = /(絵を描いて|絵にして|絵描いて|描いてみて|キャンバスに描いて|キャンバスに出して|キャンバスに映して|描いてください)/.test(clean);
       const isApproval = /^(はい|うん|ええ|お願いします|お願い|描いて|そうして|やってみて|いいよ|ぜひ|頼む|おねがい)/.test(clean) ||
                          /^(そうですね|そうしよう|描こう)/.test(clean);
@@ -3281,14 +3467,38 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       }
     }
 
+    // 描き直し・修正アクションバー（絵が描かれた後に常設表示）
+    if (dom.collectorRefineBar) {
+      if (state.hasDrawnImage && sc.status !== 'drawing') {
+        dom.collectorRefineBar.classList.remove('hidden');
+        if (dom.refineHintText) {
+          if (state.lastUserModification) {
+            dom.refineHintText.textContent = `💡 修正指示: 「${state.lastUserModification}」を反映して描き直せます`;
+          } else {
+            dom.refineHintText.textContent = '💡 「夕焼けにして」「お花を置いて」と声で修正するか、ボタンを押して描き直せます';
+          }
+        }
+        if (dom.btnRefineNow) {
+          dom.btnRefineNow.disabled = false;
+        }
+      } else if (sc.status === 'drawing') {
+        if (dom.btnRefineNow) dom.btnRefineNow.disabled = true;
+      } else {
+        dom.collectorRefineBar.classList.add('hidden');
+      }
+    }
+
     // ワンタップ描画ボタンのラベル・スタイル更新
     if (dom.btnDrawCurrentTopic) {
-      if (sc.status === 'ready' || sc.status === 'confirming') {
-        dom.btnDrawCurrentTopic.textContent = '✨ 準備OK！この情景を描く';
-        dom.btnDrawCurrentTopic.style.background = 'linear-gradient(135deg, #d97706 0%, #b45309 100%)';
-      } else if (sc.status === 'drawing') {
+      if (sc.status === 'drawing') {
         dom.btnDrawCurrentTopic.textContent = '🎨 描画中...';
         dom.btnDrawCurrentTopic.style.background = '';
+      } else if (sc.status === 'ready' || sc.status === 'confirming') {
+        dom.btnDrawCurrentTopic.textContent = '✨ 準備OK！この情景を描く';
+        dom.btnDrawCurrentTopic.style.background = 'linear-gradient(135deg, #d97706 0%, #b45309 100%)';
+      } else if (state.hasDrawnImage) {
+        dom.btnDrawCurrentTopic.textContent = '🎨 この内容で描き直す';
+        dom.btnDrawCurrentTopic.style.background = 'linear-gradient(135deg, #2c5e4f 0%, #1f4539 100%)';
       } else {
         dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
         dom.btnDrawCurrentTopic.style.background = '';
@@ -3329,9 +3539,9 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
   }
 
   // ============================================================================
-  // 動作診断・テストツール ＆ ワンタップ「今の話題を絵にする」
+  // 動作診断・テストツール ＆ ワンタップ「今の話題を絵にする・描き直す」
   // ============================================================================
-  async function triggerSceneDrawingForTopic(rawTopic, customElements = '') {
+  async function triggerSceneDrawingForTopic(rawTopic, customElements = '', extraOptions = {}) {
     const cleanTopic = (rawTopic || '').replace(/[「」]/g, '').trim() || '思い出の風景';
     state.lastDrawnUtterance = cleanTopic;
     const mySeqId = ++state.drawSequenceId;
@@ -3354,12 +3564,21 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       dom.btnDrawCurrentTopic.disabled = true;
       dom.btnDrawCurrentTopic.textContent = '🎨 描画中...';
     }
+    if (dom.btnRefineNow) {
+      dom.btnRefineNow.disabled = true;
+      dom.btnRefineNow.textContent = '🎨 描画中...';
+    }
     try {
+      const isRefinement = !!extraOptions.is_refinement || !!extraOptions.user_feedback || !!state.lastUserModification;
+      const feedback = (extraOptions.user_feedback || state.lastUserModification || '').trim();
+
       const art = await generateStandaloneMemoryArtifact({
         scene_type: 'past_memory',
         japanese_title: shortTitle,
         visual_elements: combinedElements,
-        ambient_sound: 'autumn_insects'
+        ambient_sound: 'autumn_insects',
+        is_refinement: isRefinement,
+        user_feedback: feedback
       });
       // より新しい発話の描画が走っていなければキャンバスに反映
       if (mySeqId === state.drawSequenceId) {
@@ -3385,8 +3604,11 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       if (mySeqId === state.drawSequenceId) {
         if (dom.btnDrawCurrentTopic) {
           dom.btnDrawCurrentTopic.disabled = false;
-          renderSceneCollectorUI();
         }
+        if (dom.btnRefineNow) {
+          dom.btnRefineNow.disabled = false;
+        }
+        renderSceneCollectorUI();
         setAvatarState(state.isSessionActive ? 'listening' : 'idle');
       }
     }
@@ -3410,9 +3632,17 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     }
 
     const finalTopic = candidate || '思い出の風景';
-    logDiag(`「今の話題を絵にする」ボタンが押されました: 「${finalTopic}」の描画を即座に開始します。`);
-    state.sessionTopics.push(finalTopic);
-    await executeConfirmedDrawing(finalTopic);
+
+    // すでに絵が描かれている場合は「描き直し（修正）」として実行！
+    if (state.hasDrawnImage) {
+      logDiag(`「この内容で描き直す」が押されました: 「${finalTopic}」の再描画を開始します。`);
+      state.sessionTopics.push(finalTopic);
+      await executeRefineDrawing(finalTopic);
+    } else {
+      logDiag(`「今の話題を絵にする」が押されました: 「${finalTopic}」の描画を即座に開始します。`);
+      state.sessionTopics.push(finalTopic);
+      await executeConfirmedDrawing(finalTopic);
+    }
   }
 
   async function testGenerateSampleVisual() {

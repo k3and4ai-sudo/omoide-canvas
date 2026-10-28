@@ -580,7 +580,13 @@ body {
   object-fit: contain;
   background-color: #fdfbf7;
   border-radius: 8px;
-  transition: opacity 0.6s ease-in-out;
+  transition: opacity 0.5s ease-in-out, transform 0.5s ease-out;
+  opacity: 1;
+}
+
+.memory-visual.refreshing {
+  opacity: 0.15;
+  transform: scale(0.985);
 }
 
 .memory-visual.hidden {
@@ -640,6 +646,45 @@ body {
 }
 
 /* 描画エラー通知バナー */
+/* キャンバス更新通知トースト（クロスフェード切り替え時に表示） */
+.canvas-update-toast {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(43, 76, 56, 0.92);
+  color: #f7fafc;
+  padding: 8px 18px;
+  border-radius: 20px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
+  font-family: 'Kiwi Maru', serif;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 12;
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+  animation: toastFadeIn 0.3s ease-out;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+@keyframes toastFadeIn {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.canvas-update-toast.hidden {
+  display: none !important;
+  opacity: 0;
+}
+
+.toast-sparkle {
+  font-size: 16px;
+  color: #fbd38d;
+}
+
 .canvas-error-banner {
   position: absolute;
   top: 16px;
@@ -1013,6 +1058,60 @@ body {
 .btn-more-talk:hover {
   background: #fdfaf5;
   border-color: #baa487;
+}
+
+/* 描き直し・修正アクションバー（絵が描かれた後に表示） */
+.collector-refine-bar {
+  background: linear-gradient(135deg, #f0f7f4 0%, #e3f0ea 100%);
+  border: 1.5px solid #a3c9b8;
+  border-radius: 10px;
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  animation: bannerSlideDown 0.3s ease-out;
+}
+
+.collector-refine-bar.hidden {
+  display: none !important;
+}
+
+.refine-hint {
+  font-size: 13px;
+  color: #244e40;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+}
+
+.btn-refine-now {
+  background: linear-gradient(135deg, #2c5e4f 0%, #1f4539 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius-full);
+  padding: 7px 16px;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(44, 94, 79, 0.28);
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-refine-now:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.1);
+  box-shadow: 0 4px 10px rgba(44, 94, 79, 0.38);
+}
+
+.btn-refine-now:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
 }
 
 /* キャプションバー */
