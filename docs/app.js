@@ -22,9 +22,9 @@
 
   // 周囲音・テレビ音声カットモード別のRMSしきい値設定（高齢者の発話テンポ・息継ぎに最適化したミリ秒基準）
   const NOISE_GATE_PRESETS = {
-    normal: { rms: 0.0022, vuThresholdPercent: 3, hangoverMs: 380, eosSilenceMs: 1400, label: '標準感度' },
-    tv_cut: { rms: 0.0045, vuThresholdPercent: 7, hangoverMs: 380, eosSilenceMs: 1500, label: 'テレビ・周囲音カット' },
-    strict: { rms: 0.0100, vuThresholdPercent: 14, hangoverMs: 320, eosSilenceMs: 1600, label: '強めカット' }
+    normal: { rms: 0.0015, vuThresholdPercent: 2, hangoverMs: 400, eosSilenceMs: 1400, label: '標準感度（おすすめ）' },
+    tv_cut: { rms: 0.0030, vuThresholdPercent: 5, hangoverMs: 380, eosSilenceMs: 1500, label: 'テレビ・周囲音カット' },
+    strict: { rms: 0.0080, vuThresholdPercent: 12, hangoverMs: 320, eosSilenceMs: 1600, label: '強めカット' }
   };
 
   const state = {
@@ -49,7 +49,7 @@
     currentUserTurnTranscript: '',  // Gemini直結時のユーザー字幕バッファ
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
     aiSpeechEndTimer: null,         // AI発話終了判定タイマー
-    noiseGateMode: 'tv_cut',        // 現在のテレビ・周囲音カットモード
+    noiseGateMode: 'normal',        // 現在の周囲音対策モード（標準感度デフォルト）
     lastVoiceActiveTime: 0,         // 近接音声がゲートを通過した最終時刻（Web Speech API連動用）
     lastDrawTriggerTime: 0,         // 前回描画トリガー時刻（多重実行・クォータ枯渇防止用）
     speechDebounceTimer: null,      // 発話終了待ちデバウンスタイマー
@@ -879,6 +879,14 @@ ${levelRules}
       state.sessionTopics = [];
       state.sessionMemories = [];
       state.isAiSpeaking = true; // 接続〜最初の挨拶完了までマイクを完全保護（エコー遮断ガード）
+      if (state.aiSpeechEndTimer) clearTimeout(state.aiSpeechEndTimer);
+      state.aiSpeechEndTimer = setTimeout(() => {
+        // 5秒経過しても音声再生が始まらない場合の安全マイク解放
+        if (state.isAiSpeaking && (!state.audioContextOut || state.nextPlaybackTime <= state.audioContextOut.currentTime)) {
+          state.isAiSpeaking = false;
+          if (!state.isDrawingMedia) setAvatarState('listening');
+        }
+      }, 5000);
       clearCanvasState();
       updateStatus('マイクと接続を準備しています...', true);
       dom.btnSessionToggle.disabled = true;
