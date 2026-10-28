@@ -30,6 +30,7 @@ from backend.models import (
 from backend.prompt_builder import build_system_instruction
 from backend.media_generator import (
     generate_memory_visual_artifact,
+    generate_memory_visual_artifact_sync,
     refine_memory_visual_artifact
 )
 from backend.emergency_tool import dispatch_emergency_alert
@@ -229,36 +230,39 @@ class LiveSessionManager:
                             logger.debug(f"audio_stream_end notice: {eos_err}")
 
                     elif msg_type == "user_transcript":
-                        # ブラウザ音声認識で確定した字幕テキストをGeminiへも補足通知し、聞き間違いを防止
+                        # ブラウザ音声認識で確定した字幕テキストをGeminiへ補足通知し、聞き間違いを防止
                         user_text = data.get("text", "").strip()
                         if user_text:
                             logger.info(f"User transcript received: {user_text}")
-                            self.discussed_topics.append(user_text)
+                            # 挨拶やマイク確認以外の実質的な話題のみ履歴に追加
+                            noise_words = ["聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト", "こんにちは", "こんばんは", "おはよう"]
+                            if not any(w in user_text for w in noise_words) and len(user_text) >= 2:
+                                self.discussed_topics.append(user_text)
                             try:
                                 await session.send(input=f"（ユーザーの発言：「{user_text}」※この発言内容にそのまま直接答えてください）", end_of_turn=True)
                             except Exception as tr_err:
                                 logger.debug(f"Transcript forward notice: {tr_err}")
+                            # ※ここでは勝手な自動描画は絶対に呼び出さない（クォータ保護・会話優先）
 
-                            # 相槌以外かつ新トピックの場合、キャンバスの絵を会話内容に合わせて更新
-                            is_ack = user_text in ["はい", "いいえ", "うん", "ええ", "ありがとう", "こんにちは", "そうです", "なるほど"]
-                            if not is_ack and len(user_text) >= 2 and user_text != self.last_drawn_topic:
-                                self.last_drawn_topic = user_text
-                                recent_ctx = "、".join(self.discussed_topics[-3:])
-                                await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
-                                asyncio.create_task(
-                                    self._handle_media_generation(session, "user_transcript_auto", {
-                                        "scene_type": "past_memory",
-                                        "japanese_title": user_text[:18],
-                                        "visual_elements": f"【最新の描きたい情景（最優先）】: {user_text} / 【会話の文脈】: {recent_ctx}",
-                                        "media_format": "image",
-                                        "ambient_sound": "autumn_insects"
-                                    })
-                                )
+                    elif msg_type == "request_confirmed_draw":
+                        # ユーザーが画面上で「🎨 今の話題を絵にする」または「🎨 はい、描いてください」を押した時のみ描画を実行
+                        draw_topic = data.get("topic") or (self.discussed_topics[-1] if self.discussed_topics else "思い出の情景")
+                        logger.info(f"User explicitly requested drawing for topic: {draw_topic}")
+                        await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
+                        asyncio.create_task(
+                            self._handle_media_generation(session, None, {
+                                "scene_type": "past_memory",
+                                "japanese_title": draw_topic[:18],
+                                "visual_elements": f"【ユーザーが語った情景（最優先）】: {draw_topic}",
+                                "media_format": "image",
+                                "ambient_sound": "autumn_insects"
+                            })
+                        )
 
                     elif msg_type == "test_generate_visual":
                         await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
                         asyncio.create_task(
-                            self._handle_media_generation(session, "test_call", {
+                            self._handle_media_generation(session, None, {
                                 "scene_type": "past_memory",
                                 "japanese_title": "秋の信州松本とりんご畑",
                                 "visual_elements": "夕暮れの信州松本のリンゴ畑、赤く実ったリンゴ、北アルプスの山並み",
@@ -319,22 +323,11 @@ class LiveSessionManager:
                         if output_trans and getattr(output_trans, "text", None):
                             if self.current_user_turn_text.strip():
                                 full_user_utt = self.current_user_turn_text.strip()
-                                self.discussed_topics.append(full_user_utt)
+                                noise_words = ["聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト", "こんにちは"]
+                                if not any(w in full_user_utt for w in noise_words) and len(full_user_utt) >= 2:
+                                    self.discussed_topics.append(full_user_utt)
                                 self.current_user_turn_text = ""
-                                # ユーザーの発話が完了しAIが返答を開始した時点で、会話内容に合わせてキャンバスを更新
-                                if len(full_user_utt) >= 3 and full_user_utt != self.last_drawn_topic and not self.tool_called_in_turn:
-                                    self.last_drawn_topic = full_user_utt
-                                    recent_ctx = "、".join(self.discussed_topics[-3:])
-                                    await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
-                                    asyncio.create_task(
-                                        self._handle_media_generation(session, "auto_call", {
-                                            "scene_type": "past_memory",
-                                            "japanese_title": full_user_utt[:18],
-                                            "visual_elements": f"【最新の描きたい情景（最優先）】: {full_user_utt} / 【会話の文脈】: {recent_ctx}",
-                                            "media_format": "image",
-                                            "ambient_sound": "autumn_insects"
-                                        })
-                                    )
+                                # ※毎ターンの勝手な自動描画は行わない（会話ストリームの継続とクォータを保護）
 
                             ai_txt = output_trans.text.strip()
                             if ai_txt:
@@ -347,26 +340,11 @@ class LiveSessionManager:
                                 })
 
                         if getattr(server_content, "turn_complete", False):
-                            turn_txt = self.current_ai_turn_text
                             self.current_ai_turn_text = ""
-                            if not self.tool_called_in_turn and any(kw in turn_txt for kw in ["描いてみます", "描きますね", "キャンバスに", "絵にしてみます"]):
-                                last_topic = self.discussed_topics[-1] if self.discussed_topics else "思い出の風景"
-                                logger.info(f"Auto-triggering visual generation from AI speech for topic: {last_topic}")
-                                await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
-                                asyncio.create_task(
-                                    self._handle_media_generation(session, "auto_call", {
-                                        "scene_type": "past_memory",
-                                        "japanese_title": f"{last_topic[:16]}の風景",
-                                        "visual_elements": f"{last_topic}、温かい水彩画の風景",
-                                        "media_format": "image",
-                                        "ambient_sound": "autumn_insects"
-                                    })
-                                )
-                            else:
-                                await self.websocket.send_json({
-                                    "type": "avatar_state",
-                                    "state": "listening"
-                                })
+                            await self.websocket.send_json({
+                                "type": "avatar_state",
+                                "state": "listening"
+                            })
                             self.tool_called_in_turn = False
 
                     # 2. ツール呼び出し（Function Call）
@@ -420,8 +398,11 @@ class LiveSessionManager:
                     break
                 await asyncio.sleep(0.2)
 
-    async def _handle_media_generation(self, session, call_id: str, args: dict):
-        """裏側での画像生成と結果通知"""
+    async def _handle_media_generation(self, session, call_id: Optional[str], args: dict):
+        """
+        裏側での画像生成と結果通知（完全非同期実行）
+        ※Gemini Live の音声・字幕ストリームを絶対にブロックしない（asyncio.to_thread使用）
+        """
         try:
             scene_type = SceneType(args.get("scene_type", "past_memory"))
             title = args.get("japanese_title", "思い出の風景")
@@ -429,8 +410,9 @@ class LiveSessionManager:
             media_format = MediaFormat(args.get("media_format", "image"))
             ambient_sound = AmbientSoundType(args.get("ambient_sound", "none"))
 
-            # メディア生成実行（安全ラッパー適用・セッション専用APIキーを使用）
-            artifact = await generate_memory_visual_artifact(
+            # メディア生成実行（別スレッドで実行しイベントループを1ミリ秒も止めない）
+            artifact = await asyncio.to_thread(
+                generate_memory_visual_artifact_sync,
                 user_id=self.profile.user_id,
                 dementia_level=self.profile.dementia_level,
                 scene_type=scene_type,
@@ -453,14 +435,17 @@ class LiveSessionManager:
                 "ambient_sound": artifact.ambient_sound_type.value
             })
 
-            # Gemini へツール完了を返答し、AIから「絵が浮かびましたよ」と話させる
-            if call_id != "auto_call" and call_id != "test_call":
-                await session.send(input=types.LiveClientToolResponse(
-                    function_responses=[types.FunctionResponse(
-                        id=call_id,
-                        response={"output": {"status": "displayed_on_canvas", "title": title}}
-                    )]
-                ))
+            # 正規のGemini Live ツール呼び出しIDの場合のみツールレスポンスを返送
+            if call_id and not call_id.startswith(("auto_", "user_", "test_")):
+                try:
+                    await session.send(input=types.LiveClientToolResponse(
+                        function_responses=[types.FunctionResponse(
+                            id=call_id,
+                            response={"output": {"status": "displayed_on_canvas", "title": title}}
+                        )]
+                    ))
+                except Exception as t_err:
+                    logger.debug(f"Tool response delivery notice: {t_err}")
 
         except Exception as e:
             logger.error(f"Error handling media generation: {e}", exc_info=True)

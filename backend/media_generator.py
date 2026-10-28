@@ -232,7 +232,32 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
     logger.info(f"Dynamic theme watercolor image generated for '{title}' at {file_path}")
 
 
-async def generate_memory_visual_artifact(
+def sanitize_scene_elements(title: str, elements: str) -> Tuple[str, str]:
+    """
+    挨拶やマイクテストなどのノイズ単語を除去し、絵画にふさわしい情景タイトルと要素に整形する
+    """
+    noise_patterns = [
+        "聞こえてますか", "聞こえますか", "聞こえる", "もしもし", "あーあー", "テスト",
+        "マイク", "こんにちは", "こんばんは", "おはよう", "ありがとう", "はい", "いいえ"
+    ]
+    clean_title = title
+    for p in noise_patterns:
+        clean_title = clean_title.replace(p, "")
+    clean_title = clean_title.strip(" 、。？！!?")
+    if not clean_title or len(clean_title) < 2:
+        clean_title = "懐かしい思い出の情景"
+
+    clean_elements = elements
+    for p in noise_patterns:
+        clean_elements = clean_elements.replace(p, "")
+    clean_elements = clean_elements.strip(" 、。？！!?")
+    if not clean_elements or len(clean_elements) < 3:
+        clean_elements = f"{clean_title}、心温まる水彩画の風景"
+
+    return clean_title, clean_elements
+
+
+def generate_memory_visual_artifact_sync(
     user_id: str,
     dementia_level: DementiaLevel,
     scene_type: SceneType,
@@ -243,59 +268,61 @@ async def generate_memory_visual_artifact(
     api_key: Optional[str] = None
 ) -> MemoryArtifact:
     """
-    情景から安全プロンプトを構築し、Imagen 3 (または Veo) で非同期生成して保存する。
-    セッションで入力された api_key を優先使用する。
+    情景から安全プロンプトを構築し、Imagen 3 / Gemini 3.8 Flash SVG / 水彩フォールバックで生成して保存する（同期実行版）。
+    メインの asyncio イベントループを止めないよう、asyncio.to_thread から呼び出される。
     """
+    import re
+    clean_title, clean_elements = sanitize_scene_elements(japanese_title, visual_elements)
     memory_id = str(uuid.uuid4())[:8]
-    final_prompt = build_safe_prompt(dementia_level, scene_type, visual_elements, media_format)
+    final_prompt = build_safe_prompt(dementia_level, scene_type, clean_elements, media_format)
 
     file_name = f"{memory_id}.png"
     file_path = MEDIA_DIR / file_name
     effective_api_key = (api_key or "").strip()
 
-    logger.info(f"Generating visual artifact: {japanese_title} (ID: {memory_id})")
+    logger.info(f"Generating visual artifact (sync): {clean_title} (ID: {memory_id})")
     logger.info(f"Applied Prompt: {final_prompt}")
 
     image_generated = False
     if effective_api_key and effective_api_key != "your_gemini_api_key_here":
-        client = genai.Client(api_key=effective_api_key)
+        try:
+            client = genai.Client(api_key=effective_api_key)
 
-        # 1. Nano Banana 系 (Gemini Flash Image: gemini-2.5-flash-image / gemini-2.0-flash-exp-image-generation) を試行
-        nano_banana_models = [
-            "gemini-2.5-flash-image",
-            "gemini-2.0-flash-exp-image-generation",
-        ]
-        for nb_model in nano_banana_models:
-            if image_generated:
-                break
-            try:
-                nb_res = client.models.generate_content(
-                    model=nb_model,
-                    contents=final_prompt,
-                    config=types.GenerateContentConfig(
-                        response_modalities=["TEXT", "IMAGE"]
-                    ),
-                )
-                if nb_res and nb_res.candidates:
-                    parts = nb_res.candidates[0].content.parts or []
-                    for part in parts:
-                        if part.inline_data and part.inline_data.data:
-                            with open(file_path, "wb") as f:
-                                f.write(part.inline_data.data)
-                            image_generated = True
-                            logger.info(f"Nano Banana ({nb_model}) generation succeeded: {file_path}")
-                            break
-            except Exception as nb_err:
-                logger.warning(f"Nano Banana ({nb_model}) skipped: {nb_err}")
+            # 1. Nano Banana 系 (Gemini Flash Image: gemini-2.5-flash-image / gemini-2.0-flash-exp-image-generation) を試行
+            nano_banana_models = [
+                "gemini-2.5-flash-image",
+                "gemini-2.0-flash-exp-image-generation",
+            ]
+            for nb_model in nano_banana_models:
+                if image_generated:
+                    break
+                try:
+                    nb_res = client.models.generate_content(
+                        model=nb_model,
+                        contents=final_prompt,
+                        config=types.GenerateContentConfig(
+                            response_modalities=["TEXT", "IMAGE"]
+                        ),
+                    )
+                    if nb_res and nb_res.candidates:
+                        parts = nb_res.candidates[0].content.parts or []
+                        for part in parts:
+                            if part.inline_data and part.inline_data.data:
+                                with open(file_path, "wb") as f:
+                                    f.write(part.inline_data.data)
+                                image_generated = True
+                                logger.info(f"Nano Banana ({nb_model}) generation succeeded: {file_path}")
+                                break
+                except Exception as nb_err:
+                    logger.warning(f"Nano Banana ({nb_model}) skipped: {nb_err}")
 
-        # 1. Gemini 3.8 Flash によるオーダーメイドSVG水彩画生成を最優先試行
-        # (外部サーバーのArtists limitや混雑に左右されず、ユーザーの会話内容通りの情景を100%動的に描画する)
-        if not image_generated:
-            try:
-                svg_prompt = f"""あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
+            # 2. Gemini 3.8 Flash によるオーダーメイドSVG水彩画生成
+            if not image_generated:
+                try:
+                    svg_prompt = f"""あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
-{visual_elements}
+{clean_elements}
 
 【最重要造形ルール】
 1. ユーザーがお話しした具体的なモチーフ・特徴・造形（山、夕焼け、海、学校、教室、喫茶店、花、木製テーブル、窓、雪、川など）を100%忠実に描いてください。
@@ -306,33 +333,35 @@ async def generate_memory_visual_artifact(
 3. 人物のリアルな顔は描かず、後ろ姿や遠景、あるいは情景・静物を美しく描いてください。
 4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（```xml 等）は一切含めないでください。"""
 
-                svg_res = client.models.generate_content(
-                    model="gemini-3.8-flash",
-                    contents=svg_prompt,
-                )
-                if svg_res and svg_res.text:
-                    svg_match = re.search(r"<svg[\s\S]*?</svg>", svg_res.text, re.IGNORECASE)
-                    if svg_match:
-                        svg_name = f"{memory_id}.svg"
-                        svg_path = MEDIA_DIR / svg_name
-                        with open(svg_path, "w", encoding="utf-8") as f:
-                            f.write(svg_match.group(0))
-                        file_name = svg_name
-                        image_generated = True
-                        logger.info(f"Gemini 3.8 Flash SVG generation succeeded: {svg_path}")
-            except Exception as svg_err:
-                logger.warning(f"Gemini 3.8 Flash SVG generation failed: {svg_err}")
+                    svg_res = client.models.generate_content(
+                        model="gemini-3.8-flash",
+                        contents=svg_prompt,
+                    )
+                    if svg_res and svg_res.text:
+                        svg_match = re.search(r"<svg[\s\S]*?</svg>", svg_res.text, re.IGNORECASE)
+                        if svg_match:
+                            svg_name = f"{memory_id}.svg"
+                            svg_path = MEDIA_DIR / svg_name
+                            with open(svg_path, "w", encoding="utf-8") as f:
+                                f.write(svg_match.group(0))
+                            file_name = svg_name
+                            image_generated = True
+                            logger.info(f"Gemini 3.8 Flash SVG generation succeeded: {svg_path}")
+                except Exception as svg_err:
+                    logger.warning(f"Gemini 3.8 Flash SVG generation failed: {svg_err}")
+        except Exception as client_err:
+            logger.warning(f"GenAI Client setup or generation error: {client_err}")
 
     if not image_generated:
-        generate_fallback_image(japanese_title, file_path, visual_elements)
+        generate_fallback_image(clean_title, file_path, clean_elements)
 
     artifact = MemoryArtifact(
         memory_id=memory_id,
         user_id=user_id,
         created_at=datetime.now(),
         scene_type=scene_type,
-        title=japanese_title,
-        visual_description=visual_elements,
+        title=clean_title,
+        visual_description=clean_elements,
         applied_prompt=final_prompt,
         media_format=media_format,
         media_url=f"/static/memories/{file_name}",
@@ -346,6 +375,33 @@ async def generate_memory_visual_artifact(
         json.dump(artifact.model_dump(mode="json"), f, ensure_ascii=False, indent=2)
 
     return artifact
+
+
+async def generate_memory_visual_artifact(
+    user_id: str,
+    dementia_level: DementiaLevel,
+    scene_type: SceneType,
+    japanese_title: str,
+    visual_elements: str,
+    media_format: MediaFormat = MediaFormat.IMAGE,
+    ambient_sound: AmbientSoundType = AmbientSoundType.NONE,
+    api_key: Optional[str] = None
+) -> MemoryArtifact:
+    """
+    非同期ラッパー関数（内部で asyncio.to_thread を使用してブロッキングを完全排除）
+    """
+    import asyncio
+    return await asyncio.to_thread(
+        generate_memory_visual_artifact_sync,
+        user_id=user_id,
+        dementia_level=dementia_level,
+        scene_type=scene_type,
+        japanese_title=japanese_title,
+        visual_elements=visual_elements,
+        media_format=media_format,
+        ambient_sound=ambient_sound,
+        api_key=api_key
+    )
 
 
 async def refine_memory_visual_artifact(
