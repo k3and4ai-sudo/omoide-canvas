@@ -106,9 +106,10 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
         (any(k in combined for k in ["山", "アルプス", "連峰", "峰", "岳", "頂", "鋭い", "尖", "険しい", "登山", "岩山", "富士山", "岩峰", "稜線"]) and not any(k in combined for k in ["校舎", "学校", "教室", "喫茶店", "カフェ", "海"]))
     )
     is_school = (not is_cafe and not is_classroom and not is_mountain) and any(k in combined for k in ["高校", "文化祭", "学園祭", "学校", "校舎", "中学", "小学校", "先生", "生徒", "部活", "運動会", "体育祭", "青春", "合唱", "模擬店"])
-    is_sea = (not is_mountain) and any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
-    is_sakura = (not is_mountain) and any(k in combined for k in ["桜", "春", "花", "菜の花", "入学", "卒業", "ピンク", "花見", "公園", "庭"])
-    is_snow = (not is_mountain) and any(k in combined for k in ["雪", "冬", "スキー", "こたつ", "正月", "北国", "白", "氷", "北海道", "新潟"])
+    is_walk = (not is_cafe and not is_classroom and not is_mountain and not is_school) and any(k in combined for k in ["散歩", "歩く", "お散歩", "買い物", "お買い物", "商店街", "市場", "食材", "八百屋", "魚屋", "道端", "路地", "並木道", "遊歩道", "通り", "夕方の道", "買い物袋"])
+    is_sea = (not is_mountain and not is_walk) and any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
+    is_sakura = (not is_mountain and not is_walk) and any(k in combined for k in ["桜", "春", "花", "菜の花", "入学", "卒業", "ピンク", "花見", "公園", "庭"])
+    is_snow = (not is_mountain and not is_walk) and any(k in combined for k in ["雪", "冬", "スキー", "こたつ", "正月", "北国", "白", "氷", "北海道", "新潟"])
     is_sunset = any(k in combined for k in ["夕焼け", "夕方", "夕日", "秋", "赤とんぼ", "紅葉", "もみじ", "祭り", "花火"])
 
     base_image = Image.new("RGB", (width, height), color=(253, 248, 242))
@@ -194,6 +195,36 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
             px = (i * 97 + 30) % 980
             py = (i * 67 + 20) % 720
             draw.ellipse([px, py, px + 10, py + 10], fill=(255, 255, 255))
+    elif is_walk:
+        # 買い物帰りの散歩道・商店街・並木道
+        draw.rectangle([0, 0, width, 480], fill=(219, 237, 243) if not is_sunset else (244, 162, 97))
+        if is_sunset:
+            draw.ellipse([700, 100, 840, 240], fill=(231, 111, 81))
+        else:
+            draw.ellipse([700, 90, 810, 200], fill=(255, 238, 173))
+        # 遠景の家並み
+        for h in range(7):
+            hx = 40 + h * 140
+            hy = 360 + (h % 3) * 16
+            draw.rectangle([hx, hy, hx + 110, 500], fill=(188, 140, 110) if is_sunset else (156, 142, 128))
+            draw.polygon([(hx - 10, hy), (hx + 55, hy - 45), (hx + 120, hy)], fill=(92, 61, 46) if is_sunset else (74, 85, 104))
+            draw.rectangle([hx + 20, hy + 25, hx + 50, hy + 55], fill=(255, 227, 168) if is_sunset else (226, 241, 255))
+        # 地面と散歩道
+        draw.rectangle([0, 500, width, height], fill=(147, 129, 112) if is_sunset else (140, 179, 105))
+        # 手前に広がる散歩道
+        draw.polygon([(460, 490), (560, 490), (840, height), (300, height)], fill=(213, 189, 175) if is_sunset else (240, 235, 216))
+        # レトロ木製電柱
+        draw.rectangle([200, 200, 218, 580], fill=(111, 78, 55))
+        draw.rectangle([160, 240, 260, 250], fill=(111, 78, 55))
+        draw.line([(0, 220), (200, 245), (1024, 210)], fill=(60, 40, 30), width=2)
+        # 並木
+        for tx in [90, 340, 820, 940]:
+            draw.rectangle([tx - 8, 430, tx + 8, 530], fill=(107, 76, 53))
+            draw.ellipse([tx - 55, 340, tx + 55, 460], fill=(127, 79, 36) if is_sunset else (45, 106, 79))
+        # 買い物袋（クラフト紙袋からネギ・パン）
+        draw.rounded_rectangle([180, 600, 270, 710], radius=8, fill=(221, 184, 146), outline=(176, 137, 104), width=3)
+        draw.polygon([(190, 600), (175, 520), (190, 515), (205, 600)], fill=(82, 183, 136)) # ネギ
+        draw.polygon([(215, 600), (235, 510), (255, 518), (242, 600)], fill=(200, 159, 120)) # パン
     elif is_sunset:
         draw.rectangle([0, 0, width, 450], fill=(244, 162, 97))
         draw.ellipse([720, 140, 860, 280], fill=(231, 111, 81))

@@ -364,7 +364,7 @@ class LiveSessionManager:
 
                                 # Gemini側へは直ちに情景記憶完了を返送（会話を継続させ、AIに確認を促す）
                                 await session.send(
-                                    input=types.LiveClientRealtimeToolResponse(
+                                    input=types.LiveClientToolResponse(
                                         function_responses=[
                                             types.FunctionResponse(
                                                 id=call_id,

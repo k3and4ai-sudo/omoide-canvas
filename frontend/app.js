@@ -51,6 +51,7 @@
     aiSpeechEndTimer: null,         // AI発話終了判定タイマー
     noiseGateMode: 'tv_cut',        // 現在のテレビ・周囲音カットモード
     lastVoiceActiveTime: 0,         // 近接音声がゲートを通過した最終時刻（Web Speech API連動用）
+    lastDrawTriggerTime: 0,         // 前回描画トリガー時刻（多重実行・クォータ枯渇防止用）
     speechDebounceTimer: null,      // 発話終了待ちデバウンスタイマー
     pendingUserTranscript: '',      // 送信待ちの発話テキスト
     audioContextIn: null,
@@ -1874,9 +1875,10 @@ ${levelRules}
       (/(山|アルプス|連峰|峰|岳|頂|鋭い|尖|険しい|登山|岩山|富士山|岩峰|稜線)/.test(combined) && !/(校舎|学校|教室|喫茶店|カフェ|海)/.test(combined))
     );
     const isSchool = !isCafe && !isClassroom && !isMountain && /(高校|文化祭|学園祭|学校|校舎|中学|小学校|先生|生徒|部活|運動会|体育祭|青春|合唱|バンド|模擬店)/.test(combined);
-    const isSea = !isMountain && /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
-    const isSakura = !isMountain && /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
-    const isSnow = !isMountain && /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
+    const isWalkShopping = !isCafe && !isClassroom && !isMountain && !isSchool && /(散歩|歩く|お散歩|買い物|お買い物|商店街|市場|食材|八百屋|魚屋|道端|路地|並木道|遊歩道|通り|夕方の道|買い物袋)/.test(combined);
+    const isSea = !isMountain && !isWalkShopping && /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
+    const isSakura = !isMountain && !isWalkShopping && /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
+    const isSnow = !isMountain && !isWalkShopping && /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
 
     // 1. テーマ別の水彩空・背景グラデーション
     const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
@@ -1891,6 +1893,18 @@ ${levelRules}
       skyGrad.addColorStop(0.35, '#63b3ed');
       skyGrad.addColorStop(0.7, '#bee3f8');
       skyGrad.addColorStop(1, '#ebf8ff');
+    } else if (isWalkShopping) {
+      if (isSunset) {
+        skyGrad.addColorStop(0, '#e76f51');
+        skyGrad.addColorStop(0.4, '#f4a261');
+        skyGrad.addColorStop(0.7, '#e9c46a');
+        skyGrad.addColorStop(1, '#faedcd');
+      } else {
+        skyGrad.addColorStop(0, '#64b5f6');
+        skyGrad.addColorStop(0.45, '#bbdefb');
+        skyGrad.addColorStop(0.75, '#e3f2fd');
+        skyGrad.addColorStop(1, '#d8f3dc');
+      }
     } else if (isCafe) {
       skyGrad.addColorStop(0, '#f3e5d8');
       skyGrad.addColorStop(0.65, '#e6ccb2');
@@ -2351,6 +2365,144 @@ ${levelRules}
         ctx.closePath();
         ctx.fill();
       }
+    } else if (isWalkShopping) {
+      // 買い物帰りののどかな散歩道・商店街・並木道
+      // 1. 遠景：昭和レトロな街並み・瓦屋根・優しい家並み
+      const houseBaseColor = isSunset ? '#b07d62' : '#9c8e80';
+      const roofColor = isSunset ? '#5c3d2e' : '#4a5568';
+      for (let h = 0; h < 7; h++) {
+        const hx = 30 + h * 115;
+        const hy = 290 + (h % 3) * 12;
+        const hw = 95;
+        const hh = 120;
+        ctx.fillStyle = houseBaseColor;
+        ctx.fillRect(hx, hy, hw, hh);
+        // 三角屋根
+        ctx.fillStyle = roofColor;
+        ctx.beginPath();
+        ctx.moveTo(hx - 8, hy);
+        ctx.lineTo(hx + hw / 2, hy - 40);
+        ctx.lineTo(hx + hw + 8, hy);
+        ctx.closePath();
+        ctx.fill();
+        // 優しい明かりの窓
+        ctx.fillStyle = isSunset ? '#ffe3a8' : '#e2f1ff';
+        ctx.fillRect(hx + 18, hy + 22, 28, 28);
+        ctx.fillRect(hx + 52, hy + 22, 28, 28);
+      }
+
+      // 2. 地面・草地（散歩道の両脇）
+      ctx.fillStyle = isSunset ? '#938170' : '#8cb369';
+      ctx.fillRect(0, 390, canvas.width, 210);
+
+      // 3. 散歩道（奥から手前へゆるやかに広がる遠近感のある道）
+      ctx.fillStyle = isSunset ? '#d5bdaf' : '#f0ebd8';
+      ctx.beginPath();
+      ctx.moveTo(420, 385);
+      ctx.quadraticCurveTo(440, 470, 720, 600);
+      ctx.lineTo(240, 600);
+      ctx.quadraticCurveTo(360, 480, 370, 385);
+      ctx.closePath();
+      ctx.fill();
+
+      // 道の陰影・石畳風テクスチャ
+      ctx.strokeStyle = isSunset ? 'rgba(141, 110, 99, 0.45)' : 'rgba(188, 160, 130, 0.45)';
+      ctx.lineWidth = 2;
+      for (let step = 0; step < 7; step++) {
+        const sy = 405 + step * 27;
+        const sw = 55 + step * 48;
+        const sx = 400 - sw / 2 + step * 16;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + sw, sy + 3);
+        ctx.stroke();
+      }
+
+      // 4. レトロな木製電柱と電線・温かい街灯
+      ctx.fillStyle = '#6f4e37';
+      ctx.fillRect(160, 160, 14, 300);
+      // 腕木
+      ctx.fillRect(130, 190, 75, 8);
+      ctx.fillRect(140, 225, 55, 6);
+      // 電線
+      ctx.strokeStyle = 'rgba(60, 40, 30, 0.65)';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(0, 175);
+      ctx.quadraticCurveTo(80, 205, 165, 190);
+      ctx.quadraticCurveTo(450, 240, 800, 170);
+      ctx.stroke();
+      // 街灯の丸いランプ
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(195, 230, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = isSunset ? 'rgba(255, 200, 80, 0.55)' : 'rgba(255, 240, 150, 0.4)';
+      ctx.beginPath();
+      ctx.arc(195, 230, 32, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 5. 並木道（散歩道の脇の緑豊かなケヤキ・桜・イチョウの木々）
+      const treeColors = isSunset ? ['#582f0e', '#7f4f24', '#936639'] : ['#2d6a4f', '#40916c', '#52b788'];
+      const treeX = [70, 280, 680, 770];
+      for (let i = 0; i < treeX.length; i++) {
+        const tx = treeX[i];
+        const ty = 340 + (i % 2) * 20;
+        // 幹
+        ctx.fillStyle = '#6b4c35';
+        ctx.fillRect(tx - 6, ty, 14, 85);
+        // 葉の茂み（水彩タッチのふんわりとした丸み）
+        ctx.fillStyle = treeColors[i % treeColors.length];
+        ctx.beginPath();
+        ctx.arc(tx, ty - 25, 48, 0, Math.PI * 2);
+        ctx.arc(tx - 26, ty - 10, 36, 0, Math.PI * 2);
+        ctx.arc(tx + 26, ty - 10, 36, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 6. 道端の可愛らしい草花（タンポポ・シロツメクサ・レンゲ）
+      const flowerColors = ['#f4a261', '#e76f51', '#e9c46a', '#ffffff', '#ffb5a7'];
+      for (let f = 0; f < 32; f++) {
+        const fx = 30 + (f * 24) % 740;
+        const fy = 410 + (f * 17) % 170;
+        // 散歩道の真ん中を避けて両脇に咲かせる
+        if (fx > 310 && fx < 580 && fy > 440) continue;
+        ctx.fillStyle = flowerColors[f % flowerColors.length];
+        ctx.beginPath();
+        ctx.arc(fx, fy, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 7. 手前の温かいモチーフ（買い物袋と食材・お散歩の温もり）
+      // クラフト紙袋
+      ctx.fillStyle = '#ddb892';
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(140, 480, 72, 85, [6, 6, 8, 8]) : ctx.rect(140, 480, 72, 85);
+      ctx.fill();
+      ctx.strokeStyle = '#b08968';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      // 買い物袋からのぞく新鮮な食材（青ネギとバゲット）
+      // ネギ
+      ctx.fillStyle = '#52b788';
+      ctx.beginPath();
+      ctx.moveTo(150, 480);
+      ctx.lineTo(135, 420);
+      ctx.lineTo(146, 415);
+      ctx.lineTo(158, 480);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(146, 455, 12, 28);
+      // フランスパン・バゲット
+      ctx.fillStyle = '#c89f78';
+      ctx.beginPath();
+      ctx.moveTo(170, 480);
+      ctx.lineTo(185, 410);
+      ctx.lineTo(202, 415);
+      ctx.lineTo(192, 480);
+      ctx.closePath();
+      ctx.fill();
     } else {
       ctx.fillStyle = isSnow ? '#b8c9d9' : isSakura ? '#95b8a6' : '#81b29a';
       ctx.beginPath();
@@ -3285,6 +3437,11 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
                          /^(そうですね|そうしよう|描こう)/.test(clean);
 
       if (isExplicitDrawCommand || (sc.isAwaitingConfirmation && isApproval)) {
+        const now = Date.now();
+        if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
+          logDiag(`描画中またはクールダウン中のため、重複トリガーをスキップ: 「${clean}」`);
+          return;
+        }
         logDiag(`ユーザーの描画合意・指示を検知: 「${clean}」`);
         sc.isAwaitingConfirmation = false;
         executeConfirmedDrawing();
@@ -3483,8 +3640,13 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
   }
 
   async function executeConfirmedDrawing(manualTopic = '') {
-    // ユーザーからの直接指示・承諾時はビジーロックを解除して即時実行
-    state.isDrawingMedia = false;
+    const now = Date.now();
+    if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
+      logDiag('描画中または直前に描画開始されたため、二重実行・クォータ枯渇を防止しました。');
+      return;
+    }
+    state.lastDrawTriggerTime = now;
+    state.isDrawingMedia = true;
     dismissCanvasError();
 
     const sc = state.sceneCollector;
