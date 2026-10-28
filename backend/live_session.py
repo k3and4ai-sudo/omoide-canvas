@@ -366,33 +366,45 @@ class LiveSessionManager:
                             logger.info(f"Tool call received: {func_name} with args: {args}")
 
                             if func_name in ("generate_memory_visual", "refine_memory_visual"):
-                                title = args.get("japanese_title", "思い出の風景")
-                                elements = args.get("visual_elements", "")
-                                logger.info(f"AI tool call: {func_name} for '{title}'. Verifying confirmation guard...")
+                                title = args.get("japanese_title") or args.get("title") or (self.discussed_topics[-1] if self.discussed_topics else "思い出の風景")
+                                elements = args.get("visual_elements") or args.get("scene_description") or args.get("description", "")
+                                logger.info(f"AI tool call: {func_name} for '{title}' (elements: '{elements}'). Generating visual artifact...")
 
-                                # Gemini側へは直ちに情景記憶完了を返送（会話を継続させ、AIに確認を促す）
-                                await session.send(
-                                    input=types.LiveClientToolResponse(
-                                        function_responses=[
-                                            types.FunctionResponse(
-                                                id=call_id,
-                                                name=func_name,
-                                                response={
-                                                    "status": "scene_recorded_awaiting_approval",
-                                                    "title": title,
-                                                    "message": "情景情報を記憶しました。ご本人に「キャンバスに描いてみましょうか？」と尋ねて確認してください。"
-                                                }
-                                            )
-                                        ]
+                                # 1. Gemini側へ直ちにツール完了を返送（会話を継続させ、AIが自然にリアクションできるようにする）
+                                try:
+                                    await session.send(
+                                        input=types.LiveClientToolResponse(
+                                            function_responses=[
+                                                types.FunctionResponse(
+                                                    id=call_id,
+                                                    name=func_name,
+                                                    response={
+                                                        "status": "success",
+                                                        "title": title,
+                                                        "message": f"「{title}」の情景をキャンバスに描きました。"
+                                                    }
+                                                )
+                                            ]
+                                        )
                                     )
-                                )
+                                except Exception as resp_err:
+                                    logger.warning(f"Error sending tool response to Gemini: {resp_err}")
 
-                                # クライアントに確認待ちイベントを通知（画面上に確認バナーと情景メモを表示）
+                                # 2. アバターを描画中状態に変更
                                 await self.websocket.send_json({
-                                    "type": "scene_ready_for_confirmation",
-                                    "title": title,
-                                    "visual_elements": elements
+                                    "type": "avatar_state",
+                                    "state": "drawing"
                                 })
+
+                                # 3. 完全非同期（asyncio.to_thread）で絵画生成を実行しクライアントへ配信（音声ストリームを1ミリ秒も止めない）
+                                if func_name == "refine_memory_visual":
+                                    asyncio.create_task(
+                                        self._handle_media_refinement(session, call_id, args)
+                                    )
+                                else:
+                                    asyncio.create_task(
+                                        self._handle_media_generation(session, call_id, args)
+                                    )
 
                             elif func_name == "trigger_emergency_alert":
                                 asyncio.create_task(
@@ -413,8 +425,8 @@ class LiveSessionManager:
         """
         try:
             scene_type = SceneType(args.get("scene_type", "past_memory"))
-            title = args.get("japanese_title", "思い出の風景")
-            elements = args.get("visual_elements", "")
+            title = args.get("japanese_title") or args.get("title") or (self.discussed_topics[-1] if self.discussed_topics else "思い出の風景")
+            elements = args.get("visual_elements") or args.get("scene_description") or args.get("description", "")
             media_format = MediaFormat(args.get("media_format", "image"))
             ambient_sound = AmbientSoundType(args.get("ambient_sound", "none"))
 

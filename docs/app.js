@@ -200,6 +200,11 @@
       if (raw) {
         const data = JSON.parse(raw);
         if (data && data.date === getTodayKey()) {
+          // 429制限発生から15分以上経過していれば自動解除して再試行可能にする
+          if (data.isRateLimited && data.rateLimitedAt && (Date.now() - data.rateLimitedAt > 15 * 60 * 1000)) {
+            data.isRateLimited = false;
+            data.lastErrorMsg = '';
+          }
           return data;
         }
       }
@@ -210,6 +215,7 @@
       remainingReported: null,
       limitReported: DAILY_GEMINI_LIMIT,
       isRateLimited: false,
+      rateLimitedAt: 0,
       lastStatus: 200,
       lastErrorMsg: ''
     };
@@ -237,7 +243,8 @@
 
     if (status === 429) {
       tracker.isRateLimited = true;
-      tracker.lastErrorMsg = '429 Quota Exceeded (本日上限)';
+      tracker.rateLimitedAt = Date.now();
+      tracker.lastErrorMsg = '429 Quota Exceeded (一時制限)';
     } else if (status >= 400) {
       tracker.lastErrorMsg = errorMsg || `HTTP ${status}`;
     }
@@ -299,9 +306,22 @@
       `・推計残りリクエスト: 約 ${remaining} 回`,
       `・最新ステータス: ${tracker.isRateLimited ? '⚠️ 429 レート制限中 (ローカル水彩画に自動切替)' : '✅ 正常稼働中'}`,
       tracker.lastErrorMsg ? `・最新のエラー: ${tracker.lastErrorMsg}` : '',
-      '\n※万が一クォータ上限（429）に達した場合でも、端末内のローカル高精細水彩画エンジンが自動で即座に代行描画します。'
+      '\n※万が一クォータ上限（429）に達した場合でも、端末内のローカル高精細水彩画エンジンが自動で即座に代行描画します。',
+      tracker.isRateLimited ? '\n【OK】を押すとクォータ制限表示をリセットして通常モードで再試行します。' : ''
     ].filter(Boolean).join('\n');
-    alert(msg);
+
+    if (tracker.isRateLimited) {
+      if (confirm(msg)) {
+        tracker.isRateLimited = false;
+        tracker.rateLimitedAt = 0;
+        tracker.lastErrorMsg = '';
+        saveQuotaTracker(tracker);
+        renderQuotaUI();
+        logDiag('クォータ状態をリセットしました。');
+      }
+    } else {
+      alert(msg);
+    }
   }
 
   const DEFAULT_USER_PROFILE = {
@@ -1879,7 +1899,8 @@ ${levelRules}
       (/(山|アルプス|連峰|峰|岳|頂|鋭い|尖|険しい|登山|岩山|富士山|岩峰|稜線)/.test(combined) && !/(校舎|学校|教室|喫茶店|カフェ|海)/.test(combined))
     );
     const isSchool = !isCafe && !isClassroom && !isMountain && /(高校|文化祭|学園祭|学校|校舎|中学|小学校|先生|生徒|部活|運動会|体育祭|青春|合唱|バンド|模擬店)/.test(combined);
-    const isWalkShopping = !isCafe && !isClassroom && !isMountain && !isSchool && /(散歩|歩く|お散歩|買い物|お買い物|商店街|市場|食材|八百屋|魚屋|道端|路地|並木道|遊歩道|通り|夕方の道|買い物袋)/.test(combined);
+    const isPetDog = !isCafe && !isClassroom && !isMountain && !isSchool && /(犬|いぬ|イヌ|マルチーズ|柴犬|ポメラニアン|プードル|わんちゃん|ワンちゃん|子犬|猫|ねこ|ペット|座敷|畳)/.test(combined);
+    const isWalkShopping = !isCafe && !isClassroom && !isMountain && !isSchool && !isPetDog && /(散歩|歩く|お散歩|買い物|お買い物|商店街|市場|食材|八百屋|魚屋|道端|路地|並木道|遊歩道|通り|夕方の道|買い物袋)/.test(combined);
     const isSea = !isMountain && !isWalkShopping && /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
     const isSakura = !isMountain && !isWalkShopping && /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
     const isSnow = !isMountain && !isWalkShopping && /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
@@ -1897,6 +1918,10 @@ ${levelRules}
       skyGrad.addColorStop(0.35, '#63b3ed');
       skyGrad.addColorStop(0.7, '#bee3f8');
       skyGrad.addColorStop(1, '#ebf8ff');
+    } else if (isPetDog) {
+      skyGrad.addColorStop(0, '#fbf7ee');
+      skyGrad.addColorStop(0.55, '#f5ebe0');
+      skyGrad.addColorStop(1, '#e3d5ca');
     } else if (isWalkShopping) {
       if (isSunset) {
         skyGrad.addColorStop(0, '#e76f51');
@@ -2369,6 +2394,160 @@ ${levelRules}
         ctx.closePath();
         ctx.fill();
       }
+    } else if (isPetDog) {
+      // 和室・座敷の温かい光と、元気に遊ぶ白いマルチーズ
+      // 1. 部屋の壁と障子（左奥）
+      ctx.fillStyle = '#f7f1e3';
+      ctx.fillRect(0, 0, canvas.width, 360);
+
+      // 障子
+      ctx.fillStyle = '#fffdf5';
+      ctx.fillRect(80, 50, 320, 290);
+      ctx.strokeStyle = '#8b5e3c';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(80, 50, 320, 290);
+
+      // 格子
+      ctx.lineWidth = 1.5;
+      for (let gx = 130; gx < 400; gx += 50) {
+        ctx.beginPath();
+        ctx.moveTo(gx, 50);
+        ctx.lineTo(gx, 340);
+        ctx.stroke();
+      }
+      for (let gy = 90; gy < 340; gy += 45) {
+        ctx.beginPath();
+        ctx.moveTo(80, gy);
+        ctx.lineTo(400, gy);
+        ctx.stroke();
+      }
+
+      // 障子から差し込む温かい陽光
+      const sunLight = ctx.createLinearGradient(120, 50, 480, 550);
+      sunLight.addColorStop(0, 'rgba(255, 248, 220, 0.45)');
+      sunLight.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      ctx.fillStyle = sunLight;
+      ctx.beginPath();
+      ctx.moveTo(80, 340);
+      ctx.lineTo(400, 340);
+      ctx.lineTo(580, 600);
+      ctx.lineTo(0, 600);
+      ctx.closePath();
+      ctx.fill();
+
+      // 2. 畳（座敷）
+      ctx.fillStyle = '#c5d19b';
+      ctx.fillRect(0, 340, canvas.width, 260);
+
+      // 畳の縁（へり）
+      ctx.fillStyle = '#2f4f4f';
+      ctx.fillRect(0, 450, canvas.width, 8);
+      ctx.fillRect(0, 570, canvas.width, 8);
+
+      // 畳の目
+      ctx.strokeStyle = 'rgba(180, 192, 140, 0.6)';
+      ctx.lineWidth = 1;
+      for (let ty = 360; ty < 600; ty += 20) {
+        if (ty === 450 || ty === 570) continue;
+        ctx.beginPath();
+        ctx.moveTo(0, ty);
+        ctx.lineTo(canvas.width, ty);
+        ctx.stroke();
+      }
+
+      // 3. お父さんの温かい座布団（右奥）
+      ctx.fillStyle = '#9e474f';
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(560, 380, 140, 95, [14, 14, 14, 14]) : ctx.rect(560, 380, 140, 95);
+      ctx.fill();
+      ctx.strokeStyle = '#782d34';
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      // 座布団の四隅の房（ふさ）
+      ctx.fillStyle = '#f4a261';
+      for (const [fx, fy] of [[560, 380], [700, 380], [560, 475], [700, 475]]) {
+        ctx.beginPath();
+        ctx.arc(fx, fy, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 4. 座敷の中央で元気に走る・立つ愛らしい白いマルチーズ
+      const dogX = 380;
+      const dogY = 410;
+
+      // ふわふわの白い胴体
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#e2e2e2';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(dogX + 50, dogY + 45, 55, 38, -0.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // ふわふわの頭
+      ctx.beginPath();
+      ctx.arc(dogX, dogY + 15, 34, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // 垂れた愛らしい耳
+      ctx.fillStyle = '#faf6f0';
+      ctx.beginPath();
+      ctx.ellipse(dogX - 24, dogY + 22, 12, 24, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(dogX + 24, dogY + 22, 12, 24, -0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // つぶらな黒い瞳（ハイライト入り）
+      ctx.fillStyle = '#222222';
+      ctx.beginPath();
+      ctx.arc(dogX - 10, dogY + 12, 4.5, 0, Math.PI * 2);
+      ctx.arc(dogX + 10, dogY + 12, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(dogX - 11.5, dogY + 10.5, 1.5, 0, Math.PI * 2);
+      ctx.arc(dogX + 8.5, dogY + 10.5, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 小さな黒い鼻とお口
+      ctx.fillStyle = '#222222';
+      ctx.beginPath();
+      ctx.ellipse(dogX, dogY + 22, 4, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#444444';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(dogX - 3, dogY + 26, 3, 0, Math.PI);
+      ctx.arc(dogX + 3, dogY + 26, 3, 0, Math.PI);
+      ctx.stroke();
+
+      // 元気な足（トコトコ走る・立つポーズ）
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#e2e2e2';
+      ctx.lineWidth = 1.5;
+      for (const [lx, ly] of [[dogX - 8, dogY + 70], [dogX + 22, dogY + 72], [dogX + 68, dogY + 68], [dogX + 92, dogY + 66]]) {
+        ctx.beginPath();
+        ctx.ellipse(lx, ly, 8, 14, 0.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      // ピンと立った嬉しいふわふわのしっぽ
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.ellipse(dogX + 105, dogY + 20, 14, 22, 0.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // 首元の赤いリボン
+      ctx.fillStyle = '#e63946';
+      ctx.beginPath();
+      ctx.arc(dogX, dogY + 42, 6, 0, Math.PI * 2);
+      ctx.fill();
     } else if (isWalkShopping) {
       // 買い物帰りののどかな散歩道・商店街・並木道
       // 1. 遠景：昭和レトロな街並み・瓦屋根・優しい家並み
@@ -3452,9 +3631,9 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
         return;
       }
 
-      const isExplicitDrawCommand = /(絵を描いて|絵にして|絵描いて|描いてみて|キャンバスに描いて|キャンバスに出して|キャンバスに映して|描いてください)/.test(clean);
-      const isApproval = /^(はい|うん|ええ|お願いします|お願い|描いて|そうして|やってみて|いいよ|ぜひ|頼む|おねがい)/.test(clean) ||
-                         /^(そうですね|そうしよう|描こう)/.test(clean);
+      const isExplicitDrawCommand = /(絵を描いて|絵を書いて|絵にして|絵描いて|絵書いて|描いてみて|書いてみて|キャンバスに描いて|キャンバスに書いて|キャンバスに出して|キャンバスに映して|描いてください|書いてください|描いて|書いて)/.test(clean);
+      const isApproval = /^(はい|うん|ええ|お願いします|お願い|描いて|書いて|そうして|やってみて|いいよ|ぜひ|頼む|おねがい)/.test(clean) ||
+                         /^(そうですね|そうしよう|描こう|書こう)/.test(clean);
 
       if (isExplicitDrawCommand || (sc.isAwaitingConfirmation && isApproval)) {
         const now = Date.now();
@@ -3470,7 +3649,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     }
 
     // 3. 話題・テーマの抽出
-    const topicRegex = /(文化祭|模擬店|運動会|山登り|登山|ハイキング|お祭り|祭り|旅行|卒業式|入学式|紅葉狩り|お花見|散歩|ドライブ|仕事|授業|畑仕事|収穫)/;
+    const topicRegex = /(犬|いぬ|イヌ|マルチーズ|柴犬|ペット|子犬|猫|ねこ|散歩|お買い物|買い物|商店街|文化祭|模擬店|運動会|山登り|登山|ハイキング|お祭り|祭り|旅行|卒業式|入学式|紅葉狩り|お花見|ドライブ|仕事|授業|畑仕事|収穫)/;
     const tm = clean.match(topicRegex);
     if (tm) {
       if (!sc.topic || tm[0].length >= sc.topic.length) {
@@ -3480,7 +3659,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     }
 
     // 4. 場所・舞台の抽出
-    const placeRegex = /(北アルプス|南アルプス|中央アルプス|槍ヶ岳|穂高岳|常念岳|富士山|八ヶ岳|美ヶ原|上高地|信州|松本|喫茶店の中|喫茶店|カフェ|純喫茶|教室の中|教室|校舎|学校|体育館|校庭|海|海岸|砂浜|波打ち際|港|駅|ホーム|公園|商店街|田んぼ|畑|リンゴ畑|りんご畑|庭|神社|お寺|故郷|実家)/;
+    const placeRegex = /(座敷|和室|畳|お部屋|家の中|リビング|北アルプス|南アルプス|中央アルプス|槍ヶ岳|穂高岳|常念岳|富士山|八ヶ岳|美ヶ原|上高地|信州|松本|喫茶店の中|喫茶店|カフェ|純喫茶|教室の中|教室|校舎|学校|体育館|校庭|海|海岸|砂浜|波打ち際|港|駅|ホーム|公園|商店街|田んぼ|畑|リンゴ畑|りんご畑|庭|神社|お寺|故郷|実家)/;
     const pm = clean.match(placeRegex);
     if (pm) {
       sc.place = pm[0];
@@ -3502,6 +3681,8 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
     // 6. 情景ディテール（事物・要素）の抽出
     const detailList = [
+      // ペット・動物・和室
+      'マルチーズ', '元気な白い犬', '白い子犬', '犬', 'ワンちゃん', 'ペット', '畳', '障子', '座敷', '座布団', '温かい光',
       // 山・自然
       '鋭い岩峰', '険しい岩肌', '切り立った岩', '尖った山頂', '白い雪渓', '連峰', '山脈', '岩肌', '雲海', '青空', '緑の山並み', 'ハイマツ',
       // 喫茶店・カフェ
@@ -3520,6 +3701,22 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
         }
       }
     });
+
+    // 犬・マルチーズが話題なら自動補強
+    if (/(マルチーズ|犬|いぬ|イヌ|子犬|ワンちゃん)/.test(clean)) {
+      if (!sc.details.has('元気に遊ぶマルチーズ')) {
+        sc.details.add('元気に遊ぶマルチーズ');
+        changed = true;
+      }
+      if (!sc.place) {
+        sc.place = '座敷の中';
+        changed = true;
+      }
+      if (!sc.topic) {
+        sc.topic = '飼っていたマルチーズ';
+        changed = true;
+      }
+    }
 
     // 山が話題なら鋭い岩峰・雪渓を自動補強
     if (/(槍ヶ岳|北アルプス|鋭い山|岩山|アルプス)/.test(clean) || (sc.place && /(槍ヶ岳|北アルプス)/.test(sc.place))) {

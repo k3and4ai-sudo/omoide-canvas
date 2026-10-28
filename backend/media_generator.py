@@ -106,7 +106,8 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
         (any(k in combined for k in ["山", "アルプス", "連峰", "峰", "岳", "頂", "鋭い", "尖", "険しい", "登山", "岩山", "富士山", "岩峰", "稜線"]) and not any(k in combined for k in ["校舎", "学校", "教室", "喫茶店", "カフェ", "海"]))
     )
     is_school = (not is_cafe and not is_classroom and not is_mountain) and any(k in combined for k in ["高校", "文化祭", "学園祭", "学校", "校舎", "中学", "小学校", "先生", "生徒", "部活", "運動会", "体育祭", "青春", "合唱", "模擬店"])
-    is_walk = (not is_cafe and not is_classroom and not is_mountain and not is_school) and any(k in combined for k in ["散歩", "歩く", "お散歩", "買い物", "お買い物", "商店街", "市場", "食材", "八百屋", "魚屋", "道端", "路地", "並木道", "遊歩道", "通り", "夕方の道", "買い物袋"])
+    is_pet = (not is_cafe and not is_classroom and not is_mountain and not is_school) and any(k in combined for k in ["犬", "いぬ", "イヌ", "マルチーズ", "柴犬", "ポメラニアン", "プードル", "わんちゃん", "ワンちゃん", "子犬", "猫", "ねこ", "ペット", "座敷", "畳"])
+    is_walk = (not is_cafe and not is_classroom and not is_mountain and not is_school and not is_pet) and any(k in combined for k in ["散歩", "歩く", "お散歩", "買い物", "お買い物", "商店街", "市場", "食材", "八百屋", "魚屋", "道端", "路地", "並木道", "遊歩道", "通り", "夕方の道", "買い物袋"])
     is_sea = (not is_mountain and not is_walk) and any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
     is_sakura = (not is_mountain and not is_walk) and any(k in combined for k in ["桜", "春", "花", "菜の花", "入学", "卒業", "ピンク", "花見", "公園", "庭"])
     is_snow = (not is_mountain and not is_walk) and any(k in combined for k in ["雪", "冬", "スキー", "こたつ", "正月", "北国", "白", "氷", "北海道", "新潟"])
@@ -195,6 +196,42 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
             px = (i * 97 + 30) % 980
             py = (i * 67 + 20) % 720
             draw.ellipse([px, py, px + 10, py + 10], fill=(255, 255, 255))
+    elif is_pet:
+        # 和室・座敷の温かい光と、楽しそうに遊ぶ白いマルチーズ
+        # 1. 部屋の壁と障子
+        draw.rectangle([0, 0, width, 440], fill=(247, 241, 227))
+        # 障子（格子の枠）
+        draw.rectangle([100, 80, 520, 440], fill=(255, 253, 245), outline=(139, 94, 60), width=6)
+        for gx in range(160, 520, 60):
+            draw.line([(gx, 80), (gx, 440)], fill=(139, 94, 60), width=2)
+        for gy in range(130, 440, 50):
+            draw.line([(100, gy), (520, gy)], fill=(139, 94, 60), width=2)
+        # 2. 畳（座敷）
+        draw.rectangle([0, 440, width, height], fill=(197, 209, 155))
+        # 畳の目・縁（へり）
+        draw.line([(0, 580), (width, 580)], fill=(47, 79, 79), width=8) # 畳の縁
+        for ty in [480, 530, 640, 700]:
+            draw.line([(0, ty), (width, ty)], fill=(180, 192, 140), width=1)
+        # 3. 座敷を元気に駆け回る白いマルチーズ
+        # 体
+        draw.ellipse([450, 480, 590, 570], fill=(255, 255, 255), outline=(225, 225, 225), width=2)
+        # 頭
+        draw.ellipse([410, 430, 490, 510], fill=(255, 255, 255), outline=(225, 225, 225), width=2)
+        # 垂れたふわふわの耳
+        draw.ellipse([395, 450, 425, 520], fill=(250, 245, 240))
+        draw.ellipse([475, 450, 505, 520], fill=(250, 245, 240))
+        # つぶらな黒い目と鼻
+        draw.ellipse([430, 460, 442, 472], fill=(30, 30, 30))
+        draw.ellipse([460, 460, 472, 472], fill=(30, 30, 30))
+        draw.ellipse([445, 478, 457, 488], fill=(30, 30, 30))
+        # ちょこんとした足
+        draw.ellipse([430, 550, 460, 585], fill=(255, 255, 255))
+        draw.ellipse([480, 550, 510, 585], fill=(255, 255, 255))
+        draw.ellipse([540, 550, 570, 585], fill=(255, 255, 255))
+        # 楽しそうなふわふわのしっぽ（上を向いている）
+        draw.ellipse([570, 460, 610, 510], fill=(255, 255, 255))
+        # お父さんの座布団
+        draw.rounded_rectangle([720, 500, 880, 620], radius=16, fill=(158, 71, 79), outline=(120, 45, 52), width=3)
     elif is_walk:
         # 買い物帰りの散歩道・商店街・並木道
         draw.rectangle([0, 0, width, 480], fill=(219, 237, 243) if not is_sunset else (244, 162, 97))
