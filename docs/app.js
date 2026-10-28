@@ -130,6 +130,8 @@
     btnDismissError: document.getElementById('btnDismissError'),
     captionTitle: document.getElementById('captionTitle'),
     captionTag: document.getElementById('captionTag'),
+    captionFallbackBadge: document.getElementById('captionFallbackBadge'),
+    captionFallbackNotice: document.getElementById('captionFallbackNotice'),
     btnClearCanvas: document.getElementById('btnClearCanvas'),
     btnDrawCurrentTopic: document.getElementById('btnDrawCurrentTopic'),
     soundIndicator: document.getElementById('soundIndicator'),
@@ -842,6 +844,12 @@ ${levelRules}
     }
     if (dom.captionTag) {
       dom.captionTag.textContent = '思い出';
+    }
+    if (dom.captionFallbackBadge) {
+      dom.captionFallbackBadge.classList.add('hidden');
+    }
+    if (dom.captionFallbackNotice) {
+      dom.captionFallbackNotice.classList.add('hidden');
     }
     if (dom.btnDrawCurrentTopic) {
       dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
@@ -2723,9 +2731,9 @@ ${levelRules}
     }
 
     // 4. 和紙風短冊（タイトル札）を左上に描画
-    const bx = 28, by = 28, bw = 420, bh = 82;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
-    ctx.strokeStyle = '#e07a5f';
+    const bx = 28, by = 28, bw = 480, bh = 94;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.94)';
+    ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     if (ctx.roundRect) {
@@ -2736,14 +2744,18 @@ ${levelRules}
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = '#e07a5f';
-    ctx.font = 'bold 14px "Noto Sans JP", sans-serif';
-    ctx.fillText('🎨 おもいでキャンバス 水彩画', bx + 16, by + 28);
+    ctx.fillStyle = '#d97706';
+    ctx.font = 'bold 13px "Noto Sans JP", sans-serif';
+    ctx.fillText('🎨 おもいでキャンバス（※簡易水彩画・制限中）', bx + 16, by + 24);
 
-    const cleanTitle = (title || '思い出の風景').replace(/\n/g, ' ').slice(0, 20);
+    const cleanTitle = (title || '思い出の風景').replace(/\n/g, ' ').slice(0, 18);
     ctx.fillStyle = '#2c5e4f';
-    ctx.font = 'bold 21px "Noto Sans JP", sans-serif';
-    ctx.fillText(cleanTitle, bx + 16, by + 60);
+    ctx.font = 'bold 20px "Noto Sans JP", sans-serif';
+    ctx.fillText(cleanTitle, bx + 16, by + 52);
+
+    ctx.fillStyle = '#b45309';
+    ctx.font = '11px "Noto Sans JP", sans-serif';
+    ctx.fillText('※AIクォータ制限のため簡易イラストです。会話内容と異なる場合があります。', bx + 16, by + 78);
 
     return canvas.toDataURL('image/jpeg', 0.88);
   }
@@ -2824,10 +2836,12 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     }
 
     // Step 3: テーマ別水彩画キャンバス描画フォールバック（外部APIエラー・クォータ制限時も100%確実に絵を出す！）
+    let isFallback = false;
     if (!mediaDataUrl) {
       if (dom.drawingSubtext) dom.drawingSubtext.textContent = '3/3: 高精細ローカル水彩画エンジンで描画中...';
       logDiag('ローカル水彩画エンジンでフォールバック描画を実行します。');
       mediaDataUrl = await renderFallbackWatercolorDataUrl(title, elements);
+      isFallback = true;
     }
 
     const artifact = {
@@ -2839,7 +2853,8 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       visual_description: elements,
       media_format: 'image',
       media_url: mediaDataUrl,
-      ambient_sound: ambientSound
+      ambient_sound: ambientSound,
+      is_fallback: isFallback
     };
 
     state.sessionMemories.push(artifact);
@@ -3199,7 +3214,23 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
     const title = mediaData.title || '思い出の情景';
     dom.captionTitle.textContent = title;
-    dom.captionTag.textContent = mediaData.media_format === 'video' ? '動く絵本' : '水彩画';
+
+    const isFallback = !!mediaData.is_fallback;
+    if (isFallback) {
+      dom.captionTag.textContent = '簡易水彩画';
+      dom.captionFallbackBadge?.classList.remove('hidden');
+      dom.captionFallbackNotice?.classList.remove('hidden');
+      showCanvasError(
+        '⚠️ 端末内の簡易水彩画を表示中（会話内容と異なります）',
+        'Google AI Studioのクォータ制限（429）のため、端末内の簡易水彩画を表示しています。会話の内容とは全く違う絵が表示されてしまいます。',
+        true
+      );
+    } else {
+      dom.captionTag.textContent = mediaData.media_format === 'video' ? '動く絵本' : '水彩画';
+      dom.captionFallbackBadge?.classList.add('hidden');
+      dom.captionFallbackNotice?.classList.add('hidden');
+      dismissCanvasError();
+    }
 
     if (mediaData.media_format === 'video') {
       dom.memoryImage.classList.add('hidden');

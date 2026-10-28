@@ -278,14 +278,15 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
     # 左上に上品な和紙風短冊（タイトル札）を合成
     font_title = get_japanese_font(26)
     font_sub = get_japanese_font(16)
+    font_small = get_japanese_font(13)
 
     badge_x, badge_y = 40, 40
-    badge_w, badge_h = 440, 84
+    badge_w, badge_h = 520, 96
     draw.rounded_rectangle(
         [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h],
         radius=12,
-        fill=(255, 255, 255, 235),
-        outline=(224, 122, 95),
+        fill=(255, 255, 255, 240),
+        outline=(245, 158, 11),
         width=2
     )
 
@@ -293,8 +294,9 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
     if len(clean_title) > 18:
         clean_title = clean_title[:17] + "…"
 
-    draw.text((badge_x + 16, badge_y + 12), "🎨 おもいでキャンバス 水彩画", fill=(224, 122, 95), font=font_sub)
-    draw.text((badge_x + 16, badge_y + 38), clean_title, fill=(44, 94, 79), font=font_title)
+    draw.text((badge_x + 16, badge_y + 10), "🎨 おもいでキャンバス（※簡易水彩画・制限中）", fill=(217, 119, 6), font=font_sub)
+    draw.text((badge_x + 16, badge_y + 36), clean_title, fill=(44, 94, 79), font=font_title)
+    draw.text((badge_x + 16, badge_y + 70), "※AIクォータ制限のため簡易イラストです。会話内容と異なる場合があります。", fill=(180, 83, 9), font=font_small)
 
     base_image.save(file_path, "PNG")
     logger.info(f"Dynamic theme watercolor image generated for '{title}' at {file_path}")
@@ -352,6 +354,7 @@ def generate_memory_visual_artifact_sync(
     logger.info(f"Applied Prompt: {final_prompt}")
 
     image_generated = False
+    is_fallback = False
     if effective_api_key and effective_api_key != "your_gemini_api_key_here":
         try:
             client = genai.Client(api_key=effective_api_key)
@@ -372,6 +375,7 @@ def generate_memory_visual_artifact_sync(
                             with open(file_path, "wb") as f:
                                 f.write(part.inline_data.data)
                             image_generated = True
+                            is_fallback = False
                             logger.info(f"Flash Image generation succeeded: {file_path}")
                             break
             except Exception as nb_err:
@@ -382,6 +386,7 @@ def generate_memory_visual_artifact_sync(
                     logger.info("Quota exhausted (429). Switching immediately to high-speed local watercolor engine.")
                     generate_fallback_image(clean_title, file_path, clean_elements)
                     image_generated = True
+                    is_fallback = True
 
             # 2. クォータ制限でなければ Gemini 2.5 Flash によるオーダーメイドSVG水彩画生成
             if not image_generated:
@@ -413,6 +418,7 @@ def generate_memory_visual_artifact_sync(
                                 f.write(svg_match.group(0))
                             file_name = svg_name
                             image_generated = True
+                            is_fallback = False
                             logger.info(f"Gemini 2.5 Flash SVG generation succeeded: {svg_path}")
                 except Exception as svg_err:
                     logger.warning(f"Gemini 2.5 Flash SVG generation failed: {svg_err}")
@@ -421,6 +427,7 @@ def generate_memory_visual_artifact_sync(
 
     if not image_generated:
         generate_fallback_image(clean_title, file_path, clean_elements)
+        is_fallback = True
 
     artifact = MemoryArtifact(
         memory_id=memory_id,
@@ -433,7 +440,8 @@ def generate_memory_visual_artifact_sync(
         media_format=media_format,
         media_url=f"/static/memories/{file_name}",
         ambient_sound_type=ambient_sound,
-        refine_history=[]
+        refine_history=[],
+        is_fallback=is_fallback
     )
 
     # メタデータ保存

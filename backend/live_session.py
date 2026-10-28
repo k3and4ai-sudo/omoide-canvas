@@ -469,7 +469,8 @@ class LiveSessionManager:
                 "title": artifact.title,
                 "media_url": artifact.media_url,
                 "media_format": artifact.media_format.value,
-                "ambient_sound": artifact.ambient_sound_type.value
+                "ambient_sound": artifact.ambient_sound_type.value,
+                "is_fallback": getattr(artifact, "is_fallback", False)
             })
 
             # 正規のGemini Live ツール呼び出しIDの場合のみツールレスポンスを返送

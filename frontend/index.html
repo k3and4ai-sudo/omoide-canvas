@@ -20,7 +20,7 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="4秒タイムアウト保証・429即時フォールバック・ペット水彩画エンジン搭載版">v20261028_09</span>
+      <span class="app-version-badge" title="簡易水彩画・会話不一致時警告表示対応版">v20261028_10</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
@@ -270,8 +270,15 @@
         <!-- 絵のキャプションバー -->
         <div class="canvas-caption-bar" id="canvasCaptionBar">
           <div class="caption-content">
-            <span class="caption-tag" id="captionTag">思い出</span>
+            <div class="caption-tag-row">
+              <span class="caption-tag" id="captionTag">思い出</span>
+              <span class="caption-fallback-badge hidden" id="captionFallbackBadge">⚠️ 簡易イラスト (クォータ制限中)</span>
+            </div>
             <h2 class="caption-title" id="captionTitle">お話に出てきた風景をここに描きます</h2>
+            <div class="caption-fallback-notice hidden" id="captionFallbackNotice">
+              <span class="notice-icon">📢</span>
+              <span><strong>【ご注意】</strong>AI画像生成クォータ制限のため、端末内の簡易水彩画を表示しています。<strong>会話の内容とは全く違う絵が表示されてしまいます。</strong></span>
+            </div>
           </div>
           <div class="caption-actions">
             <button type="button" id="btnClearCanvas" class="btn-clear-canvas" title="キャンバスを白紙に戻して、新しいお話の絵を始めます">

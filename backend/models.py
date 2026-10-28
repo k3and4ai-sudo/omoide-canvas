@@ -106,6 +106,7 @@ class MemoryArtifact(BaseModel):
     media_url: str = Field(..., description="生成メディアの公開パスまたはURL")
     ambient_sound_type: AmbientSoundType = Field(default=AmbientSoundType.NONE, description="連動する環境音")
     refine_history: List[str] = Field(default_factory=list, description="共同描画による修正履歴")
+    is_fallback: bool = Field(default=False, description="ローカル簡易水彩画エンジンによる代替描画か（会話内容と異なる可能性がある旨の表示用）")
 
 
 class DailyConditionReport(BaseModel):
