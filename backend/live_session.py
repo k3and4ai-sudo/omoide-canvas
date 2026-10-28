@@ -62,6 +62,8 @@ class LiveSessionManager:
         self.echo_guard_until: float = time.time() + 6.0  # セッション開始時〜最初の挨拶完了まで完全保護
         self.ai_playback_until: float = 0.0              # AI返答音声の推定再生完了時刻
         self.echo_dropped_packets: int = 0               # エコーガードにより遮断したマイクパケット数
+        self.last_draw_time: float = 0.0                # 連続描画防止・クォータ保護用タイムスタンプ
+        self.MIN_DRAW_INTERVAL_SEC: float = 120.0       # 描画間隔の最小時間（2分 = 120秒）
 
     async def run(self):
         """セッションの開始・メインループ管理（ユーザー自身のセッションAPIキーを使用）"""
@@ -449,6 +451,7 @@ class LiveSessionManager:
         """
         裏側での画像生成と結果通知（完全非同期実行）
         ※Gemini Live の音声・字幕ストリームを絶対にブロックしない（asyncio.to_thread使用）
+        ※連続描画防止: 前回の描画から2分間（120秒）はスキップしてクォータを保護
         """
         try:
             scene_type = SceneType(args.get("scene_type", "past_memory"))
@@ -457,7 +460,32 @@ class LiveSessionManager:
             media_format = MediaFormat(args.get("media_format", "image"))
             ambient_sound = AmbientSoundType(args.get("ambient_sound", "none"))
 
-            # メディア生成実行（最大6秒タイムアウト保証。万が一APIがハングしても必ずフォールバック描画を完了させる）
+            # 連続描画防止チェック（最小描画間隔: 2分 = 120秒）
+            now = time.time()
+            elapsed = now - self.last_draw_time
+            if self.last_draw_time > 0 and elapsed < self.MIN_DRAW_INTERVAL_SEC:
+                wait_sec = int(self.MIN_DRAW_INTERVAL_SEC - elapsed)
+                logger.info(f"Cooldown active: skipping media generation for '{title}' ({wait_sec}s remaining)")
+                await self.websocket.send_json({
+                    "type": "cooldown_notice",
+                    "remaining_seconds": wait_sec,
+                    "message": f"前回の描画から2分間はクォータ保護のため待機中です（残り約{wait_sec}秒 / 本日16:00リセット）"
+                })
+                if call_id and not call_id.startswith(("auto_", "user_", "test_")):
+                    try:
+                        await session.send(input=types.LiveClientToolResponse(
+                            function_responses=[types.FunctionResponse(
+                                id=call_id,
+                                response={"output": {"status": "cooldown_active", "remaining_seconds": wait_sec}}
+                            )]
+                        ))
+                    except Exception as te:
+                        logger.warning(f"Failed to return cooldown tool response: {te}")
+                return
+
+            self.last_draw_time = time.time()
+
+            # メディア生成実行（最大50秒タイムアウト保証。万が一APIがハングしても必ずフォールバック描画を完了させる）
             try:
                 artifact = await asyncio.wait_for(
                     asyncio.to_thread(
@@ -471,7 +499,7 @@ class LiveSessionManager:
                         ambient_sound=ambient_sound,
                         api_key=self.api_key
                     ),
-                    timeout=6.0
+                    timeout=50.0
                 )
             except asyncio.TimeoutError:
                 logger.warning(f"Media generation timed out for '{title}'. Falling back immediately to local watercolor engine.")

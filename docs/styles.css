@@ -148,6 +148,13 @@ body {
   color: #8c5b05;
 }
 
+.quota-monitor-badge.quota-critical {
+  background: #fff1f2;
+  border-color: #fda4af;
+  color: #be123c;
+  animation: pulseQuota 1.6s infinite;
+}
+
 .quota-monitor-badge.quota-exceeded {
   background: #fdeeee;
   border-color: #f5a3a3;

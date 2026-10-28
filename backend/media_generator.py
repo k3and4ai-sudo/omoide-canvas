@@ -379,16 +379,9 @@ def generate_memory_visual_artifact_sync(
                             logger.info(f"Flash Image generation succeeded: {file_path}")
                             break
             except Exception as nb_err:
-                err_str = str(nb_err)
-                logger.warning(f"Flash Image skipped: {nb_err}")
-                # 429（クォータ制限）の場合は他のAPI呼び出しも確実に失敗するため、即座に高速ローカル水彩画エンジンへ直行！
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    logger.info("Quota exhausted (429). Switching immediately to high-speed local watercolor engine.")
-                    generate_fallback_image(clean_title, file_path, clean_elements)
-                    image_generated = True
-                    is_fallback = True
+                logger.warning(f"Flash Image skipped ({nb_err}). Proceeding to Gemini 3.8 Flash SVG generation.")
 
-            # 2. クォータ制限でなければ Gemini 2.5 Flash によるオーダーメイドSVG水彩画生成
+            # 2. Gemini 3.8 Flash によるオーダーメイドSVG水彩画生成
             if not image_generated:
                 try:
                     svg_prompt = f"""あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
@@ -406,7 +399,7 @@ def generate_memory_visual_artifact_sync(
 4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（```xml 等）は一切含めないでください。"""
 
                     svg_res = client.models.generate_content(
-                        model="gemini-2.5-flash",
+                        model="gemini-3.8-flash",
                         contents=svg_prompt,
                     )
                     if svg_res and svg_res.text:
@@ -419,9 +412,9 @@ def generate_memory_visual_artifact_sync(
                             file_name = svg_name
                             image_generated = True
                             is_fallback = False
-                            logger.info(f"Gemini 2.5 Flash SVG generation succeeded: {svg_path}")
+                            logger.info(f"Gemini 3.8 Flash SVG generation succeeded: {svg_path}")
                 except Exception as svg_err:
-                    logger.warning(f"Gemini 2.5 Flash SVG generation failed: {svg_err}")
+                    logger.warning(f"Gemini 3.8 Flash SVG generation failed: {svg_err}")
         except Exception as client_err:
             logger.warning(f"GenAI Client setup or generation error: {client_err}")
 

@@ -19,6 +19,7 @@
   // ============================================================================
   const SAMPLE_RATE_IN = 16000;   // マイク入力サンプリングレート
   const SAMPLE_RATE_OUT = 24000;  // Gemini返答音声サンプリングレート
+  const MIN_DRAW_INTERVAL_MS = 120 * 1000; // 描画間隔の最小時間（2分 = 120秒）
 
   // 周囲音・テレビ音声カットモード別のRMSしきい値設定（高齢者の発話テンポ・息継ぎに最適化したミリ秒基準）
   const NOISE_GATE_PRESETS = {
@@ -52,6 +53,9 @@
     noiseGateMode: 'normal',        // 現在の周囲音対策モード（標準感度デフォルト）
     lastVoiceActiveTime: 0,         // 近接音声がゲートを通過した最終時刻（Web Speech API連動用）
     lastDrawTriggerTime: 0,         // 前回描画トリガー時刻（多重実行・クォータ枯渇防止用）
+    lastDrawTime: 0,                // 最後に描画完了した時刻（最小描画間隔2分 = 120秒制限用）
+    drawCooldownTimerId: null,      // 2分間カウントダウン更新タイマー
+    hasWarnedLowQuota: false,       // クォータ10%以下警告表示済みフラグ
     speechDebounceTimer: null,      // 発話終了待ちデバウンスタイマー
     pendingUserTranscript: '',      // 送信待ちの発話テキスト
     audioContextIn: null,
@@ -261,8 +265,8 @@
 
     if (tracker.isRateLimited) {
       dom.quotaMonitorBadge.className = 'quota-monitor-badge quota-exceeded';
-      dom.quotaText.textContent = `⚠️ クォータ上限到達 (本日 ${tracker.requestCount}回)`;
-      dom.quotaMonitorBadge.title = 'Google AI Studio の本日分無料枠クォータ上限に達しました。ローカル水彩画エンジンで動作中（明日未明にリセット）';
+      dom.quotaText.textContent = `⚠️ クォータ上限 (リセット: 16:00)`;
+      dom.quotaMonitorBadge.title = 'Google AI Studio の本日分無料枠クォータ上限に達しました。本日16:00（PDT 0:00）に全量リセットされます。ローカル水彩画エンジンで動作中';
     } else {
       const limit = tracker.limitReported || DAILY_GEMINI_LIMIT;
       const remaining = tracker.remainingReported !== null
@@ -270,13 +274,27 @@
         : Math.max(0, limit - tracker.requestCount);
       const percent = Math.max(0, Math.min(100, Math.round((remaining / limit) * 100)));
 
-      if (percent <= 15) {
+      if (percent <= 10) {
+        dom.quotaMonitorBadge.className = 'quota-monitor-badge quota-critical';
+        dom.quotaText.textContent = `⚠️ 残量 ${percent}% (リセット: 16:00)`;
+        dom.quotaMonitorBadge.title = `⚠️ gemini-3.8-flash のクォータ残量が10%以下になりました（残り約${remaining}回）。本日16:00にリセットされます。\nクリックで詳細を表示`;
+        if (!state.hasWarnedLowQuota) {
+          state.hasWarnedLowQuota = true;
+          showCanvasError(
+            `【クォータ残量警告】gemini-3.8-flash 残り${percent}%`,
+            `クォータの残りが10%以下（残り約${remaining}回）になりました。本日16:00（日本時間）にリセットされます。連続描画を控え、必要に応じてローカル水彩画も活用されます。`,
+            true
+          );
+        }
+      } else if (percent <= 20) {
         dom.quotaMonitorBadge.className = 'quota-monitor-badge quota-warning';
+        dom.quotaText.textContent = `AI残量: ${percent}% (本日 ${tracker.requestCount}/${limit}回)`;
+        dom.quotaMonitorBadge.title = `本日のAI呼び出し回数: ${tracker.requestCount}回 / 目安上限: ${limit}回 (残り約 ${remaining}回)\nクリックで詳細を表示します`;
       } else {
         dom.quotaMonitorBadge.className = 'quota-monitor-badge';
+        dom.quotaText.textContent = `AI残量: ${percent}% (本日 ${tracker.requestCount}/${limit}回)`;
+        dom.quotaMonitorBadge.title = `本日のAI呼び出し回数: ${tracker.requestCount}回 / 目安上限: ${limit}回 (残り約 ${remaining}回)\nクリックで詳細を表示します`;
       }
-      dom.quotaText.textContent = `AI残量: ${percent}% (本日 ${tracker.requestCount}/${limit}回)`;
-      dom.quotaMonitorBadge.title = `本日のAI呼び出し回数: ${tracker.requestCount}回 / 目安上限: ${limit}回 (残り約 ${remaining}回)\nクリックで詳細を表示します`;
     }
   }
 
@@ -294,19 +312,79 @@
     dom.canvasErrorBanner.classList.add('hidden');
   }
 
+  function getRemainingDrawCooldownSec() {
+    if (!state.lastDrawTime) return 0;
+    const elapsed = Date.now() - state.lastDrawTime;
+    if (elapsed >= MIN_DRAW_INTERVAL_MS) return 0;
+    return Math.ceil((MIN_DRAW_INTERVAL_MS - elapsed) / 1000);
+  }
+
+  function startDrawCooldownTimer() {
+    if (state.drawCooldownTimerId) {
+      clearInterval(state.drawCooldownTimerId);
+      state.drawCooldownTimerId = null;
+    }
+    updateDrawButtonsCooldownUI();
+    state.drawCooldownTimerId = setInterval(() => {
+      const waitSec = getRemainingDrawCooldownSec();
+      if (waitSec <= 0) {
+        clearInterval(state.drawCooldownTimerId);
+        state.drawCooldownTimerId = null;
+        updateDrawButtonsCooldownUI();
+      } else {
+        updateDrawButtonsCooldownUI();
+      }
+    }, 1000);
+  }
+
+  function updateDrawButtonsCooldownUI() {
+    const waitSec = getRemainingDrawCooldownSec();
+    if (dom.btnDrawCurrentTopic) {
+      if (state.isDrawingMedia) {
+        dom.btnDrawCurrentTopic.textContent = '🎨 描画中...';
+        dom.btnDrawCurrentTopic.disabled = true;
+      } else if (waitSec > 0) {
+        dom.btnDrawCurrentTopic.textContent = `⏳ 次の描画まで (${waitSec}秒)`;
+        dom.btnDrawCurrentTopic.title = `連続描画防止のため、前回の描画から2分間お待ちいただいています（残り${waitSec}秒 / 本日16:00リセット）`;
+        dom.btnDrawCurrentTopic.disabled = true;
+      } else {
+        dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
+        dom.btnDrawCurrentTopic.title = '現在の会話内容から新しい情景を絵にします';
+        dom.btnDrawCurrentTopic.disabled = false;
+      }
+    }
+    if (dom.btnRefineNow) {
+      if (state.isDrawingMedia) {
+        dom.btnRefineNow.textContent = '🎨 描画中...';
+        dom.btnRefineNow.disabled = true;
+      } else if (waitSec > 0) {
+        dom.btnRefineNow.textContent = `⏳ 待機中 (${waitSec}秒)`;
+        dom.btnRefineNow.disabled = true;
+      } else {
+        dom.btnRefineNow.textContent = '🎨 この指示で描き直す';
+        dom.btnRefineNow.disabled = false;
+      }
+    }
+  }
+
   function showQuotaDetailsModal() {
     const tracker = loadQuotaTracker();
     const limit = tracker.limitReported || DAILY_GEMINI_LIMIT;
     const remaining = tracker.remainingReported !== null
       ? tracker.remainingReported
       : Math.max(0, limit - tracker.requestCount);
+    const percent = Math.max(0, Math.min(100, Math.round((remaining / limit) * 100)));
+    const waitSec = getRemainingDrawCooldownSec();
     const msg = [
       '【📊 AIクォータ・利用状況モニター】',
+      '・対象AIモデル: gemini-3.8-flash (情景描画・推論)',
       `・日付: ${tracker.date}`,
       `・本日の生成リクエスト回数: ${tracker.requestCount} 回`,
       `・クォータ目安上限: ${limit} 回 / 日 (Google AI Studio 無料枠)`,
-      `・推計残りリクエスト: 約 ${remaining} 回`,
-      `・最新ステータス: ${tracker.isRateLimited ? '⚠️ 429 レート制限中 (ローカル水彩画に自動切替)' : '✅ 正常稼働中'}`,
+      `・推計残りリクエスト: 約 ${remaining} 回 (残量: ${percent}%)`,
+      '・次回クォータリセット時刻: 本日 16:00 (日本時間 / 米国PDT 0:00)',
+      `・最小描画間隔: 2分 (${waitSec > 0 ? `現在クールダウン中: 残り${waitSec}秒` : '現在すぐに描画可能'})`,
+      `・最新ステータス: ${tracker.isRateLimited ? '⚠️ 429 レート制限中 (本日16:00リセット / ローカル水彩画に自動切替)' : (percent <= 10 ? '⚠️ クォータ残量10%以下（本日16:00リセット）' : '✅ 正常稼働中')}`,
       tracker.lastErrorMsg ? `・最新のエラー: ${tracker.lastErrorMsg}` : '',
       '\n※万が一クォータ上限（429）に達した場合でも、端末内のローカル高精細水彩画エンジンが自動で即座に代行描画します。',
       tracker.isRateLimited ? '\n【OK】を押すとクォータ制限表示をリセットして通常モードで再試行します。' : ''
@@ -2810,7 +2888,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 5. 必ず <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。解説文やマークダウンのコード枠（\`\`\`xml 等）は一切含めないでください。`;
 
         const resSvg = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2818,7 +2896,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
               contents: [{ parts: [{ text: svgPrompt }] }],
               generationConfig: { temperature: 0.35, maxOutputTokens: 3800 }
             }),
-            signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined
+            signal: AbortSignal.timeout ? AbortSignal.timeout(45000) : undefined
           }
         );
         recordApiCall(resSvg.headers, resSvg.status);
@@ -3045,6 +3123,15 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
         case 'interrupted':
           // Gemini側で割り込みを検知した場合でも、スピーカー再生キューに残っている音声は途中で破棄せず最後まで温かく話し切らせる（エコー誤検知による発話中断の完全防止）
           logDiag('Gemini割り込み通知を受信（再生キュー終了後に自然に待機状態へ移行します）');
+          break;
+
+        case 'cooldown_notice':
+          logDiag(`サーバー待機通知: ${data.message}`);
+          showCanvasError('描画待機中（クォータ保護）', data.message, true);
+          if (data.remaining_seconds) {
+            state.lastDrawTime = Date.now() - (MIN_DRAW_INTERVAL_MS - data.remaining_seconds * 1000);
+            startDrawCooldownTimer();
+          }
           break;
 
         case 'new_media':
@@ -3274,6 +3361,10 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
     renderSceneCollectorUI();
     logDiag(`新しい情景を表示しました: ${title}`);
+
+    // 描画完了時刻を記録し、最小描画間隔（2分 = 120秒）のクールダウンタイマーを開始
+    state.lastDrawTime = Date.now();
+    startDrawCooldownTimer();
   }
 
   function getSoundLabel(type) {
@@ -3593,6 +3684,17 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
   }
 
   async function executeRefineDrawing(feedbackText = '') {
+    const waitSec = getRemainingDrawCooldownSec();
+    if (waitSec > 0) {
+      logDiag(`連続描画防止: 前回の描画から2分間（120秒）経過していないため待機します（残り${waitSec}秒 / 本日16:00リセット）`);
+      showCanvasError(
+        '描画待機中（クォータ保護）',
+        `連続描画を防ぐため、前回の描画から2分間お待ちいただいています（残り約 ${waitSec} 秒）。本日16:00にクォータが全量リセットされます。`,
+        true
+      );
+      return;
+    }
+
     if (state.pendingRefineTimer) {
       clearTimeout(state.pendingRefineTimer);
       state.pendingRefineTimer = null;
@@ -3874,20 +3976,38 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
     // ワンタップ描画ボタンのラベル・スタイル更新（常に「今の話題を絵にする」でゼロから描画可能）
     if (dom.btnDrawCurrentTopic) {
-      if (sc.status === 'drawing') {
+      const waitSec = getRemainingDrawCooldownSec();
+      if (sc.status === 'drawing' || state.isDrawingMedia) {
         dom.btnDrawCurrentTopic.textContent = '🎨 描画中...';
         dom.btnDrawCurrentTopic.style.background = '';
+        dom.btnDrawCurrentTopic.disabled = true;
+      } else if (waitSec > 0) {
+        dom.btnDrawCurrentTopic.textContent = `⏳ 次の描画まで (${waitSec}秒)`;
+        dom.btnDrawCurrentTopic.style.background = '';
+        dom.btnDrawCurrentTopic.disabled = true;
       } else if (sc.status === 'ready' || sc.status === 'confirming') {
         dom.btnDrawCurrentTopic.textContent = '✨ 準備OK！この情景を描く';
         dom.btnDrawCurrentTopic.style.background = 'linear-gradient(135deg, #d97706 0%, #b45309 100%)';
+        dom.btnDrawCurrentTopic.disabled = false;
       } else {
         dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
         dom.btnDrawCurrentTopic.style.background = '';
+        dom.btnDrawCurrentTopic.disabled = false;
       }
     }
   }
 
   async function executeConfirmedDrawing(manualTopic = '') {
+    const waitSec = getRemainingDrawCooldownSec();
+    if (waitSec > 0) {
+      logDiag(`連続描画防止: 前回の描画から2分間（120秒）経過していないため待機します（残り${waitSec}秒 / 本日16:00リセット）`);
+      showCanvasError(
+        '描画待機中（クォータ保護）',
+        `連続描画を防ぐため、前回の描画から2分間お待ちいただいています（残り約 ${waitSec} 秒）。本日16:00にクォータが全量リセットされます。`,
+        true
+      );
+      return;
+    }
     const now = Date.now();
     if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
       logDiag('描画中または直前に描画開始されたため、二重実行・クォータ枯渇を防止しました。');
@@ -3928,6 +4048,17 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
   // 動作診断・テストツール ＆ ワンタップ「今の話題を絵にする・描き直す」
   // ============================================================================
   async function triggerSceneDrawingForTopic(rawTopic, customElements = '', extraOptions = {}) {
+    const waitSec = getRemainingDrawCooldownSec();
+    if (waitSec > 0) {
+      logDiag(`連続描画防止: 前回の描画から2分間（120秒）経過していないため待機します（残り${waitSec}秒 / 本日16:00リセット）`);
+      showCanvasError(
+        '描画待機中（クォータ保護）',
+        `連続描画を防ぐため、前回の描画から2分間お待ちいただいています（残り約 ${waitSec} 秒）。本日16:00にクォータが全量リセットされます。`,
+        true
+      );
+      return;
+    }
+
     const cleanTopic = (rawTopic || '').replace(/[「」]/g, '').trim() || '思い出の風景';
     state.lastDrawnUtterance = cleanTopic;
     const mySeqId = ++state.drawSequenceId;
@@ -3988,12 +4119,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       state.isDrawingMedia = false;
       dom.drawingOverlay?.classList.add('hidden');
       if (mySeqId === state.drawSequenceId) {
-        if (dom.btnDrawCurrentTopic) {
-          dom.btnDrawCurrentTopic.disabled = false;
-        }
-        if (dom.btnRefineNow) {
-          dom.btnRefineNow.disabled = false;
-        }
+        updateDrawButtonsCooldownUI();
         renderSceneCollectorUI();
         setAvatarState(state.isSessionActive ? 'listening' : 'idle');
       }
