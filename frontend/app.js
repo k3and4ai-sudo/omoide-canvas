@@ -2789,14 +2789,15 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 5. 必ず <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。解説文やマークダウンのコード枠（\`\`\`xml 等）は一切含めないでください。`;
 
         const resSvg = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [{ parts: [{ text: svgPrompt }] }],
               generationConfig: { temperature: 0.35, maxOutputTokens: 3800 }
-            })
+            }),
+            signal: AbortSignal.timeout ? AbortSignal.timeout(4000) : undefined
           }
         );
         recordApiCall(resSvg.headers, resSvg.status);
@@ -2808,17 +2809,17 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
             const cleanSvg = svgMatch[0];
             mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
             dismissCanvasError();
-            logDiag('Gemini 3.8 Flash によるオーダーメイド情景水彩画(SVG)の描画に成功しました！');
+            logDiag('Gemini によるオーダーメイド情景水彩画(SVG)の描画に成功しました！');
           }
         } else {
           if (resSvg.status === 429) {
-            showCanvasError('Google AI Studio クォータ上限 (429 Too Many Requests)', '無料枠の利用上限（1500回/日または15回/分）に達しました。ローカル水彩画エンジンで即座に描画します。', true);
+            logDiag('Gemini API 429検知: 直ちに高精細ローカル水彩画エンジンに切り替えます。');
           } else if (resSvg.status === 400 || resSvg.status === 403) {
             showCanvasError(`Gemini API エラー (${resSvg.status})`, 'APIキーが無効または制限されています。画面右上のキー設定をご確認ください。');
           }
         }
       } catch (svgErr) {
-        console.warn('Gemini SVG generation error:', svgErr);
+        logDiag(`Gemini SVG API応答なし/タイムアウト: 即座にローカル水彩画エンジンで描画します (${svgErr.message})`);
       }
     }
 

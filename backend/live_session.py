@@ -430,18 +430,35 @@ class LiveSessionManager:
             media_format = MediaFormat(args.get("media_format", "image"))
             ambient_sound = AmbientSoundType(args.get("ambient_sound", "none"))
 
-            # メディア生成実行（別スレッドで実行しイベントループを1ミリ秒も止めない）
-            artifact = await asyncio.to_thread(
-                generate_memory_visual_artifact_sync,
-                user_id=self.profile.user_id,
-                dementia_level=self.profile.dementia_level,
-                scene_type=scene_type,
-                japanese_title=title,
-                visual_elements=elements,
-                media_format=media_format,
-                ambient_sound=ambient_sound,
-                api_key=self.api_key
-            )
+            # メディア生成実行（最大6秒タイムアウト保証。万が一APIがハングしても必ずフォールバック描画を完了させる）
+            try:
+                artifact = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        generate_memory_visual_artifact_sync,
+                        user_id=self.profile.user_id,
+                        dementia_level=self.profile.dementia_level,
+                        scene_type=scene_type,
+                        japanese_title=title,
+                        visual_elements=elements,
+                        media_format=media_format,
+                        ambient_sound=ambient_sound,
+                        api_key=self.api_key
+                    ),
+                    timeout=6.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"Media generation timed out for '{title}'. Falling back immediately to local watercolor engine.")
+                artifact = await asyncio.to_thread(
+                    generate_memory_visual_artifact_sync,
+                    user_id=self.profile.user_id,
+                    dementia_level=self.profile.dementia_level,
+                    scene_type=scene_type,
+                    japanese_title=title,
+                    visual_elements=elements,
+                    media_format=media_format,
+                    ambient_sound=ambient_sound,
+                    api_key=""
+                )
             self.generated_memories.append(artifact)
             self.discussed_topics.append(title)
 
