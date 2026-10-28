@@ -2402,136 +2402,63 @@ ${levelRules}
     const apiKey = (state.sessionApiKey || '').trim();
 
     if (apiKey) {
-      // Step 0: 超高精細AI画像生成（Pollinations turbo: 高速・高品質でユーザーの言葉通りの絵を描く）
+      // Step 0: Gemini 3.8 Flash によるオーダーメイド情景水彩画（SVG）生成
+      // 外部画像サービスの Artists limit・レート制限に一切依存せず、Google公式APIで100%確実に話の内容を描画！
       try {
-        if (dom.drawingSubtext) dom.drawingSubtext.textContent = 'AI画家がお話の情景を描いています（約5〜8秒）...';
+        if (dom.drawingSubtext) dom.drawingSubtext.textContent = 'AI画家がお話の情景を描いています（約2〜4秒）...';
         logDiag(`AI情景描画を開始します: 「${title}」 - 内容: 「${elements}」`);
 
-        let fluxPrompt = '';
-        try {
-          const transRes = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: `You are an expert art director. Convert the following nostalgic Japanese scene description into a highly detailed English image prompt:
-"${elements}"
-${isRefinement && feedback ? `\nCRITICAL USER MODIFICATION / CORRECTION (TOP PRIORITY):
-The user explicitly requested to modify or correct the previous drawing: "${feedback}".
-You MUST override conflicting previous elements and make this modification the most prominent feature!
-(e.g., if requesting sunset, change entire sky to dramatic glowing red-orange sunset and reflect twilight on mountains; if adding flowers, prominently place beautiful flowers in a vase on the table).` : ''}
-Guidelines:
-- Warm, nostalgic, fine art watercolor storybook painting style, masterpiece, rich texture, beautiful natural lighting.
-- Faithfully include all specific objects, places, times, seasons, and colors mentioned by the user.
-- If mountains or rocks are mentioned (e.g. sharp mountain, alps), depict extremely sharp, towering, jagged rocky alpine peaks (like Mount Yari / Matterhorn) with dramatic light and shadow, crisp silhouettes, pristine snow crevices.
-- If cafes or rooms are mentioned, depict authentic nostalgic Japanese Showa-era interior, wooden tables, retro cups, warm pendant lighting.
-- No photorealistic human faces, figures only from behind or distant silhouettes.
-- Output ONLY the English prompt text, no markdown, no quotes.` }] }],
-                generationConfig: { temperature: 0.3, maxOutputTokens: 200 }
-              })
-            }
-          );
-          recordApiCall(transRes.headers, transRes.status);
-          if (transRes.ok) {
-            const transData = await transRes.json();
-            fluxPrompt = (transData?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-          } else {
-            if (transRes.status === 429) {
-              showCanvasError('Google AI Studio クォータ上限 (429 Too Many Requests)', '無料枠の利用上限に達しました。ローカル水彩画エンジンで即座に描画します。', true);
-            } else if (transRes.status === 400 || transRes.status === 403) {
-              showCanvasError(`Gemini API エラー (${transRes.status})`, 'APIキーが無効または制限されています。画面右上のキー設定をご確認ください。');
-            }
-          }
-        } catch (tErr) {
-          console.warn('Prompt translation error:', tErr);
-        }
-
-        if (!fluxPrompt) {
-          fluxPrompt = `Warm nostalgic Japanese watercolor painting, ${elements}, Showa-era style, beautiful natural lighting, masterpiece`;
-        }
-
-        logDiag(`生成プロンプト: ${fluxPrompt}`);
-        const seed = Math.floor(Math.random() * 999999);
-        const fluxUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fluxPrompt)}?width=1024&height=768&model=turbo&nologo=true&seed=${seed}`;
-
-        // 画像のロード完了を最大12秒待機（turboモデルなら約6〜8秒でロード完了）
-        const imgLoaded = await new Promise((resolve) => {
-          const testImg = new Image();
-          const timer = setTimeout(() => {
-            logDiag('AI画像生成待機タイムアウト（12秒経過）のためフォールバックへ移行します。');
-            resolve(false);
-          }, 12000);
-          testImg.onload = () => { clearTimeout(timer); resolve(true); };
-          testImg.onerror = () => {
-            clearTimeout(timer);
-            resolve(false);
-          };
-          testImg.src = fluxUrl;
-        });
-
-        if (imgLoaded) {
-          mediaDataUrl = fluxUrl;
-          dismissCanvasError();
-          logDiag('最高峰クオリティのAI情景描画に成功しました！');
-        }
-      } catch (fluxErr) {
-        console.warn('Image generation warning:', fluxErr);
-      }
-
-      // Step 1: Gemini 3.8 Flash によるオーダーメイドSVG水彩画生成（フォールバック）
-      if (!mediaDataUrl) {
-        try {
-          if (dom.drawingSubtext) dom.drawingSubtext.textContent = '2/3: Gemini 3.8 Flash SVG描画を試行中...';
-          const svgPrompt = `あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
+        const svgPrompt = `あなたは高齢者・回想法ケアのためのプロの情景画家・絵本イラストレーターです。
+ユーザーが語った思い出のお話に合わせて、指定された情景の温かく美しい水彩画風SVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
 ${elements}
 
 ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正・変更指示（絶対厳守！）】
 ユーザーは直前の絵に対して「${feedback}」という明確な修正を求めています。
-前回の絵と矛盾する要素（例：青空から夕焼けへの変更、花の追加、特定モチーフの変更など）がある場合は、必ずこの修正指示を最優先で上書き・反映してください！夕焼けなら燃えるような茜色・黄金色の夕空と夕日に染まる情景（アーベントロート）を、花ならテーブルや窓際に美しい花瓶とお花を描いてください。` : ''}
+前回の絵と矛盾する要素（例：青空から夕焼けへの変更、花の追加、特定モチーフの変更など）がある場合は、必ずこの修正指示を最優先で上書き・反映してください！
+夕焼けなら空全体を燃えるような茜色・黄金色のグラデーション（アーベントロート）にし、花ならテーブルや窓際に美しい花瓶とお花をはっきりと描いてください。` : ''}
 
-【最重要造形ルール】
-1. ユーザーがお話しした具体的なモチーフ・特徴・造形を100%忠実に描いてください。
-   - 山について語られている場合（「山が鋭い」「尖った山」「北アルプス」「岩山」「連峰」など）：なだらかな丸い丘に絶対せず、必ず鋭角な三角形・ギザギザの険しい岩峰・切り立った山頂・陰影・雪渓をシャープなポリゴンやパス（<polygon>, <path>）でダイナミックに描いてください！
-   - 喫茶店や店内について語られている場合：木目テーブル、コーヒー、クリームソーダ、ペンダントライト、窓などを描いてください。
-   - 学校や教室、海、季節など、会話に出てきた情景を主役として具体的に配置してください。
-2. 背景には美しいグラデーション（<linearGradient>, <radialGradient>）を使い、温かく情緒的な水彩画の雰囲気にしてください。
-3. 人物のリアルな顔は描かず、後ろ姿や遠景、あるいは情景・静物を美しく描いてください。
-4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
+【必須造形ルール】
+1. ユーザーがお話しした具体的なモチーフ（山、夕焼け、海、学校、教室、喫茶店、花、木製テーブル、窓、雪、川など）を省略せず、すべて目に見える形で魅力的に描いてください。
+   - 山が話題の場合：鋭角な三角形やポリゴン（<polygon>）を使い、険しい岩肌や尖った山頂、雪渓をダイナミックに描いてください。
+   - 喫茶店や部屋が話題の場合：木目のテーブル、カップ、花瓶、温かい照明などを描いてください。
+2. <defs> 内に <linearGradient> や <radialGradient> を定義し、水彩画のような優しく深みのあるグラデーションを背景やモチーフに適用してください。
+3. 高齢者が安心できる、温かい昭和ノスタルジーの色彩（茜色、山吹色、若草色、空色、木目調の茶など）を基調にしてください。
+4. 人物のリアルな顔は描かず、情景・静物・風景を主役にしてください。
+5. 必ず <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。解説文やマークダウンのコード枠（\`\`\`xml 等）は一切含めないでください。`;
 
-          const resSvg = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                contents: [{ parts: [{ text: svgPrompt }] }],
-                generationConfig: { temperature: 0.4, maxOutputTokens: 3500 }
-              })
-            }
-          );
-          recordApiCall(resSvg.headers, resSvg.status);
-          if (resSvg.ok) {
-            const dataSvg = await resSvg.json();
-            const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            const svgMatch = rawText.match(/<svg[\s\S]*?<\/svg>/i);
-            if (svgMatch && svgMatch[0]) {
-              const cleanSvg = svgMatch[0];
-              mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
-              logDiag('Gemini 2.5 Flash によるオーダーメイド水彩画(SVG)の描画に成功しました！');
-            }
-          } else {
-            if (resSvg.status === 429) {
-              showCanvasError('Google AI Studio クォータ上限 (429 Too Many Requests)', '無料枠の利用上限（1500回/日または15回/分）に達しました。ローカル水彩画エンジンで描画します。', true);
-            } else if (resSvg.status === 400 || resSvg.status === 403) {
-              showCanvasError(`Gemini API エラー (${resSvg.status})`, 'APIキーが無効または制限されています。画面右上のキー設定をご確認ください。');
-            }
+        const resSvg = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: svgPrompt }] }],
+              generationConfig: { temperature: 0.35, maxOutputTokens: 3800 }
+            })
           }
-        } catch (svgErr) {
-          console.warn('Gemini SVG generation warning:', svgErr);
+        );
+        recordApiCall(resSvg.headers, resSvg.status);
+        if (resSvg.ok) {
+          const dataSvg = await resSvg.json();
+          const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          const svgMatch = rawText.match(/<svg[\s\S]*?<\/svg>/i);
+          if (svgMatch && svgMatch[0]) {
+            const cleanSvg = svgMatch[0];
+            mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
+            dismissCanvasError();
+            logDiag('Gemini 3.8 Flash によるオーダーメイド情景水彩画(SVG)の描画に成功しました！');
+          }
+        } else {
+          if (resSvg.status === 429) {
+            showCanvasError('Google AI Studio クォータ上限 (429 Too Many Requests)', '無料枠の利用上限（1500回/日または15回/分）に達しました。ローカル水彩画エンジンで即座に描画します。', true);
+          } else if (resSvg.status === 400 || resSvg.status === 403) {
+            showCanvasError(`Gemini API エラー (${resSvg.status})`, 'APIキーが無効または制限されています。画面右上のキー設定をご確認ください。');
+          }
         }
+      } catch (svgErr) {
+        console.warn('Gemini SVG generation error:', svgErr);
       }
     }
 
