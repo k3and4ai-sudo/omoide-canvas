@@ -288,39 +288,8 @@ async def generate_memory_visual_artifact(
             except Exception as nb_err:
                 logger.warning(f"Nano Banana ({nb_model}) skipped: {nb_err}")
 
-        # 2. FLUX / Pollinations 超高精細画像生成（無料・Nano Banana級の圧倒的描写力）を試行
-        if not image_generated:
-            try:
-                import urllib.request
-                import urllib.parse
-                import random
-                flux_prompt = f"Warm nostalgic watercolor fine art, {visual_elements}, extremely detailed, dramatic lighting"
-                try:
-                    p_res = client.models.generate_content(
-                        model="gemini-2.5-flash",
-                        contents=f'Convert into detailed English image prompt for FLUX: "{visual_elements}". If mountain is mentioned, depict extremely sharp, towering, jagged rocky alpine peaks with dramatic light and shadow. Output prompt only.'
-                    )
-                    if p_res and p_res.text:
-                        flux_prompt = p_res.text.strip().replace('"', '')
-                except Exception:
-                    pass
-
-                seed = random.randint(1000, 999999)
-                url = f"https://image.pollinations.ai/prompt/{urllib.parse.quote(flux_prompt)}?width=1024&height=768&model=flux&nologo=true&seed={seed}"
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=9) as resp:
-                    if resp.status == 200:
-                        img_bytes = resp.read()
-                        if len(img_bytes) > 5000:
-                            with open(file_path, "wb") as f:
-                                f.write(img_bytes)
-                            image_generated = True
-                            logger.info(f"FLUX generation succeeded: {file_path}")
-            except Exception as flux_err:
-                logger.warning(f"FLUX generation failed: {flux_err}")
-
-        # 3. Gemini 2.5 Flash によるオーダーメイドSVG生成を試行
-        # (Imagen 3 クォータ制限時や無料枠でも、ユーザーの会話内容通りの情景を100%動的に描画する)
+        # 1. Gemini 3.8 Flash によるオーダーメイドSVG水彩画生成を最優先試行
+        # (外部サーバーのArtists limitや混雑に左右されず、ユーザーの会話内容通りの情景を100%動的に描画する)
         if not image_generated:
             try:
                 svg_prompt = f"""あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
@@ -329,8 +298,8 @@ async def generate_memory_visual_artifact(
 {visual_elements}
 
 【最重要造形ルール】
-1. ユーザーがお話しした具体的なモチーフ・特徴・造形を100%忠実に描いてください。
-   - 山について語られている場合（「山が鋭い」「尖った山」「北アルプス」「岩山」「連峰」など）：なだらかな丸い丘に絶対せず、必ず鋭角な三角形・ギザギザの険しい岩峰・切り立った山頂・陰影・雪渓をシャープなポリゴンやパス（<polygon>, <path>）でダイナミックに描いてください！
+1. ユーザーがお話しした具体的なモチーフ・特徴・造形（山、夕焼け、海、学校、教室、喫茶店、花、木製テーブル、窓、雪、川など）を100%忠実に描いてください。
+   - 山について語られている場合：鋭角な三角形・ギザギザの険しい岩峰・切り立った山頂・陰影・雪渓をシャープなポリゴンやパス（<polygon>, <path>）でダイナミックに描いてください！
    - 喫茶店や店内について語られている場合：木目テーブル、コーヒー、クリームソーダ、ペンダントライト、窓などを描いてください。
    - 学校や教室、海、季節など、会話に出てきた情景を主役として具体的に配置してください。
 2. 背景には美しいグラデーション（<linearGradient>, <radialGradient>）を使い、温かく情緒的な水彩画の雰囲気にしてください。
@@ -338,7 +307,7 @@ async def generate_memory_visual_artifact(
 4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（```xml 等）は一切含めないでください。"""
 
                 svg_res = client.models.generate_content(
-                    model="gemini-2.5-flash",
+                    model="gemini-3.8-flash",
                     contents=svg_prompt,
                 )
                 if svg_res and svg_res.text:
@@ -350,9 +319,9 @@ async def generate_memory_visual_artifact(
                             f.write(svg_match.group(0))
                         file_name = svg_name
                         image_generated = True
-                        logger.info(f"Gemini 2.5 Flash SVG generation succeeded: {svg_path}")
+                        logger.info(f"Gemini 3.8 Flash SVG generation succeeded: {svg_path}")
             except Exception as svg_err:
-                logger.warning(f"Gemini 2.5 Flash SVG generation failed: {svg_err}")
+                logger.warning(f"Gemini 3.8 Flash SVG generation failed: {svg_err}")
 
     if not image_generated:
         generate_fallback_image(japanese_title, file_path, visual_elements)

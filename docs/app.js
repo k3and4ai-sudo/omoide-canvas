@@ -1216,18 +1216,43 @@ ${levelRules}
                   }
                 });
               }
-              state.sceneCollector.status = 'drawing';
-              renderSceneCollectorUI();
 
-              // アバターを描画中にして即座に画像生成を実行！
-              setAvatarState('drawing');
-              handleDirectMediaGeneration(ws, callId, funcName, {
-                ...args,
-                japanese_title: rawTitle,
-                visual_elements: rawElements,
-                user_feedback: feedback,
-                is_refinement: isRefinement
-              });
+              // 【最重要安全ガード】ユーザーがまだ絵の描画を承諾していない場合、勝手な自動描画は絶対に禁止！
+              // 確認バナー（「🎨 はい、描いてください」）を画面に出して、ご本人の意思を待つ。
+              if (isRefinement && feedback) {
+                // 修正指示の場合はユーザーが発言した直後なので即時描き直してOK
+                state.sceneCollector.status = 'drawing';
+                renderSceneCollectorUI();
+                setAvatarState('drawing');
+                handleDirectMediaGeneration(ws, callId, funcName, {
+                  ...args,
+                  japanese_title: rawTitle,
+                  visual_elements: rawElements,
+                  user_feedback: feedback,
+                  is_refinement: true
+                });
+              } else {
+                // 新規描画の場合は、勝手に即時描画せず確認待ちにしてループとクォータ浪費を根絶！
+                state.sceneCollector.status = 'confirming';
+                state.sceneCollector.isAwaitingConfirmation = true;
+                state.sceneCollector.pendingArgs = { ws, callId, funcName, args: { ...args, japanese_title: rawTitle, visual_elements: rawElements } };
+                renderSceneCollectorUI();
+
+                // Gemini側には「情景を記録しました。確認をお待ちしています」を返送
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                  ws.send(JSON.stringify({
+                    tool_response: {
+                      function_responses: [
+                        {
+                          id: callId,
+                          name: funcName,
+                          response: { output: { status: 'recorded_awaiting_user_confirmation', message: '情景をメモしました。ご本人の描画承諾をお待ちしています。' } }
+                        }
+                      ]
+                    }
+                  }));
+                }
+              }
             } else if (funcName === 'trigger_emergency_alert') {
               handleDirectEmergencyAlert(ws, callId, funcName, args);
             }
@@ -3136,13 +3161,12 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     const clean = rawText.replace(/[「」『』]/g, '').trim();
     if (clean.length < 2) return null;
 
-    // 1. 明示的な修正・変更リクエスト構文
+    // 1. 明示的な修正・変更リクエスト構文（「〜にして」「〜に変えて」等の語尾を厳格に要求）
     const modPatterns = [
       /(.+?)(?:にしてほしい|にしてくれ|にしてください|にしてよ|にして|に変えてほしい|に変えてくれ|に変えてください|に変えて|に描き直して|に描きかえて)/,
       /(.+?)(?:を追加して|を足して|を置いて|を入れて|を描いてほしい|を描き足して|を描いてみて)/,
       /(?:もっと|もうちょっと)(.+?)(?:にして|に変えて|を描いて)/,
-      /(?:もう一度|もう一回|新しく)(.+?)(?:描いて|描き直して)/,
-      /(.+?)(?:夕焼け|夕暮れ|夕方|朝焼け|夜空|星空|雪景色|雨|青空|秋|春|夏|冬)(?:にして|に変えて)?/
+      /(?:もう一度|もう一回|新しく)(.+?)(?:描いて|描き直して)/
     ];
 
     for (const pat of modPatterns) {
@@ -3153,12 +3177,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     }
 
     // 単独の修正キーワード
-    if (/(描き直して|描きかえて|書き直して|直して|変えてみて|ちょっと違う|前の絵と違う)/.test(clean)) {
-      return clean;
-    }
-
-    // すでに絵が表示されている状態での単体名詞・特徴修正
-    if (state.hasDrawnImage && /(夕焼け|夕暮れ|夕日|茜色|アーベントロート|赤い花|花瓶|花を|コーヒー|珈琲|クリームソーダ|雪山|紅葉)/.test(clean)) {
+    if (/(描き直して|描きかえて|書き直して|修正して|直してほしい|変えてみて)/.test(clean)) {
       return clean;
     }
 
@@ -3241,19 +3260,14 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     const sc = state.sceneCollector;
     let changed = false;
 
-    // 1. AIが描画確認の呼びかけ、または描画宣言を行ったか検知
+    // 1. AIが描画確認の呼びかけ、または描画意図を述べたか検知（勝手な自動描画はせず、確認待ちにする）
     if (speaker === 'ai') {
-      const isConfirming = /(キャンバスに描いてみましょうか|描いてみましょうか|絵にしてみましょうか|描きましょうか|絵を描いてみましょうか|キャンバスに映してみましょうか|キャンバスに描いてみますか)/.test(clean);
-      const isDeclaringDraw = /(描いてみますね|描きますね|絵にしてみますね|キャンバスに描いてみます|キャンバスに描きます|描いてみましょう|絵を描いてみましょう)/.test(clean);
+      const isConfirming = /(キャンバスに描いてみましょうか|描いてみましょうか|絵にしてみましょうか|描きましょうか|絵を描いてみましょうか|キャンバスに映してみましょうか|キャンバスに描いてみますか|描いてみますね|描きますね|絵にしてみますね)/.test(clean);
 
       if (isConfirming) {
         sc.isAwaitingConfirmation = true;
         sc.status = 'confirming';
         renderSceneCollectorUI();
-      } else if (isDeclaringDraw) {
-        logDiag(`AIの描画宣言を検知して自動描画を開始: 「${clean}」`);
-        executeConfirmedDrawing();
-        return;
       }
     }
 
