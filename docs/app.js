@@ -21,11 +21,11 @@
   const SAMPLE_RATE_OUT = 24000;  // Gemini返答音声サンプリングレート
   const MIN_DRAW_INTERVAL_MS = 120 * 1000; // 描画間隔の最小時間（2分 = 120秒）
 
-  // 周囲音・テレビ音声カットモード別のRMSしきい値設定（アナログマイクノイズ・吐息での誤反応を完全遮断）
+  // 周囲音・テレビ音声カットモード別のRMSしきい値設定（アナログノイズ遮断 ＆ 話し終わり650msでの爆速返答）
   const NOISE_GATE_PRESETS = {
-    normal: { rms: 0.0045, vuThresholdPercent: 5, hangoverMs: 380, eosSilenceMs: 1400, label: '標準感度（おすすめ）' },
-    tv_cut: { rms: 0.0075, vuThresholdPercent: 9, hangoverMs: 350, eosSilenceMs: 1500, label: 'テレビ・周囲音カット' },
-    strict: { rms: 0.0150, vuThresholdPercent: 18, hangoverMs: 300, eosSilenceMs: 1600, label: '強めカット' }
+    normal: { rms: 0.0035, vuThresholdPercent: 4, hangoverMs: 320, eosSilenceMs: 650, label: '標準感度（おすすめ）' },
+    tv_cut: { rms: 0.0060, vuThresholdPercent: 7, hangoverMs: 300, eosSilenceMs: 700, label: 'テレビ・周囲音カット' },
+    strict: { rms: 0.0120, vuThresholdPercent: 14, hangoverMs: 280, eosSilenceMs: 750, label: '強めカット' }
   };
 
   const state = {
@@ -1765,9 +1765,13 @@ ${levelRules}
           preSpeechRingBuffer.shift();
         }
 
-        // 高齢者のゆったりした発話・息継ぎに配慮し、十分な沈黙（約1.4秒）を検知した時のみEOSを送信
+        // 発話直後の沈黙区間：Gemini側のリアルタイムVADに「無音になった」ことを正確に伝えるためゼロPCMを送信
         if (isSpeakingUtterance) {
           vadSilenceChunks++;
+          // 無音フレームをGeminiに流すことでGeminiのリアルタイム沈黙検出（650ms）を確実に発火させる
+          const zeroPcm = new Int16Array(downsampledData.length);
+          sendPcmAudioChunk(zeroPcm.buffer);
+
           if (vadSilenceChunks >= targetEosChunks) {
             isSpeakingUtterance = false;
             vadSilenceChunks = 0;
@@ -3482,12 +3486,16 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     if (state.aiSpeechEndTimer) {
       clearTimeout(state.aiSpeechEndTimer);
     }
-    // スピーカーからの出音・部屋の反響をマイクが拾ってバージイン誤検知するのを防ぐため、+500msの余韻マージン（Echo Hangover）を確保
-    const remainingMs = Math.max(250, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 500);
+    // スピーカーからの出音余韻マージン（150ms）
+    const remainingMs = Math.max(100, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 150);
     state.aiSpeechEndTimer = setTimeout(() => {
       state.isAiSpeaking = false;
       if (!state.isDrawingMedia) {
         setAvatarState('listening');
+      }
+      // バックエンドへ再生終了を即座に通知し、マイクのエコーガードを解放
+      if (state.socket && state.socket.readyState === WebSocket.OPEN && !state.isDirectGeminiWs) {
+        state.socket.send(JSON.stringify({ type: 'ai_speech_ended' }));
       }
     }, remainingMs);
   }
@@ -3515,11 +3523,14 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       setAvatarState('speaking');
     };
     utter.onend = () => {
-      // 発話終了後、スピーカーの余韻がマイクに拾われないよう800ms待ってからマイクを再開
+      // 発話終了後、余韻マージン（150ms）待ってからマイクを再開
       setTimeout(() => {
         state.isAiSpeaking = false;
         setAvatarState('listening');
-      }, 800);
+        if (state.socket && state.socket.readyState === WebSocket.OPEN && !state.isDirectGeminiWs) {
+          state.socket.send(JSON.stringify({ type: 'ai_speech_ended' }));
+        }
+      }, 150);
     };
     utter.onerror = () => {
       state.isAiSpeaking = false;

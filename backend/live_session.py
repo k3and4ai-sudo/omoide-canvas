@@ -80,7 +80,7 @@ class LiveSessionManager:
         self.current_user_turn_text: str = ""
         self.last_drawn_topic: str = ""
         self.tool_called_in_turn: bool = False
-        self.echo_guard_until: float = time.time() + 6.0  # セッション開始時〜最初の挨拶完了まで完全保護
+        self.echo_guard_until: float = time.time() + 2.5  # セッション開始時〜最初の挨拶完了まで保護
         self.ai_playback_until: float = 0.0              # AI返答音声の推定再生完了時刻
         self.echo_dropped_packets: int = 0               # エコーガードにより遮断したマイクパケット数
         self.last_draw_time: float = 0.0                # 連続描画防止・クォータ保護用タイムスタンプ
@@ -172,14 +172,14 @@ class LiveSessionManager:
                 thinking_config=types.ThinkingConfig(
                     thinking_budget=0
                 ),
-                # 音声区間検出（VAD）：微小ノイズでの誤反応を防ぎ、ゆったりした発話に対応
+                # 音声区間検出（VAD）：話し始めと話し終わりを機敏に検知し、自然な対話テンポ（650ms無音で返答）を実現
                 realtime_input_config=types.RealtimeInputConfig(
                     automatic_activity_detection=types.AutomaticActivityDetection(
                         disabled=False,
-                        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_LOW,
-                        end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
-                        prefix_padding_ms=200,
-                        silence_duration_ms=1200
+                        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                        end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_HIGH,
+                        prefix_padding_ms=300,
+                        silence_duration_ms=650
                     )
                 ),
                 system_instruction=system_instruction,
@@ -221,8 +221,8 @@ class LiveSessionManager:
                         f"あなたの性格（{partner.personality if partner else '優しく穏やか'}）らしく、短く温かく最初の挨拶を声に出して話しかけてください。"
                     )
                 try:
-                    # 最初の挨拶を発話している間（約6.0秒）はスピーカー音をマイクが拾って中断しないようエコーガードを設定
-                    self.echo_guard_until = time.time() + 6.0
+                    # 最初の挨拶を発話している間はスピーカー音をマイクが拾って中断しないよう一時保護
+                    self.echo_guard_until = time.time() + 3.0
                     await session.send(input=initial_greeting_prompt, end_of_turn=True)
                 except Exception as greet_err:
                     logger.warning(f"Initial greeting trigger warning: {greet_err}")
@@ -287,6 +287,13 @@ class LiveSessionManager:
                                 mime_type="image/jpeg"
                             )
                         )
+
+                    elif msg_type == "ai_speech_ended":
+                        # ブラウザ側でAI返答音声のスピーカー再生が完了した通知を受信
+                        # 直ちにエコーガードを解除し、ユーザーの話し始めを1ミリ秒も逃さず拾う
+                        self.echo_guard_until = 0.0
+                        self.ai_playback_until = 0.0
+                        logger.debug("Received ai_speech_ended: echo guard released immediately.")
 
                     elif msg_type == "eos":
                         # クライアント側VADが発話終了を検知した瞬間、Geminiへ即座に音声ストリーム区切りを通知して爆速返答させる
@@ -382,8 +389,8 @@ class LiveSessionManager:
                                     chunk_len = len(part.inline_data.data)
                                     chunk_sec = chunk_len / 48000.0
                                     self.ai_playback_until = max(self.ai_playback_until, now) + chunk_sec
-                                    # スピーカーからの出音および部屋の残響をマイクが拾う期間を完全遮断（+1.2秒ガード）
-                                    self.echo_guard_until = self.ai_playback_until + 1.2
+                                    # スピーカーからの出音完了直後の微小余韻ガード（0.2秒）
+                                    self.echo_guard_until = self.ai_playback_until + 0.2
                                     await self.websocket.send_bytes(part.inline_data.data)
 
                                 # 文字起こしテキスト (字幕) ※内部思考テキスト（**...）は除外
