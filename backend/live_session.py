@@ -303,16 +303,23 @@ class LiveSessionManager:
                             logger.debug(f"audio_stream_end notice: {eos_err}")
 
                     elif msg_type == "user_transcript":
-                        # ブラウザ音声認識で確定した字幕テキスト（話題記録・情景抽出・日報用）
-                        # ※Gemini Live音声ストリームへ直接テキスト注入すると1011内部エラーでセッション切断されるため、
-                        #   音声対話は高感度マイクPCM＋VADに100%任せ、テキストは安全に話題履歴のみに蓄積する
+                        # ブラウザ音声認識で確定した字幕テキスト（話題記録・情景抽出・日報用 ＆ 音声不感帯フォールバック）
                         user_text = data.get("text", "").strip()
                         if user_text:
-                            logger.info(f"User transcript received (for history/scene): {user_text}")
+                            logger.info(f"User transcript received: {user_text}")
                             # 挨拶やマイク確認以外の実質的な話題のみ履歴に追加
                             noise_words = ["聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト", "こんにちは", "こんばんは", "おはよう"]
                             if not any(w in user_text for w in noise_words) and len(user_text) >= 2:
                                 self.discussed_topics.append(user_text)
+
+                            # マイク入力が小さかったりかすれ声でも、ブラウザ音声認識結果をrealtime_inputとしてGeminiへ届ける
+                            # これにより、音声ストリームを乱すことなく確実にさくらさんが即座に応答を返す（沈黙・途切れの完全解消）
+                            if time.time() >= self.echo_guard_until and not self.current_ai_turn_text:
+                                try:
+                                    logger.info(f"Relaying user transcript as realtime input to Gemini: {user_text}")
+                                    await session.send_realtime_input(text=user_text)
+                                except Exception as txt_err:
+                                    logger.warning(f"Failed to relay realtime text input to Gemini: {txt_err}")
 
                     elif msg_type == "request_confirmed_draw":
                         # ユーザーが画面上で「🎨 今の話題を絵にする」または「🎨 はい、描いてください」を押した時のみ描画を実行
@@ -524,16 +531,6 @@ class LiveSessionManager:
                     "remaining_seconds": wait_sec,
                     "message": f"前回の描画から2分間はクォータ保護のため待機中です（残り約{wait_sec}秒 / 本日{reset_time_str}リセット）"
                 })
-                if call_id and not call_id.startswith(("auto_", "user_", "test_")):
-                    try:
-                        await session.send(input=types.LiveClientToolResponse(
-                            function_responses=[types.FunctionResponse(
-                                id=call_id,
-                                response={"output": {"status": "cooldown_active", "remaining_seconds": wait_sec}}
-                            )]
-                        ))
-                    except Exception as te:
-                        logger.warning(f"Failed to return cooldown tool response: {te}")
                 return
 
             self.last_draw_time = time.time()
@@ -588,26 +585,7 @@ class LiveSessionManager:
                 "is_fallback": getattr(artifact, "is_fallback", False),
                 "is_blank": is_blank
             })
-
-            # 正規のGemini Live ツール呼び出しIDの場合のみツールレスポンスを返送
-            if call_id and not call_id.startswith(("auto_", "user_", "test_")):
-                try:
-                    tool_output = {
-                        "status": "displayed_on_canvas" if not is_blank else "quota_limited_canvas_blank",
-                        "title": title,
-                        "visual_elements": visual_desc
-                    }
-                    if is_blank:
-                        tool_output["notice"] = "AIモデルの利用制限のため絵を描くことができず白紙となりました。キャンバスは白紙のままお話を楽しく続ける旨を伝えてください。"
-
-                    await session.send(input=types.LiveClientToolResponse(
-                        function_responses=[types.FunctionResponse(
-                            id=call_id,
-                            response={"output": tool_output}
-                        )]
-                    ))
-                except Exception as t_err:
-                    logger.debug(f"Tool response delivery notice: {t_err}")
+            # ※ツールレスポンスは呼び出し検知時に即座に返送済みのため、ここでは再送しない（プロトコル多重送信の防止）
 
         except Exception as e:
             logger.error(f"Error handling media generation: {e}", exc_info=True)
@@ -640,13 +618,7 @@ class LiveSessionManager:
                     "media_format": new_artifact.media_format.value,
                     "ambient_sound": new_artifact.ambient_sound_type.value
                 })
-
-            await session.send(input=types.LiveClientToolResponse(
-                function_responses=[types.FunctionResponse(
-                    id=call_id,
-                    response={"output": {"status": "refined_and_displayed"}}
-                )]
-            ))
+            # ※ツールレスポンスは呼び出し検知時に即座に返送済みのため、ここでは再送しない
         except Exception as e:
             logger.error(f"Error in media refinement: {e}")
 

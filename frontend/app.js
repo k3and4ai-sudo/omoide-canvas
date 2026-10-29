@@ -23,9 +23,9 @@
 
   // 周囲音・テレビ音声カットモード別のRMSしきい値設定（アナログノイズ遮断 ＆ 話し終わり650msでの爆速返答）
   const NOISE_GATE_PRESETS = {
-    normal: { rms: 0.0035, vuThresholdPercent: 4, hangoverMs: 320, eosSilenceMs: 650, label: '標準感度（おすすめ）' },
-    tv_cut: { rms: 0.0060, vuThresholdPercent: 7, hangoverMs: 300, eosSilenceMs: 700, label: 'テレビ・周囲音カット' },
-    strict: { rms: 0.0120, vuThresholdPercent: 14, hangoverMs: 280, eosSilenceMs: 750, label: '強めカット' }
+    normal: { rms: 0.0006, vuThresholdPercent: 2, hangoverMs: 400, eosSilenceMs: 650, label: '標準感度（おすすめ）' },
+    tv_cut: { rms: 0.0016, vuThresholdPercent: 4, hangoverMs: 350, eosSilenceMs: 700, label: 'テレビ・周囲音カット' },
+    strict: { rms: 0.0035, vuThresholdPercent: 8, hangoverMs: 300, eosSilenceMs: 750, label: '強めカット' }
   };
 
   // 画風スタイル定義（水彩画・リアル・油絵・色鉛筆スケッチ）
@@ -110,6 +110,7 @@
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
     aiSpeechEndTimer: null,         // AI発話終了判定タイマー
     noiseGateMode: 'normal',        // 現在の周囲音対策モード（標準感度デフォルト）
+    userSpeakingUntil: 0,           // 音声認識によるユーザー発話アクティブ終了予測時刻
     lastVoiceActiveTime: 0,         // 近接音声がゲートを通過した最終時刻（Web Speech API連動用）
     lastDrawTriggerTime: 0,         // 前回描画トリガー時刻（多重実行・クォータ枯渇防止用）
     lastDrawTime: 0,                // 最後に描画完了した時刻（最小描画間隔2分 = 120秒制限用）
@@ -1849,7 +1850,7 @@ ${levelRules}
     let voiceHangoverChunks = 0;
     let isSpeakingUtterance = false;
     let chunksSentInUtterance = 0;
-    let preSpeechRingBuffer = []; // 話し始めの最初の子音（「し」「か」等）が欠けないよう直前3チャンクを保持
+    let preSpeechRingBuffer = []; // 話し始めの最初の子音（「し」「か」等）が欠けないよう直前6チャンク（約150ms）を保持
 
     processor.onaudioprocess = (e) => {
       // 出力バッファを明示的にゼロクリアして、スピーカーへのノイズ・発振漏れを完全防止
@@ -1893,13 +1894,15 @@ ${levelRules}
         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
       const rms = Math.sqrt(sumSq / downsampledData.length);
-      const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.tv_cut;
-      const targetHangoverChunks = Math.max(3, Math.round((preset.hangoverMs || 380) / chunkMs));
-      const targetEosChunks = Math.max(8, Math.round((preset.eosSilenceMs || 1400) / chunkMs));
-      const minChunksForUtterance = Math.max(3, Math.round(250 / chunkMs));
+      const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.normal;
+      const targetHangoverChunks = Math.max(4, Math.round((preset.hangoverMs || 400) / chunkMs));
+      const targetEosChunks = Math.max(8, Math.round((preset.eosSilenceMs || 650) / chunkMs));
+      const minChunksForUtterance = Math.max(2, Math.round(150 / chunkMs));
 
-      if (rms > preset.rms) {
-        // 発話開始時、直前3チャンク（約120ms）のプリバッファを先に送信して語頭欠けを完全防止
+      const isVoice = (rms > preset.rms) || (Date.now() < (state.userSpeakingUntil || 0));
+
+      if (isVoice) {
+        // 発話開始時、直前6チャンク（約150ms）のプリバッファを先に送信して語頭欠けを完全防止
         if (voiceHangoverChunks <= 0 && preSpeechRingBuffer.length > 0) {
           for (const preBuf of preSpeechRingBuffer) {
             sendPcmAudioChunk(preBuf);
@@ -1920,9 +1923,9 @@ ${levelRules}
         sendPcmAudioChunk(pcm16.buffer);
         chunksSentInUtterance++;
       } else {
-        // しきい値未満（無音または遠くのテレビ音）：サーバーへ送らずプリバッファに直近3チャンクだけ保持
+        // しきい値未満（無音または遠くのテレビ音）：サーバーへ送らずプリバッファに直近6チャンクだけ保持
         preSpeechRingBuffer.push(pcm16.buffer.slice(0));
-        if (preSpeechRingBuffer.length > 3) {
+        if (preSpeechRingBuffer.length > 6) {
           preSpeechRingBuffer.shift();
         }
 
@@ -2114,6 +2117,10 @@ ${levelRules}
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
 
+      recognition.onspeechstart = () => {
+        state.userSpeakingUntil = Date.now() + 2500;
+      };
+
       recognition.onresult = (event) => {
         let interimTranscript = '';
         let finalTranscript = '';
@@ -2128,6 +2135,7 @@ ${levelRules}
 
         const displayText = (finalTranscript || interimTranscript).trim();
         if (displayText) {
+          state.userSpeakingUntil = Date.now() + 1800;
           dom.userTranscriptText.textContent = `「${displayText}」`;
           
           if (finalTranscript) {
@@ -3647,6 +3655,19 @@ ${artStyle.svgStyleRules}
 
     source.start(state.nextPlaybackTime);
     state.nextPlaybackTime += audioBuffer.duration;
+
+    // ハードウェアレベルでの再生完了イベント（タイマーと二重で保護し、最後のチャンク終了時に即座にマイクを解放）
+    source.onended = () => {
+      if (ctx.currentTime >= state.nextPlaybackTime - 0.05) {
+        state.isAiSpeaking = false;
+        if (!state.isDrawingMedia) {
+          setAvatarState('listening');
+        }
+        if (state.socket && state.socket.readyState === WebSocket.OPEN && !state.isDirectGeminiWs) {
+          state.socket.send(JSON.stringify({ type: 'ai_speech_ended' }));
+        }
+      }
+    };
 
     // AI発話中フラグをONにしてマイクエコーを遮断
     state.isAiSpeaking = true;
