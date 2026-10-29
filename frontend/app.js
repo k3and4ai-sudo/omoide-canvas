@@ -2036,9 +2036,10 @@ ${levelRules}
     const isSchool = !isCafe && !isClassroom && !isMountain && /(高校|文化祭|学園祭|学校|校舎|中学|小学校|先生|生徒|部活|運動会|体育祭|青春|合唱|バンド|模擬店)/.test(combined);
     const isPetDog = !isCafe && !isClassroom && !isMountain && !isSchool && /(犬|いぬ|イヌ|マルチーズ|柴犬|ポメラニアン|プードル|わんちゃん|ワンちゃん|子犬|猫|ねこ|ペット|座敷|畳)/.test(combined);
     const isWalkShopping = !isCafe && !isClassroom && !isMountain && !isSchool && !isPetDog && /(散歩|歩く|お散歩|買い物|お買い物|商店街|市場|食材|八百屋|魚屋|道端|路地|並木道|遊歩道|通り|夕方の道|買い物袋)/.test(combined);
-    const isSea = !isMountain && !isWalkShopping && /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
-    const isSakura = !isMountain && !isWalkShopping && /(桜|春|花|菜の花|入学|卒業|ピンク|花見|公園|庭)/.test(combined);
-    const isSnow = !isMountain && !isWalkShopping && /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
+    const isGarden = !isCafe && !isClassroom && !isMountain && !isSchool && !isPetDog && !isWalkShopping && /(庭|庭園|バラ|薔薇|バラ園|花壇|ガーデン|花畑|赤い花|お花|ひまわり|チューリップ|カーネーション|フラワー|公園)/.test(combined);
+    const isSea = !isMountain && !isWalkShopping && !isGarden && /(海|浜|波|砂浜|船|港|沖縄|ハワイ|夏|泳|魚|潮)/.test(combined);
+    const isSakura = !isMountain && !isWalkShopping && !isGarden && /(桜|春|花見|ピンク)/.test(combined);
+    const isSnow = !isMountain && !isWalkShopping && !isGarden && /(雪|冬|スキー|こたつ|正月|北国|白|氷|北海道|新潟)/.test(combined);
 
     // 1. テーマ別の水彩空・背景グラデーション
     const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
@@ -2053,6 +2054,12 @@ ${levelRules}
       skyGrad.addColorStop(0.35, '#63b3ed');
       skyGrad.addColorStop(0.7, '#bee3f8');
       skyGrad.addColorStop(1, '#ebf8ff');
+    } else if (isGarden) {
+      // 陽光あふれる庭園の爽やかな青空と暖かな光のグラデーション
+      skyGrad.addColorStop(0, '#70b8eb');
+      skyGrad.addColorStop(0.45, '#bfe3f7');
+      skyGrad.addColorStop(0.75, '#fefae0');
+      skyGrad.addColorStop(1, '#ccd5ae');
     } else if (isPetDog) {
       skyGrad.addColorStop(0, '#fbf7ee');
       skyGrad.addColorStop(0.55, '#f5ebe0');
@@ -2821,6 +2828,136 @@ ${levelRules}
       ctx.lineTo(192, 480);
       ctx.closePath();
       ctx.fill();
+    } else if (isGarden) {
+      // 陽光あふれる庭園と満開の赤いバラ（緑の芝生・白い木製フェンス・真紅のバラの花壇・木漏れ日）
+      // 1. 遠景の柔らかな緑の木々（ソフトフォーカス）
+      ctx.fillStyle = '#a7c957';
+      for (let i = 0; i < 7; i++) {
+        const bx = i * 130 - 30;
+        ctx.beginPath();
+        ctx.arc(bx + 70, 310, 85, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 2. 背景の木漏れ日・光の筋（サンビーム）
+      const sunRays = ctx.createLinearGradient(650, 100, 200, 600);
+      sunRays.addColorStop(0, 'rgba(255, 255, 220, 0.45)');
+      sunRays.addColorStop(1, 'rgba(255, 255, 220, 0)');
+      ctx.fillStyle = sunRays;
+      ctx.beginPath();
+      ctx.moveTo(650, 100);
+      ctx.lineTo(100, 600);
+      ctx.lineTo(400, 600);
+      ctx.closePath();
+      ctx.fill();
+
+      // 3. 白いガーデンウッドフェンス
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.strokeStyle = '#c9cba3';
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(0, 320, canvas.width, 10);
+      ctx.strokeRect(0, 320, canvas.width, 10);
+      ctx.fillRect(0, 355, canvas.width, 10);
+      ctx.strokeRect(0, 355, canvas.width, 10);
+      for (let fx = 20; fx < canvas.width; fx += 55) {
+        ctx.beginPath();
+        ctx.moveTo(fx, 380);
+        ctx.lineTo(fx, 290);
+        ctx.lineTo(fx + 10, 278);
+        ctx.lineTo(fx + 20, 290);
+        ctx.lineTo(fx + 20, 380);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      }
+
+      // 4. 青々とした芝生の大地
+      const lawnGrad = ctx.createLinearGradient(0, 380, 0, 600);
+      lawnGrad.addColorStop(0, '#6a994e');
+      lawnGrad.addColorStop(1, '#386641');
+      ctx.fillStyle = lawnGrad;
+      ctx.fillRect(0, 380, canvas.width, 220);
+
+      // 5. 豊かなバラの茂み（オリーブグリーンとエメラルドグリーン）
+      const bushCenters = [130, 260, 420, 580, 720];
+      for (const cx of bushCenters) {
+        ctx.fillStyle = '#283618';
+        ctx.beginPath();
+        ctx.arc(cx, 440, 75, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#386641';
+        ctx.beginPath();
+        ctx.arc(cx - 20, 430, 65, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#6a994e';
+        ctx.beginPath();
+        ctx.arc(cx + 20, 420, 55, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 6. 満開の美しい赤いバラ（立体的な花びらの重なり・真紅・クリムゾン・ローズピンク）
+      const roses = [
+        { x: 140, y: 400, r: 28 },
+        { x: 220, y: 440, r: 24 },
+        { x: 300, y: 390, r: 32 },
+        { x: 390, y: 450, r: 26 },
+        { x: 470, y: 385, r: 35 }, // 中央の主役の大きな赤いバラ
+        { x: 550, y: 430, r: 28 },
+        { x: 640, y: 395, r: 30 },
+        { x: 730, y: 440, r: 25 },
+        { x: 360, y: 500, r: 22 },
+        { x: 520, y: 505, r: 24 }
+      ];
+
+      for (const rose of roses) {
+        // 外側の花びら（深紅）
+        ctx.fillStyle = '#9b111e';
+        ctx.beginPath();
+        ctx.arc(rose.x, rose.y, rose.r, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 中間の花びら（鮮やかな赤）
+        ctx.fillStyle = '#d90429';
+        for (let p = 0; p < 5; p++) {
+          const angle = (p * Math.PI * 2) / 5;
+          const px = rose.x + Math.cos(angle) * (rose.r * 0.45);
+          const py = rose.y + Math.sin(angle) * (rose.r * 0.45);
+          ctx.beginPath();
+          ctx.arc(px, py, rose.r * 0.55, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // 花の中心（ベルベットレッド）
+        ctx.fillStyle = '#ef233c';
+        ctx.beginPath();
+        ctx.arc(rose.x, rose.y, rose.r * 0.48, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 渦巻き状の花芯（ハイライト）
+        ctx.fillStyle = '#ff758f';
+        ctx.beginPath();
+        ctx.arc(rose.x - 2, rose.y - 2, rose.r * 0.22, 0, Math.PI * 2);
+        ctx.fill();
+
+        // バラの緑の葉（左右）
+        ctx.fillStyle = '#2d6a4f';
+        ctx.beginPath();
+        ctx.ellipse(rose.x - rose.r * 0.9, rose.y + rose.r * 0.4, 14, 7, -0.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(rose.x + rose.r * 0.9, rose.y + rose.r * 0.4, 14, 7, 0.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // 7. 風に舞う優しい赤い花びら（そよ風の表現）
+      ctx.fillStyle = 'rgba(239, 35, 60, 0.75)';
+      for (let i = 0; i < 18; i++) {
+        const px = (i * 47 + 70) % 760;
+        const py = 160 + (i * 23) % 360;
+        ctx.beginPath();
+        ctx.ellipse(px, py, 9, 5, 0.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
     } else {
       ctx.fillStyle = isSnow ? '#b8c9d9' : isSakura ? '#95b8a6' : '#81b29a';
       ctx.beginPath();
@@ -2927,34 +3064,45 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 4. 人物のリアルな顔は描かず、情景・静物・風景を主役にしてください。
 5. 必ず <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。解説文やマークダウンのコード枠（\`\`\`xml 等）は一切含めないでください。`;
 
-        const resSvg = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: svgPrompt }] }],
-              generationConfig: { temperature: 0.35, maxOutputTokens: 3800 }
-            }),
-            signal: AbortSignal.timeout ? AbortSignal.timeout(45000) : undefined
-          }
-        );
-        recordApiCall(resSvg.headers, resSvg.status);
-        if (resSvg.ok) {
-          const dataSvg = await resSvg.json();
-          const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          const svgMatch = rawText.match(/<svg[\s\S]*?<\/svg>/i);
-          if (svgMatch && svgMatch[0]) {
-            const cleanSvg = svgMatch[0];
-            mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
-            dismissCanvasError();
-            logDiag('Gemini によるオーダーメイド情景水彩画(SVG)の描画に成功しました！');
-          }
-        } else {
-          if (resSvg.status === 429) {
-            logDiag('Gemini API 429検知: 直ちに高精細ローカル水彩画エンジンに切り替えます。');
-          } else if (resSvg.status === 400 || resSvg.status === 403) {
-            showCanvasError(`Gemini API エラー (${resSvg.status})`, 'APIキーが無効または制限されています。画面右上のキー設定をご確認ください。');
+        // 503高負荷やクォータ制限時も即座に代替できるよう多段モデルフォールバックを適用
+        const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-flash'];
+        for (const modelName of candidateModels) {
+          try {
+            logDiag(`AI情景描画を試行中 (${modelName}): 「${title}」`);
+            const resSvg = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: svgPrompt }] }],
+                  generationConfig: { temperature: 0.3, maxOutputTokens: 6000 }
+                }),
+                signal: AbortSignal.timeout ? AbortSignal.timeout(28000) : undefined
+              }
+            );
+            recordApiCall(resSvg.headers, resSvg.status);
+            if (resSvg.ok) {
+              const dataSvg = await resSvg.json();
+              const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+              let svgMatch = rawText.match(/<svg[\s\S]*?<\/svg>/i);
+              // 万が一末尾タグ手前で切れていた場合の自己修復
+              if (!svgMatch && rawText.includes('<svg')) {
+                const startIdx = rawText.indexOf('<svg');
+                svgMatch = [rawText.slice(startIdx) + '\n</svg>'];
+              }
+              if (svgMatch && svgMatch[0]) {
+                const cleanSvg = svgMatch[0];
+                mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
+                dismissCanvasError();
+                logDiag(`Gemini (${modelName}) によるオーダーメイド情景水彩画(SVG)の描画に成功しました！`);
+                break;
+              }
+            } else {
+              logDiag(`モデル ${modelName} 応答ステータス: ${resSvg.status}。次の候補モデルを試行します。`);
+            }
+          } catch (mErr) {
+            logDiag(`モデル ${modelName} エラー: ${mErr.message}。次の候補モデルを試行します。`);
           }
         }
       } catch (svgErr) {
@@ -3343,14 +3491,24 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
     const isFallback = !!mediaData.is_fallback;
     if (isFallback) {
-      dom.captionTag.textContent = '簡易水彩画';
+      dom.captionTag.textContent = '水彩画 (端末描画)';
       dom.captionFallbackBadge?.classList.remove('hidden');
       dom.captionFallbackNotice?.classList.remove('hidden');
-      showCanvasError(
-        '⚠️ 端末内の簡易水彩画を表示中（会話内容と異なります）',
-        'Google AI Studioのクォータ制限（429）のため、端末内の簡易水彩画を表示しています。会話の内容とは全く違う絵が表示されてしまいます。',
-        true
-      );
+      const rInfo = getPacificResetTimeInfo();
+      const tracker = loadQuotaTracker();
+      if (tracker.isRateLimited) {
+        showCanvasError(
+          '🎨 端末内の水彩画エンジンで描画しました',
+          `AI画像クォータ上限（429）のため、端末内の水彩画エンジンでお話の情景（${title}）を描画しました。本日${rInfo.timeStr}（${rInfo.seasonLabel}）にクォータがリセットされます。`,
+          true
+        );
+      } else {
+        showCanvasError(
+          '🎨 端末内の水彩画エンジンで描画しました',
+          `外部AIの応答遅延・一時的混雑のため、端末内の水彩画エンジンでお話の情景（${title}）を描画しました。`,
+          true
+        );
+      }
     } else {
       dom.captionTag.textContent = mediaData.media_format === 'video' ? '動く絵本' : '水彩画';
       dom.captionFallbackBadge?.classList.add('hidden');

@@ -108,9 +108,11 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
     is_school = (not is_cafe and not is_classroom and not is_mountain) and any(k in combined for k in ["高校", "文化祭", "学園祭", "学校", "校舎", "中学", "小学校", "先生", "生徒", "部活", "運動会", "体育祭", "青春", "合唱", "模擬店"])
     is_pet = (not is_cafe and not is_classroom and not is_mountain and not is_school) and any(k in combined for k in ["犬", "いぬ", "イヌ", "マルチーズ", "柴犬", "ポメラニアン", "プードル", "わんちゃん", "ワンちゃん", "子犬", "猫", "ねこ", "ペット", "座敷", "畳"])
     is_walk = (not is_cafe and not is_classroom and not is_mountain and not is_school and not is_pet) and any(k in combined for k in ["散歩", "歩く", "お散歩", "買い物", "お買い物", "商店街", "市場", "食材", "八百屋", "魚屋", "道端", "路地", "並木道", "遊歩道", "通り", "夕方の道", "買い物袋"])
-    is_sea = (not is_mountain and not is_walk) and any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
-    is_sakura = (not is_mountain and not is_walk) and any(k in combined for k in ["桜", "春", "花", "菜の花", "入学", "卒業", "ピンク", "花見", "公園", "庭"])
-    is_snow = (not is_mountain and not is_walk) and any(k in combined for k in ["雪", "冬", "スキー", "こたつ", "正月", "北国", "白", "氷", "北海道", "新潟"])
+    garden_keywords = ["庭", "庭園", "バラ", "薔薇", "バラ園", "花壇", "ガーデン", "花畑", "赤い花", "お花", "ひまわり", "チューリップ", "カーネーション", "フラワー"]
+    is_garden = (not is_cafe and not is_classroom and not is_mountain and not is_school and not is_pet and not is_walk) and any(k in combined for k in garden_keywords)
+    is_sea = (not is_mountain and not is_walk and not is_garden) and any(k in combined for k in ["海", "浜", "波", "砂浜", "船", "港", "沖縄", "ハワイ", "夏", "泳", "魚", "潮"])
+    is_sakura = (not is_mountain and not is_walk and not is_garden) and any(k in combined for k in ["桜", "春", "花見", "ピンク"])
+    is_snow = (not is_mountain and not is_walk and not is_garden) and any(k in combined for k in ["雪", "冬", "スキー", "こたつ", "正月", "北国", "白", "氷", "北海道", "新潟"])
     is_sunset = any(k in combined for k in ["夕焼け", "夕方", "夕日", "秋", "赤とんぼ", "紅葉", "もみじ", "祭り", "花火"])
 
     base_image = Image.new("RGB", (width, height), color=(253, 248, 242))
@@ -262,6 +264,49 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
         draw.rounded_rectangle([180, 600, 270, 710], radius=8, fill=(221, 184, 146), outline=(176, 137, 104), width=3)
         draw.polygon([(190, 600), (175, 520), (190, 515), (205, 600)], fill=(82, 183, 136)) # ネギ
         draw.polygon([(215, 600), (235, 510), (255, 518), (242, 600)], fill=(200, 159, 120)) # パン
+    elif is_garden:
+        # 明るい庭園と満開の赤いバラ
+        draw.rectangle([0, 0, width, 480], fill=(186, 227, 247))
+        # 太陽
+        draw.ellipse([780, 80, 920, 220], fill=(255, 248, 200))
+        # 遠景の緑の木々
+        for i in range(8):
+            bx = i * 140 - 30
+            draw.ellipse([bx, 320, bx + 190, 520], fill=(167, 201, 87))
+        # 白いウッドフェンス
+        draw.rectangle([0, 420, width, 435], fill=(255, 255, 255), outline=(200, 200, 200), width=2)
+        draw.rectangle([0, 465, width, 480], fill=(255, 255, 255), outline=(200, 200, 200), width=2)
+        for fx in range(20, width, 70):
+            draw.polygon([(fx, 500), (fx, 380), (fx + 12, 365), (fx + 24, 380), (fx + 24, 500)], fill=(255, 255, 255), outline=(190, 190, 190))
+        # 芝生
+        draw.rectangle([0, 480, width, height], fill=(56, 102, 65))
+        # バラの茂み
+        for cx in [160, 320, 520, 720, 900]:
+            draw.ellipse([cx - 90, 520, cx + 90, 680], fill=(40, 54, 24))
+            draw.ellipse([cx - 70, 500, cx + 70, 640], fill=(56, 102, 65))
+            draw.ellipse([cx - 50, 480, cx + 50, 610], fill=(106, 153, 78))
+        # 咲き誇る赤いバラ（外側の深紅、中心の鮮やかな赤、花芯）
+        rose_coords = [
+            (160, 480, 36), (250, 540, 30), (340, 470, 40), (440, 530, 32),
+            (540, 460, 46), (640, 520, 34), (740, 470, 38), (860, 520, 32),
+            (410, 600, 28), (620, 610, 30)
+        ]
+        for rx, ry, rr in rose_coords:
+            # 葉
+            draw.ellipse([rx - rr - 14, ry + 4, rx - rr + 14, ry + 22], fill=(45, 106, 79))
+            draw.ellipse([rx + rr - 14, ry + 4, rx + rr + 14, ry + 22], fill=(45, 106, 79))
+            # 外側の深紅
+            draw.ellipse([rx - rr, ry - rr, rx + rr, ry + rr], fill=(155, 17, 30))
+            # 内側の赤
+            draw.ellipse([rx - int(rr * 0.7), ry - int(rr * 0.7), rx + int(rr * 0.7), ry + int(rr * 0.7)], fill=(217, 4, 41))
+            # 花芯
+            draw.ellipse([rx - int(rr * 0.35), ry - int(rr * 0.35), rx + int(rr * 0.35), ry + int(rr * 0.35)], fill=(239, 35, 60))
+            draw.ellipse([rx - 4, ry - 4, rx + 4, ry + 4], fill=(255, 117, 143))
+        # 風に舞う花びら
+        for i in range(25):
+            px = (i * 41 + 60) % 980
+            py = 180 + (i * 29) % 450
+            draw.ellipse([px, py, px + 14, py + 8], fill=(239, 35, 60))
     elif is_sunset:
         draw.rectangle([0, 0, width, 450], fill=(244, 162, 97))
         draw.ellipse([720, 140, 860, 280], fill=(231, 111, 81))
@@ -381,10 +426,9 @@ def generate_memory_visual_artifact_sync(
             except Exception as nb_err:
                 logger.warning(f"Flash Image skipped ({nb_err}). Proceeding to Gemini 3.8 Flash SVG generation.")
 
-            # 2. Gemini 3.8 Flash によるオーダーメイドSVG水彩画生成
+            # 2. オーダーメイドSVG水彩画生成（503高負荷・クォータ制限時も即座に代替する多段モデルフォールバック）
             if not image_generated:
-                try:
-                    svg_prompt = f"""あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
+                svg_prompt = f"""あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
 {clean_elements}
@@ -392,29 +436,54 @@ def generate_memory_visual_artifact_sync(
 【最重要造形ルール】
 1. ユーザーがお話しした具体的なモチーフ・特徴・造形（山、夕焼け、海、学校、教室、喫茶店、花、木製テーブル、窓、雪、川など）を100%忠実に描いてください。
    - 山について語られている場合：鋭角な三角形・ギザギザの険しい岩峰・切り立った山頂・陰影・雪渓をシャープなポリゴンやパス（<polygon>, <path>）でダイナミックに描いてください！
+   - 庭やバラについて語られている場合：青空、木漏れ日、緑の芝生、白いウッドフェンス、鮮やかな真紅のバラ（立体的な花びら・蕾・葉）を豊かに描いてください！
    - 喫茶店や店内について語られている場合：木目テーブル、コーヒー、クリームソーダ、ペンダントライト、窓などを描いてください。
    - 学校や教室、海、季節など、会話に出てきた情景を主役として具体的に配置してください。
 2. 背景には美しいグラデーション（<linearGradient>, <radialGradient>）を使い、温かく情緒的な水彩画の雰囲気にしてください。
 3. 人物のリアルな顔は描かず、後ろ姿や遠景、あるいは情景・静物を美しく描いてください。
 4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（```xml 等）は一切含めないでください。"""
 
-                    svg_res = client.models.generate_content(
-                        model="gemini-3.8-flash",
-                        contents=svg_prompt,
-                    )
-                    if svg_res and svg_res.text:
-                        svg_match = re.search(r"<svg[\s\S]*?</svg>", svg_res.text, re.IGNORECASE)
-                        if svg_match:
-                            svg_name = f"{memory_id}.svg"
-                            svg_path = MEDIA_DIR / svg_name
-                            with open(svg_path, "w", encoding="utf-8") as f:
-                                f.write(svg_match.group(0))
-                            file_name = svg_name
-                            image_generated = True
-                            is_fallback = False
-                            logger.info(f"Gemini 3.8 Flash SVG generation succeeded: {svg_path}")
-                except Exception as svg_err:
-                    logger.warning(f"Gemini 3.8 Flash SVG generation failed: {svg_err}")
+                candidate_svg_models = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
+                for model_candidate in candidate_svg_models:
+                    try:
+                        logger.info(f"Attempting SVG generation with {model_candidate} for '{clean_title}'...")
+                        svg_res = client.models.generate_content(
+                            model=model_candidate,
+                            contents=svg_prompt,
+                            config=types.GenerateContentConfig(
+                                temperature=0.3,
+                                max_output_tokens=6000
+                            )
+                        )
+                        if svg_res and svg_res.text:
+                            raw_text = svg_res.text
+                            svg_match = re.search(r"<svg[\s\S]*?</svg>", raw_text, re.IGNORECASE)
+                            if not svg_match and "<svg" in raw_text:
+                                start_idx = raw_text.find("<svg")
+                                svg_match = re.search(r"<svg[\s\S]*", raw_text)
+                                if svg_match:
+                                    repaired_svg = svg_match.group(0) + "\n</svg>"
+                                    svg_name = f"{memory_id}.svg"
+                                    svg_path = MEDIA_DIR / svg_name
+                                    with open(svg_path, "w", encoding="utf-8") as f:
+                                        f.write(repaired_svg)
+                                    file_name = svg_name
+                                    image_generated = True
+                                    is_fallback = False
+                                    logger.info(f"SVG generation succeeded (repaired) with {model_candidate}: {svg_path}")
+                                    break
+                            elif svg_match:
+                                svg_name = f"{memory_id}.svg"
+                                svg_path = MEDIA_DIR / svg_name
+                                with open(svg_path, "w", encoding="utf-8") as f:
+                                    f.write(svg_match.group(0))
+                                file_name = svg_name
+                                image_generated = True
+                                is_fallback = False
+                                logger.info(f"SVG generation succeeded with {model_candidate}: {svg_path}")
+                                break
+                    except Exception as svg_err:
+                        logger.warning(f"SVG generation with {model_candidate} failed: {svg_err}. Trying next model...")
         except Exception as client_err:
             logger.warning(f"GenAI Client setup or generation error: {client_err}")
 
