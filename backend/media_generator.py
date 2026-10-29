@@ -488,8 +488,10 @@ def generate_memory_visual_artifact_sync(
             logger.warning(f"GenAI Client setup or generation error: {client_err}")
 
     if not image_generated:
-        generate_fallback_image(clean_title, file_path, clean_elements)
+        # ユーザー指示: AIモデルで描けなかった時はダミー絵や過去の画像を表示せず白紙とする
+        file_name = ""
         is_fallback = True
+        logger.info(f"AI models could not draw '{clean_title}'. Canvas will remain blank as requested by user.")
 
     artifact = MemoryArtifact(
         memory_id=memory_id,
@@ -500,7 +502,7 @@ def generate_memory_visual_artifact_sync(
         visual_description=clean_elements,
         applied_prompt=final_prompt,
         media_format=media_format,
-        media_url=f"/static/memories/{file_name}",
+        media_url=f"/static/memories/{file_name}" if file_name else "",
         ambient_sound_type=ambient_sound,
         refine_history=[],
         is_fallback=is_fallback

@@ -21,11 +21,11 @@
   const SAMPLE_RATE_OUT = 24000;  // Gemini返答音声サンプリングレート
   const MIN_DRAW_INTERVAL_MS = 120 * 1000; // 描画間隔の最小時間（2分 = 120秒）
 
-  // 周囲音・テレビ音声カットモード別のRMSしきい値設定（高齢者の発話テンポ・息継ぎに最適化したミリ秒基準）
+  // 周囲音・テレビ音声カットモード別のRMSしきい値設定（アナログマイクノイズ・吐息での誤反応を完全遮断）
   const NOISE_GATE_PRESETS = {
-    normal: { rms: 0.0015, vuThresholdPercent: 2, hangoverMs: 400, eosSilenceMs: 1400, label: '標準感度（おすすめ）' },
-    tv_cut: { rms: 0.0030, vuThresholdPercent: 5, hangoverMs: 380, eosSilenceMs: 1500, label: 'テレビ・周囲音カット' },
-    strict: { rms: 0.0080, vuThresholdPercent: 12, hangoverMs: 320, eosSilenceMs: 1600, label: '強めカット' }
+    normal: { rms: 0.0045, vuThresholdPercent: 5, hangoverMs: 380, eosSilenceMs: 1400, label: '標準感度（おすすめ）' },
+    tv_cut: { rms: 0.0075, vuThresholdPercent: 9, hangoverMs: 350, eosSilenceMs: 1500, label: 'テレビ・周囲音カット' },
+    strict: { rms: 0.0150, vuThresholdPercent: 18, hangoverMs: 300, eosSilenceMs: 1600, label: '強めカット' }
   };
 
   const state = {
@@ -874,9 +874,14 @@
 5. 人生の先生として敬意を払う姿勢：「ぜひ${nickname}に教えていただきたいです」という姿勢で接してください。
 6. 【重要】テレビ・ラジオ・周囲の雑音対策（空間フィルタリング）：
    背景から聞こえるテレビ番組の音声（ニュース、CM、ドラマ等）や遠くの第三者の声には絶対に反応せず、目の前の「${nickname}」が直接ゆっくり話しかけた言葉にのみ返答してください。
+7. 【最重要】無音・マイクノイズ・息遣いへの無反応ルール（勝手な反応の完全禁止）：
+   相手が何も話していない沈黙時間、呼吸音（吐息）、マイクの電気的ノイズや環境音に対しては、【絶対に勝手に相槌や発話をしないでください】。相手が明確に日本語の言葉を発した時のみ返答してください。
 ${levelRules}
 
 # 【思い出の映像化（情景収集・描画前確認・合意形成）の絶対ルール】
+0. 【最重要】ご本人の言葉に100%忠実な具体的ディテールの反映（抽象化・勝手な置き換えの禁止）：
+   相手が語った具体的な事物（例：「赤いバラ」「白い柵」「庭」「コスモス」「信州松本駅」「丸いテーブル」など、花・植物・建物・色彩・道具の名称）を、必ずそのままツールの \`japanese_title\`（例：「庭いっぱいに咲く赤いバラ」）および \`visual_elements\`（例：「満開の赤いバラ、白い木製の柵、緑の芝生、晴れ渡る青空」）に漏れなく正確に指定してください。
+   「日差しが降り注ぐ」「風が吹いている」といった抽象的なテンプレート表現だけで済ませるのは厳禁です。
 1. 勝手な即時描画の絶対禁止：
    相手が昔の思い出の風景や場所（例：文化祭、教室、喫茶店の中、故郷、海、山など）を話し始めても、【絶対にすぐにツールを呼んで絵を描いてはいけません】。
 2. ディテールの優しい掘り下げ（情景情報の収集）：
@@ -1217,10 +1222,10 @@ ${levelRules}
           realtimeInputConfig: {
             automatic_activity_detection: {
               disabled: false,
-              start_of_speech_sensitivity: 'START_SENSITIVITY_HIGH',
+              start_of_speech_sensitivity: 'START_SENSITIVITY_BALANCED',
               end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
               prefix_padding_ms: 200,
-              silence_duration_ms: 800
+              silence_duration_ms: 1200
             }
           },
           tools: [
@@ -1228,13 +1233,13 @@ ${levelRules}
               functionDeclarations: [
                 {
                   name: 'generate_memory_visual',
-                  description: '対象者が語った思い出や夢の風景を水彩画または動画として描画・画面表示する',
+                  description: '対象者が語った思い出や夢の風景を水彩画として描画する。visual_elementsには会話で聞き取った具体的な事物（花・植物・建物・色彩等）を漏れなく詳細に指定すること',
                   parameters: {
                     type: 'OBJECT',
                     properties: {
                       scene_type: { type: 'STRING' },
-                      japanese_title: { type: 'STRING' },
-                      visual_elements: { type: 'STRING' },
+                      japanese_title: { type: 'STRING', description: '具体的な絵画タイトル（例: 庭いっぱいに咲く赤いバラ）' },
+                      visual_elements: { type: 'STRING', description: '会話で聞き取った具体的な情景要素（例: 真っ赤なバラの花壇、白い木製の柵、青空）' },
                       media_format: { type: 'STRING' },
                       ambient_sound: { type: 'STRING' }
                     },
@@ -1248,8 +1253,8 @@ ${levelRules}
                     type: 'OBJECT',
                     properties: {
                       original_memory_id: { type: 'STRING' },
-                      user_feedback: { type: 'STRING' },
-                      updated_visual_elements: { type: 'STRING' }
+                      user_feedback: { type: 'STRING', description: '相手の修正希望（例: 夕焼け空にして）' },
+                      updated_visual_elements: { type: 'STRING', description: '修正を反映した新しい全体情景の具体的要素' }
                     },
                     required: ['original_memory_id', 'user_feedback', 'updated_visual_elements']
                   }
@@ -3203,13 +3208,14 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       }
     }
 
-    // Step 3: テーマ別水彩画キャンバス描画フォールバック（外部APIエラー・クォータ制限時も100%確実に絵を出す！）
+    // AIモデルで描画できなかった場合の処理（ユーザー指示: 過去の映像やダミー絵を出さず、白紙のまま報告する）
     let isFallback = false;
+    let isBlank = false;
     if (!mediaDataUrl) {
-      if (dom.drawingSubtext) dom.drawingSubtext.textContent = '3/3: 高精細ローカル水彩画エンジンで描画中...';
-      logDiag('ローカル水彩画エンジンでフォールバック描画を実行します。');
-      mediaDataUrl = await renderFallbackWatercolorDataUrl(title, elements);
+      logDiag('AIモデルで画像生成できませんでした（クォータ制限等）。指示に従いキャンバスは白紙のままとします。');
       isFallback = true;
+      isBlank = true;
+      mediaDataUrl = '';
     }
 
     const artifact = {
@@ -3222,7 +3228,8 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       media_format: 'image',
       media_url: mediaDataUrl,
       ambient_sound: ambientSound,
-      is_fallback: isFallback
+      is_fallback: isFallback,
+      is_blank: isBlank
     };
 
     state.sessionMemories.push(artifact);
@@ -3580,73 +3587,96 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
   function displayGeneratedMedia(mediaData) {
     state.isDrawingMedia = false;
-    state.hasDrawnImage = true;
-    dom.canvasPlaceholder.classList.add('hidden');
     dom.drawingOverlay.classList.add('hidden');
 
     const title = mediaData.title || '思い出の情景';
     dom.captionTitle.textContent = title;
 
-    const isFallback = !!mediaData.is_fallback;
-    if (isFallback) {
-      dom.captionTag.textContent = '水彩画 (端末描画)';
-      dom.captionFallbackBadge?.classList.remove('hidden');
-      dom.captionFallbackNotice?.classList.remove('hidden');
+    // 聞き取った情景ディテールを情景メモに確実に反映
+    const rawElements = mediaData.visual_elements || mediaData.visual_description || '';
+    if (rawElements) {
+      const parts = rawElements.split(/[、,，/／\n]/);
+      parts.forEach(p => {
+        const cp = p.trim().replace(/^【.*?】[:：]?\s*/, '');
+        if (cp.length >= 2 && cp.length <= 20 && !cp.includes('水彩画風') && !cp.includes('ノスタルジー')) {
+          state.sceneCollector.details.add(cp);
+        }
+      });
+    }
+    if (title && title !== '思い出の情景') {
+      state.sceneCollector.topic = title;
+    }
+
+    const isBlank = !!(mediaData.is_blank || !mediaData.media_url);
+
+    if (isBlank) {
+      // ユーザー指示: AIモデルで描けなかった時は過去画像やダミー絵を出さず、白紙のまま報告する
+      state.hasDrawnImage = false;
+      dom.canvasPlaceholder.classList.remove('hidden');
+      dom.memoryImage.classList.add('hidden');
+      dom.memoryImage.src = '';
+      dom.memoryVideo.classList.add('hidden');
+      try { dom.memoryVideo.pause(); } catch (e) {}
+
+      dom.captionTitle.textContent = `${title}（描画制限のため白紙）`;
+      dom.captionTag.textContent = '白紙 (描画制限)';
+      dom.captionFallbackBadge?.classList.add('hidden');
+      dom.captionFallbackNotice?.classList.add('hidden');
+
       const rInfo = getPacificResetTimeInfo();
-      const tracker = loadQuotaTracker();
-      if (tracker.isRateLimited) {
-        showCanvasError(
-          '🎨 端末内の水彩画エンジンで描画しました',
-          `AI画像クォータ上限（429）のため、端末内の水彩画エンジンでお話の情景（${title}）を描画しました。本日${rInfo.timeStr}（${rInfo.seasonLabel}）にクォータがリセットされます。`,
-          true
-        );
-      } else {
-        showCanvasError(
-          '🎨 端末内の水彩画エンジンで描画しました',
-          `外部AIの応答遅延・一時的混雑のため、端末内の水彩画エンジンでお話の情景（${title}）を描画しました。`,
-          true
-        );
+      showCanvasError(
+        '⚠️ AIモデルの描画制限のため白紙',
+        `Google AIのクォータ上限（429）のため、新しい絵を生成できませんでした。ご要望通りキャンバスは白紙のままお話を続けます。（本日${rInfo.timeStr}リセット予定）`,
+        true
+      );
+
+      const reportMsg = `AIの描画制限のため、今回は絵を描くことができませんでした。キャンバスは白紙のままですが、このままお話を楽しく続けましょうね。`;
+      dom.aiTranscriptText.textContent = reportMsg;
+      if (state.isSimulation) {
+        speakTextWithWebSpeech(reportMsg);
       }
     } else {
+      state.hasDrawnImage = true;
+      dom.canvasPlaceholder.classList.add('hidden');
       dom.captionTag.textContent = mediaData.media_format === 'video' ? '動く絵本' : '水彩画';
       dom.captionFallbackBadge?.classList.add('hidden');
       dom.captionFallbackNotice?.classList.add('hidden');
       dismissCanvasError();
-    }
 
-    if (mediaData.media_format === 'video') {
-      dom.memoryImage.classList.add('hidden');
-      dom.memoryVideo.src = mediaData.media_url;
-      dom.memoryVideo.classList.remove('hidden');
-      dom.memoryVideo.play();
-      showCanvasUpdateToast(title);
-    } else {
-      dom.memoryVideo.classList.add('hidden');
-      
-      // 画像クロスフェード：新しい画像をプリロードしてからスムーズに更新
-      const newImg = new Image();
-      newImg.onload = () => {
-        dom.memoryImage.classList.remove('refreshing');
-        dom.memoryImage.src = mediaData.media_url;
-        dom.memoryImage.classList.remove('hidden');
+      if (mediaData.media_format === 'video') {
+        dom.memoryImage.classList.add('hidden');
+        dom.memoryVideo.src = mediaData.media_url;
+        dom.memoryVideo.classList.remove('hidden');
+        dom.memoryVideo.play();
         showCanvasUpdateToast(title);
-      };
-      newImg.onerror = () => {
-        dom.memoryImage.classList.remove('refreshing');
-        dom.memoryImage.src = mediaData.media_url;
-        dom.memoryImage.classList.remove('hidden');
-        showCanvasUpdateToast(title);
-      };
+      } else {
+        dom.memoryVideo.classList.add('hidden');
+        
+        // 画像クロスフェード：新しい画像をプリロードしてからスムーズに更新
+        const newImg = new Image();
+        newImg.onload = () => {
+          dom.memoryImage.classList.remove('refreshing');
+          dom.memoryImage.src = mediaData.media_url;
+          dom.memoryImage.classList.remove('hidden');
+          showCanvasUpdateToast(title);
+        };
+        newImg.onerror = () => {
+          dom.memoryImage.classList.remove('refreshing');
+          dom.memoryImage.src = mediaData.media_url;
+          dom.memoryImage.classList.remove('hidden');
+          showCanvasUpdateToast(title);
+        };
 
-      // 既存の絵が表示されていたらリフレッシュ演出（フェードアウト）
-      if (!dom.memoryImage.classList.contains('hidden') && dom.memoryImage.src) {
-        dom.memoryImage.classList.add('refreshing');
+        // 既存の絵が表示されていたらリフレッシュ演出（フェードアウト）
+        if (!dom.memoryImage.classList.contains('hidden') && dom.memoryImage.src) {
+          dom.memoryImage.classList.add('refreshing');
+        }
+        newImg.src = mediaData.media_url;
       }
-      newImg.src = mediaData.media_url;
     }
 
     // 環境音の再生
-    if (mediaData.ambient_sound && mediaData.ambient_sound !== 'none') {
+    if (mediaData.ambient_sound && mediaData.ambient_sound !== 'none' && !isBlank) {
       dom.soundIndicator.classList.remove('hidden');
       dom.soundName.textContent = getSoundLabel(mediaData.ambient_sound);
       playSyntheticAmbientSound(mediaData.ambient_sound);
@@ -3656,7 +3686,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     }
 
     renderSceneCollectorUI();
-    logDiag(`新しい情景を表示しました: ${title}`);
+    logDiag(`情景処理完了: ${title} (白紙=${isBlank})`);
 
     // 描画完了時刻を記録し、最小描画間隔（2分 = 120秒）のクールダウンタイマーを開始
     state.lastDrawTime = Date.now();
@@ -4079,7 +4109,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     }
 
     // 3. 話題・テーマの抽出
-    const topicRegex = /(犬|いぬ|イヌ|マルチーズ|柴犬|ペット|子犬|猫|ねこ|散歩|お買い物|買い物|商店街|文化祭|模擬店|運動会|山登り|登山|ハイキング|お祭り|祭り|旅行|卒業式|入学式|紅葉狩り|お花見|ドライブ|仕事|授業|畑仕事|収穫)/;
+    const topicRegex = /(赤いバラ|バラ|ばら|薔薇|バラ園|花壇|庭園|お花|花|ガーデニング|犬|いぬ|イヌ|マルチーズ|柴犬|ペット|子犬|猫|ねこ|散歩|お買い物|買い物|商店街|文化祭|模擬店|運動会|山登り|登山|ハイキング|お祭り|祭り|旅行|卒業式|入学式|紅葉狩り|お花見|ドライブ|仕事|授業|畑仕事|収穫)/;
     const tm = clean.match(topicRegex);
     if (tm) {
       if (!sc.topic || tm[0].length >= sc.topic.length) {
@@ -4089,7 +4119,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     }
 
     // 4. 場所・舞台の抽出
-    const placeRegex = /(座敷|和室|畳|お部屋|家の中|リビング|北アルプス|南アルプス|中央アルプス|槍ヶ岳|穂高岳|常念岳|富士山|八ヶ岳|美ヶ原|上高地|信州|松本|喫茶店の中|喫茶店|カフェ|純喫茶|教室の中|教室|校舎|学校|体育館|校庭|海|海岸|砂浜|波打ち際|港|駅|ホーム|公園|商店街|田んぼ|畑|リンゴ畑|りんご畑|庭|神社|お寺|故郷|実家)/;
+    const placeRegex = /(バラ園|庭園|花壇|庭|中庭|芝生の庭|座敷|和室|畳|お部屋|家の中|リビング|北アルプス|南アルプス|中央アルプス|槍ヶ岳|穂高岳|常念岳|富士山|八ヶ岳|美ヶ原|上高地|信州|松本|喫茶店の中|喫茶店|カフェ|純喫茶|教室の中|教室|校舎|学校|体育館|校庭|海|海岸|砂浜|波打ち際|港|駅|ホーム|公園|商店街|田んぼ|畑|リンゴ畑|りんご畑|神社|お寺|故郷|実家)/;
     const pm = clean.match(placeRegex);
     if (pm) {
       sc.place = pm[0];
@@ -4111,6 +4141,8 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
     // 6. 情景ディテール（事物・要素）の抽出
     const detailList = [
+      // バラ・花・庭園
+      '赤いバラ', '真っ赤なバラ', '満開のバラ', 'バラの花壇', '白い木製の柵', '白い柵', '緑の芝生', '石畳の小道', 'レンガの小道', '木製ベンチ', '庭のベンチ', '庭の池', '植木鉢', '藤棚', '満開の桜', 'ひまわり', 'コスモス', '朝顔', '紫陽花', '小鳥のさえずり', '温かい日差し',
       // ペット・動物・和室
       'マルチーズ', '元気な白い犬', '白い子犬', '犬', 'ワンちゃん', 'ペット', '畳', '障子', '座敷', '座布団', '温かい光',
       // 山・自然
@@ -4131,6 +4163,28 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
         }
       }
     });
+
+    // バラ・庭が話題なら自動補強（ユーザーの会話から具体ディテールを確実に反映）
+    if (/(バラ|ばら|薔薇)/.test(clean)) {
+      if (!sc.details.has('真っ赤なバラの花壇')) {
+        sc.details.add('真っ赤なバラの花壇');
+        changed = true;
+      }
+      if (clean.includes('白') || clean.includes('柵') || clean.includes('フェンス')) {
+        if (!sc.details.has('白い木製の柵')) {
+          sc.details.add('白い木製の柵');
+          changed = true;
+        }
+      }
+      if (!sc.place) {
+        sc.place = 'バラの咲く明るい庭';
+        changed = true;
+      }
+      if (!sc.topic) {
+        sc.topic = '赤いバラの庭園';
+        changed = true;
+      }
+    }
 
     // 犬・マルチーズが話題なら自動補強
     if (/(マルチーズ|犬|いぬ|イヌ|子犬|ワンちゃん)/.test(clean)) {
@@ -4402,18 +4456,16 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       }
     } catch (e) {
       console.error('triggerSceneDrawingForTopic error:', e);
-      showCanvasError('描画処理エラー', '画像の描画中にエラーが発生しました。ローカル水彩画エンジンで復旧します。', true);
-      try {
-        const fallbackUrl = await renderFallbackWatercolorDataUrl(shortTitle, combinedElements);
-        displayGeneratedMedia({
-          title: shortTitle,
-          media_format: 'image',
-          media_url: fallbackUrl,
-          ambient_sound: 'none'
-        });
-      } catch (fbErr) {
-        console.error('Fallback render error:', fbErr);
-      }
+      // ユーザー指示: AIモデルで描けない時はダミー画像や過去の絵を出さず、白紙として報告する
+      displayGeneratedMedia({
+        title: shortTitle,
+        media_format: 'image',
+        media_url: '',
+        is_fallback: true,
+        is_blank: true,
+        visual_elements: combinedElements,
+        ambient_sound: 'none'
+      });
     } finally {
       state.isDrawingMedia = false;
       dom.drawingOverlay?.classList.add('hidden');

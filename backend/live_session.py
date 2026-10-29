@@ -106,7 +106,7 @@ class LiveSessionManager:
                 is_resume=self.is_resume
             )
 
-            # Function Calling ツール定義
+            # Function Calling ツール定義（引数の意味と具体性をGeminiに厳密に指示）
             def generate_memory_visual(
                 scene_type: str,
                 japanese_title: str,
@@ -114,8 +114,17 @@ class LiveSessionManager:
                 media_format: str = "image",
                 ambient_sound: str = "none"
             ) -> str:
-                """対象者が語った思い出や夢の風景を水彩画または動画として描画・画面表示する"""
-                # 実体は非同期タスクとしてディスパッチされる
+                """
+                対象者が語った思い出や夢の風景を水彩画として描画するツール。
+                
+                Args:
+                    scene_type: 風景の分類 ('past_memory' | 'dream_scenery')
+                    japanese_title: 描く絵の具体的な題名（例: '庭いっぱいに咲く赤いバラ', '昭和30年代の信州松本駅'）。抽象的な題名は禁止。
+                    visual_elements: 会話で聞き取った具体的な情景要素（事物、植物、花、建物、色、配置、天候）を詳細に列挙した文字列。
+                                     【最重要】必ず会話の中でご本人が語った具体的な言葉（例: '真っ赤なバラの花壇、白い木製の柵、緑の芝生、降り注ぐ朝の光'）を漏れなく含めてください。抽象的な表現のみ（日差し、風など）は厳禁です。
+                    media_format: メディア形式 ('image' のみ)
+                    ambient_sound: 環境音 ('autumn_insects' | 'river' | 'waves' | 'none')
+                """
                 return "Media generation started in background."
 
             def refine_memory_visual(
@@ -123,7 +132,14 @@ class LiveSessionManager:
                 user_feedback: str,
                 updated_visual_elements: str
             ) -> str:
-                """対象者からの修正希望（描き直しフィードバック）を反映して絵を再描画する"""
+                """
+                対象者からの修正希望（描き直しフィードバック）を反映して絵を再描画するツール。
+                
+                Args:
+                    original_memory_id: 直前の絵のID
+                    user_feedback: 相手が言った具体的な修正指示（例: '夕焼け空にして', '窓際に赤いバラを置いて'）
+                    updated_visual_elements: 修正指示を反映した新しい全体情景の具体的描写（具体的な事物、色彩を必ず含むこと）
+                """
                 return "Media refinement started in background."
 
             def trigger_emergency_alert(
@@ -140,8 +156,7 @@ class LiveSessionManager:
                 "Puck" if (partner and partner.gender == "男性") else "Aoede"
             )
 
-            # テレビ・周囲音カットはフロントエンドの近接ノイズゲート＋プリバッファで精密遮断するため、
-            # Gemini側のVADは常に最高感度（HIGH）＆ 無音判定 300ms に設定して返答レスポンスを最速化する
+            # ノイズ・息遣いによる誤反応を抑止するため、VAD感度はBALANCED、沈黙判定は1200msに設定
             noise_mode = getattr(self.profile, "noise_gate_mode", "tv_cut") or "tv_cut"
 
             config = types.LiveConnectConfig(
@@ -157,14 +172,14 @@ class LiveSessionManager:
                 thinking_config=types.ThinkingConfig(
                     thinking_budget=0
                 ),
-                # 音声区間検出（VAD）：文の途中の息継ぎで切れないよう800msの余裕を持たせる
+                # 音声区間検出（VAD）：微小ノイズでの誤反応を防ぎ、ゆったりした発話に対応
                 realtime_input_config=types.RealtimeInputConfig(
                     automatic_activity_detection=types.AutomaticActivityDetection(
                         disabled=False,
-                        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_HIGH,
+                        start_of_speech_sensitivity=types.StartSensitivity.START_SENSITIVITY_BALANCED,
                         end_of_speech_sensitivity=types.EndSensitivity.END_SENSITIVITY_LOW,
                         prefix_padding_ms=200,
-                        silence_duration_ms=800
+                        silence_duration_ms=1200
                     )
                 ),
                 system_instruction=system_instruction,
@@ -555,24 +570,36 @@ class LiveSessionManager:
             self.generated_memories.append(artifact)
             self.discussed_topics.append(title)
 
-            # クライアントへ新メディア表示通知
+            # クライアントへ新メディア表示通知（聞き取った情景ディテールを必ず同梱）
+            is_blank = getattr(artifact, "is_fallback", False) and not artifact.media_url
+            visual_desc = getattr(artifact, "visual_description", elements) or elements
             await self.websocket.send_json({
                 "type": "new_media",
                 "memory_id": artifact.memory_id,
                 "title": artifact.title,
+                "visual_elements": visual_desc,
                 "media_url": artifact.media_url,
                 "media_format": artifact.media_format.value,
                 "ambient_sound": artifact.ambient_sound_type.value,
-                "is_fallback": getattr(artifact, "is_fallback", False)
+                "is_fallback": getattr(artifact, "is_fallback", False),
+                "is_blank": is_blank
             })
 
             # 正規のGemini Live ツール呼び出しIDの場合のみツールレスポンスを返送
             if call_id and not call_id.startswith(("auto_", "user_", "test_")):
                 try:
+                    tool_output = {
+                        "status": "displayed_on_canvas" if not is_blank else "quota_limited_canvas_blank",
+                        "title": title,
+                        "visual_elements": visual_desc
+                    }
+                    if is_blank:
+                        tool_output["notice"] = "AIモデルの利用制限のため絵を描くことができず白紙となりました。キャンバスは白紙のままお話を楽しく続ける旨を伝えてください。"
+
                     await session.send(input=types.LiveClientToolResponse(
                         function_responses=[types.FunctionResponse(
                             id=call_id,
-                            response={"output": {"status": "displayed_on_canvas", "title": title}}
+                            response={"output": tool_output}
                         )]
                     ))
                 except Exception as t_err:
