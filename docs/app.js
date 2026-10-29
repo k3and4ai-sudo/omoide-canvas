@@ -259,14 +259,52 @@
     renderQuotaUI();
   }
 
+  function getPacificResetTimeInfo() {
+    try {
+      const now = new Date();
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles',
+        year: 'numeric', month: 'numeric', day: 'numeric',
+        hour: 'numeric', minute: 'numeric', second: 'numeric',
+        timeZoneName: 'short',
+        hour12: false
+      });
+      const parts = formatter.formatToParts(now);
+      const pt = {};
+      parts.forEach(p => pt[p.type] = p.value);
+
+      const ptHour = parseInt(pt.hour === '24' ? '0' : pt.hour, 10);
+      const ptMin = parseInt(pt.minute, 10);
+      const ptSec = parseInt(pt.second, 10);
+      const tzName = pt.timeZoneName || (now.getMonth() >= 2 && now.getMonth() <= 10 ? 'PDT' : 'PST');
+
+      const remainingSec = Math.max(0, (24 * 3600) - (ptHour * 3600 + ptMin * 60 + ptSec));
+      const targetJST = new Date(now.getTime() + remainingSec * 1000);
+      const jstH = String(targetJST.getHours()).padStart(2, '0');
+      const jstM = String(targetJST.getMinutes()).padStart(2, '0');
+      const isSummer = tzName.toUpperCase() === 'PDT';
+
+      return {
+        timeStr: `${jstH}:${jstM}`,
+        tzName: tzName,
+        isSummer: isSummer,
+        seasonLabel: isSummer ? '夏時間(PDT)' : '冬時間(PST)',
+        remainingHours: (remainingSec / 3600).toFixed(1)
+      };
+    } catch (e) {
+      return { timeStr: '16:00', tzName: 'PDT', isSummer: true, seasonLabel: '夏時間(PDT)', remainingHours: '0' };
+    }
+  }
+
   function renderQuotaUI() {
     if (!dom.quotaText || !dom.quotaMonitorBadge) return;
     const tracker = loadQuotaTracker();
+    const rInfo = getPacificResetTimeInfo();
 
     if (tracker.isRateLimited) {
       dom.quotaMonitorBadge.className = 'quota-monitor-badge quota-exceeded';
-      dom.quotaText.textContent = `⚠️ クォータ上限 (リセット: 16:00)`;
-      dom.quotaMonitorBadge.title = 'Google AI Studio の本日分無料枠クォータ上限に達しました。本日16:00（PDT 0:00）に全量リセットされます。ローカル水彩画エンジンで動作中';
+      dom.quotaText.textContent = `⚠️ クォータ上限 (リセット: ${rInfo.timeStr})`;
+      dom.quotaMonitorBadge.title = `Google AI Studio の無料枠クォータ上限に達しました。本日${rInfo.timeStr}（米太平洋午前0時 / ${rInfo.seasonLabel}）に全量リセットされます。ローカル水彩画エンジンで動作中`;
     } else {
       const limit = tracker.limitReported || DAILY_GEMINI_LIMIT;
       const remaining = tracker.remainingReported !== null
@@ -276,13 +314,13 @@
 
       if (percent <= 10) {
         dom.quotaMonitorBadge.className = 'quota-monitor-badge quota-critical';
-        dom.quotaText.textContent = `⚠️ 残量 ${percent}% (リセット: 16:00)`;
-        dom.quotaMonitorBadge.title = `⚠️ gemini-3.8-flash のクォータ残量が10%以下になりました（残り約${remaining}回）。本日16:00にリセットされます。\nクリックで詳細を表示`;
+        dom.quotaText.textContent = `⚠️ 残量 ${percent}% (リセット: ${rInfo.timeStr})`;
+        dom.quotaMonitorBadge.title = `⚠️ gemini-3.8-flash のクォータ残量が10%以下になりました（残り約${remaining}回）。本日${rInfo.timeStr}（${rInfo.seasonLabel}）にリセットされます。\nクリックで詳細を表示`;
         if (!state.hasWarnedLowQuota) {
           state.hasWarnedLowQuota = true;
           showCanvasError(
             `【クォータ残量警告】gemini-3.8-flash 残り${percent}%`,
-            `クォータの残りが10%以下（残り約${remaining}回）になりました。本日16:00（日本時間）にリセットされます。連続描画を控え、必要に応じてローカル水彩画も活用されます。`,
+            `クォータの残りが10%以下（残り約${remaining}回）になりました。本日${rInfo.timeStr}（日本時間 / 米国太平洋${rInfo.seasonLabel}）にリセットされます。連続描画を控え、必要に応じてローカル水彩画も活用されます。`,
             true
           );
         }
@@ -339,13 +377,14 @@
 
   function updateDrawButtonsCooldownUI() {
     const waitSec = getRemainingDrawCooldownSec();
+    const rInfo = getPacificResetTimeInfo();
     if (dom.btnDrawCurrentTopic) {
       if (state.isDrawingMedia) {
         dom.btnDrawCurrentTopic.textContent = '🎨 描画中...';
         dom.btnDrawCurrentTopic.disabled = true;
       } else if (waitSec > 0) {
         dom.btnDrawCurrentTopic.textContent = `⏳ 次の描画まで (${waitSec}秒)`;
-        dom.btnDrawCurrentTopic.title = `連続描画防止のため、前回の描画から2分間お待ちいただいています（残り${waitSec}秒 / 本日16:00リセット）`;
+        dom.btnDrawCurrentTopic.title = `連続描画防止のため、前回の描画から2分間お待ちいただいています（残り${waitSec}秒 / 本日${rInfo.timeStr}リセット）`;
         dom.btnDrawCurrentTopic.disabled = true;
       } else {
         dom.btnDrawCurrentTopic.textContent = '🎨 今の話題を絵にする';
@@ -375,6 +414,7 @@
       : Math.max(0, limit - tracker.requestCount);
     const percent = Math.max(0, Math.min(100, Math.round((remaining / limit) * 100)));
     const waitSec = getRemainingDrawCooldownSec();
+    const rInfo = getPacificResetTimeInfo();
     const msg = [
       '【📊 AIクォータ・利用状況モニター】',
       '・対象AIモデル: gemini-3.8-flash (情景描画・推論)',
@@ -382,9 +422,9 @@
       `・本日の生成リクエスト回数: ${tracker.requestCount} 回`,
       `・クォータ目安上限: ${limit} 回 / 日 (Google AI Studio 無料枠)`,
       `・推計残りリクエスト: 約 ${remaining} 回 (残量: ${percent}%)`,
-      '・次回クォータリセット時刻: 本日 16:00 (日本時間 / 米国PDT 0:00)',
+      `・次回クォータリセット時刻: 本日 ${rInfo.timeStr} (日本時間 / 米国太平洋午前0時 [${rInfo.seasonLabel}])`,
       `・最小描画間隔: 2分 (${waitSec > 0 ? `現在クールダウン中: 残り${waitSec}秒` : '現在すぐに描画可能'})`,
-      `・最新ステータス: ${tracker.isRateLimited ? '⚠️ 429 レート制限中 (本日16:00リセット / ローカル水彩画に自動切替)' : (percent <= 10 ? '⚠️ クォータ残量10%以下（本日16:00リセット）' : '✅ 正常稼働中')}`,
+      `・最新ステータス: ${tracker.isRateLimited ? `⚠️ 429 レート制限中 (本日${rInfo.timeStr}リセット / ローカル水彩画に自動切替)` : (percent <= 10 ? `⚠️ クォータ残量10%以下（本日${rInfo.timeStr}リセット）` : '✅ 正常稼働中')}`,
       tracker.lastErrorMsg ? `・最新のエラー: ${tracker.lastErrorMsg}` : '',
       '\n※万が一クォータ上限（429）に達した場合でも、端末内のローカル高精細水彩画エンジンが自動で即座に代行描画します。',
       tracker.isRateLimited ? '\n【OK】を押すとクォータ制限表示をリセットして通常モードで再試行します。' : ''
@@ -3686,10 +3726,11 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
   async function executeRefineDrawing(feedbackText = '') {
     const waitSec = getRemainingDrawCooldownSec();
     if (waitSec > 0) {
-      logDiag(`連続描画防止: 前回の描画から2分間（120秒）経過していないため待機します（残り${waitSec}秒 / 本日16:00リセット）`);
+      const rInfo = getPacificResetTimeInfo();
+      logDiag(`連続描画防止: 前回の描画から2分間（120秒）経過していないため待機します（残り${waitSec}秒 / 本日${rInfo.timeStr}リセット）`);
       showCanvasError(
         '描画待機中（クォータ保護）',
-        `連続描画を防ぐため、前回の描画から2分間お待ちいただいています（残り約 ${waitSec} 秒）。本日16:00にクォータが全量リセットされます。`,
+        `連続描画を防ぐため、前回の描画から2分間お待ちいただいています（残り約 ${waitSec} 秒）。本日${rInfo.timeStr}にクォータが全量リセットされます。`,
         true
       );
       return;
@@ -4000,10 +4041,11 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
   async function executeConfirmedDrawing(manualTopic = '') {
     const waitSec = getRemainingDrawCooldownSec();
     if (waitSec > 0) {
-      logDiag(`連続描画防止: 前回の描画から2分間（120秒）経過していないため待機します（残り${waitSec}秒 / 本日16:00リセット）`);
+      const rInfo = getPacificResetTimeInfo();
+      logDiag(`連続描画防止: 前回の描画から2分間（120秒）経過していないため待機します（残り${waitSec}秒 / 本日${rInfo.timeStr}リセット）`);
       showCanvasError(
         '描画待機中（クォータ保護）',
-        `連続描画を防ぐため、前回の描画から2分間お待ちいただいています（残り約 ${waitSec} 秒）。本日16:00にクォータが全量リセットされます。`,
+        `連続描画を防ぐため、前回の描画から2分間お待ちいただいています（残り約 ${waitSec} 秒）。本日${rInfo.timeStr}にクォータが全量リセットされます。`,
         true
       );
       return;
@@ -4050,10 +4092,11 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
   async function triggerSceneDrawingForTopic(rawTopic, customElements = '', extraOptions = {}) {
     const waitSec = getRemainingDrawCooldownSec();
     if (waitSec > 0) {
-      logDiag(`連続描画防止: 前回の描画から2分間（120秒）経過していないため待機します（残り${waitSec}秒 / 本日16:00リセット）`);
+      const rInfo = getPacificResetTimeInfo();
+      logDiag(`連続描画防止: 前回の描画から2分間（120秒）経過していないため待機します（残り${waitSec}秒 / 本日${rInfo.timeStr}リセット）`);
       showCanvasError(
         '描画待機中（クォータ保護）',
-        `連続描画を防ぐため、前回の描画から2分間お待ちいただいています（残り約 ${waitSec} 秒）。本日16:00にクォータが全量リセットされます。`,
+        `連続描画を防ぐため、前回の描画から2分間お待ちいただいています（残り約 ${waitSec} 秒）。本日${rInfo.timeStr}にクォータが全量リセットされます。`,
         true
       );
       return;

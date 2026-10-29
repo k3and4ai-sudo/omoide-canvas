@@ -37,6 +37,16 @@ from backend.emergency_tool import dispatch_emergency_alert
 
 logger = logging.getLogger(__name__)
 
+def get_pacific_reset_time_jst() -> str:
+    """米太平洋時間の午前0時（Google APIクォータリセット時刻）に対応する日本時間を動的算出（夏時間16:00 / 冬時間17:00）"""
+    try:
+        from zoneinfo import ZoneInfo
+        now_utc = datetime.now(timezone.utc)
+        pt_now = now_utc.astimezone(ZoneInfo("America/Los_Angeles"))
+        return "16:00" if pt_now.tzname() == "PDT" else "17:00"
+    except Exception:
+        return "16:00"
+
 # Live API 対応モデル（デフォルト: 双方向オーディオ対応ネイティブモデル）
 DEFAULT_LIVE_MODEL = os.getenv("GEMINI_LIVE_MODEL", "gemini-2.5-flash-native-audio-latest")
 
@@ -466,10 +476,11 @@ class LiveSessionManager:
             if self.last_draw_time > 0 and elapsed < self.MIN_DRAW_INTERVAL_SEC:
                 wait_sec = int(self.MIN_DRAW_INTERVAL_SEC - elapsed)
                 logger.info(f"Cooldown active: skipping media generation for '{title}' ({wait_sec}s remaining)")
+                reset_time_str = get_pacific_reset_time_jst()
                 await self.websocket.send_json({
                     "type": "cooldown_notice",
                     "remaining_seconds": wait_sec,
-                    "message": f"前回の描画から2分間はクォータ保護のため待機中です（残り約{wait_sec}秒 / 本日16:00リセット）"
+                    "message": f"前回の描画から2分間はクォータ保護のため待機中です（残り約{wait_sec}秒 / 本日{reset_time_str}リセット）"
                 })
                 if call_id and not call_id.startswith(("auto_", "user_", "test_")):
                     try:
