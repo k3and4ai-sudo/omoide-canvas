@@ -34,17 +34,25 @@ def build_safe_prompt(
     dementia_level: DementiaLevel,
     scene_type: SceneType,
     visual_elements: str,
-    media_format: MediaFormat = MediaFormat.IMAGE
+    media_format: MediaFormat = MediaFormat.IMAGE,
+    art_style: str = "watercolor"
 ) -> str:
     """
     医療安全ガードレール（テレビサイン・幻覚防止）に基づくプロンプトラッパー
-    Final Prompt = P_style(level) + P_era(scene_type) + visual_elements + P_safety_negative
+    Final Prompt = P_style(style, level) + P_era(scene_type) + visual_elements + P_safety_negative
     """
     # 1. P_style (画風プレフィックス)
-    if dementia_level in (DementiaLevel.MILD, DementiaLevel.MODERATE):
-        p_style = "A warm, nostalgic, gentle watercolor and colored pencil storybook illustration, soft pastel tones, cozy lighting. "
-    else:  # MCI
-        p_style = "A gentle, nostalgic retro fine-art painting style, soft warm colors. "
+    if art_style == "realistic":
+        p_style = "A highly realistic and detailed fine art painting with photographic realism, lifelike natural lighting, sharp focus, rich depth of field, authentic textures. "
+    elif art_style == "oil_painting":
+        p_style = "A classic, richly textured oil painting, impressionist brushstrokes, deep vibrant colors, classical chiaroscuro lighting. "
+    elif art_style == "colored_pencil":
+        p_style = "A delicate hand-drawn colored pencil sketch, soft hatching lines, natural paper texture, warm and intimate. "
+    else:  # watercolor
+        if dementia_level in (DementiaLevel.MILD, DementiaLevel.MODERATE):
+            p_style = "A warm, nostalgic, gentle watercolor and colored pencil storybook illustration, soft pastel tones, cozy lighting. "
+        else:  # MCI
+            p_style = "A gentle, nostalgic retro fine-art painting style, soft warm colors. "
 
     # 2. P_era (時代背景)
     if scene_type == SceneType.PAST_MEMORY:
@@ -380,7 +388,8 @@ def generate_memory_visual_artifact_sync(
     visual_elements: str,
     media_format: MediaFormat = MediaFormat.IMAGE,
     ambient_sound: AmbientSoundType = AmbientSoundType.NONE,
-    api_key: Optional[str] = None
+    api_key: Optional[str] = None,
+    art_style: str = "watercolor"
 ) -> MemoryArtifact:
     """
     情景から安全プロンプトを構築し、Imagen 3 / Gemini 3.8 Flash SVG / 水彩フォールバックで生成して保存する（同期実行版）。
@@ -389,7 +398,7 @@ def generate_memory_visual_artifact_sync(
     import re
     clean_title, clean_elements = sanitize_scene_elements(japanese_title, visual_elements)
     memory_id = str(uuid.uuid4())[:8]
-    final_prompt = build_safe_prompt(dementia_level, scene_type, clean_elements, media_format)
+    final_prompt = build_safe_prompt(dementia_level, scene_type, clean_elements, media_format, art_style=art_style)
 
     file_name = f"{memory_id}.png"
     file_path = MEDIA_DIR / file_name
@@ -426,12 +435,20 @@ def generate_memory_visual_artifact_sync(
             except Exception as nb_err:
                 logger.warning(f"Flash Image skipped ({nb_err}). Proceeding to Gemini 3.8 Flash SVG generation.")
 
-            # 2. オーダーメイドSVG水彩画生成（503高負荷・クォータ制限時も即座に代替する多段モデルフォールバック）
+            # 2. オーダーメイドSVG情景画生成（水彩・リアル・油絵・色鉛筆に対応）
             if not image_generated:
-                svg_prompt = f"""あなたはプロの情景水彩画・童話イラストの画家です。高齢者・回想法ケアのため、ユーザーが語った思い出やお話に合わせて、指定された情景のSVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
+                style_desc = "写実的でリアルな情景（精密な光と影、被写界深度、立体感）" if art_style == "realistic" else (
+                    "重厚な油絵風（力強い筆跡、深い陰影）" if art_style == "oil_painting" else (
+                        "素朴で繊細な色鉛筆スケッチ風" if art_style == "colored_pencil" else "温かい水彩画風"
+                    )
+                )
+                svg_prompt = f"""あなたは高齢者・回想法ケアのための情景画専門アーティストです。ユーザーが語った思い出やお話に合わせて、指定された情景の【{style_desc}】SVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
 {clean_elements}
+
+【画風方針】:
+{style_desc}。モチーフの質感や光と影のコントラストを生き生きと表現してください。
 
 【最重要造形ルール】
 1. ユーザーがお話しした具体的なモチーフ・特徴・造形（山、夕焼け、海、学校、教室、喫茶店、花、木製テーブル、窓、雪、川など）を100%忠実に描いてください。
@@ -439,7 +456,7 @@ def generate_memory_visual_artifact_sync(
    - 庭やバラについて語られている場合：青空、木漏れ日、緑の芝生、白いウッドフェンス、鮮やかな真紅のバラ（立体的な花びら・蕾・葉）を豊かに描いてください！
    - 喫茶店や店内について語られている場合：木目テーブル、コーヒー、クリームソーダ、ペンダントライト、窓などを描いてください。
    - 学校や教室、海、季節など、会話に出てきた情景を主役として具体的に配置してください。
-2. 背景には美しいグラデーション（<linearGradient>, <radialGradient>）を使い、温かく情緒的な水彩画の雰囲気にしてください。
+2. 背景やモチーフにはグラデーション（<linearGradient>, <radialGradient>）を効果的に使い、立体感と深みを与えてください。
 3. 人物のリアルな顔は描かず、後ろ姿や遠景、あるいは情景・静物を美しく描いてください。
 4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（```xml 等）は一切含めないでください。"""
 

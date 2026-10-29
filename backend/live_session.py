@@ -545,6 +545,8 @@ class LiveSessionManager:
 
             self.last_draw_time = time.time()
 
+            art_style = args.get("art_style", "watercolor")
+
             # メディア生成実行（最大50秒タイムアウト保証。万が一APIがハングしても必ずフォールバック描画を完了させる）
             try:
                 artifact = await asyncio.wait_for(
@@ -557,7 +559,8 @@ class LiveSessionManager:
                         visual_elements=elements,
                         media_format=media_format,
                         ambient_sound=ambient_sound,
-                        api_key=self.api_key
+                        api_key=self.api_key,
+                        art_style=art_style
                     ),
                     timeout=50.0
                 )
@@ -572,7 +575,8 @@ class LiveSessionManager:
                     visual_elements=elements,
                     media_format=media_format,
                     ambient_sound=ambient_sound,
-                    api_key=""
+                    api_key="",
+                    art_style=art_style
                 )
             self.generated_memories.append(artifact)
             self.discussed_topics.append(title)

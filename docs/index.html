@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261029_05">
+  <link rel="stylesheet" href="styles.css?v=20261029_08">
 </head>
 <body>
 
@@ -20,7 +20,7 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="柿・果物等の話題先行抽出＆トピック確実反映版">v20261029_07</span>
+      <span class="app-version-badge" title="絵の保存機能・リアル等画風スタイル切替対応版">v20261029_08</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
@@ -281,6 +281,20 @@
             </div>
           </div>
           <div class="caption-actions">
+            <!-- 画風スタイル切り替え -->
+            <div class="style-selector-wrap" title="描く絵の画風スタイルを選べます">
+              <label for="selectArtStyle" class="style-selector-label">画風:</label>
+              <select id="selectArtStyle" class="select-art-style">
+                <option value="watercolor" selected>🎨 優しい水彩画</option>
+                <option value="realistic">📷 リアルな情景（写実）</option>
+                <option value="oil_painting">🖌️ 重厚な油絵</option>
+                <option value="colored_pencil">✏️ 色鉛筆スケッチ</option>
+              </select>
+            </div>
+            <!-- 保存ボタン -->
+            <button type="button" id="btnSaveImage" class="btn-save-image hidden" title="描いた思い出の絵を高画質画像（PNG）として端末に保存します">
+              💾 絵を保存する
+            </button>
             <button type="button" id="btnClearCanvas" class="btn-clear-canvas" title="キャンバスを白紙に戻して、新しいお話の絵を始めます">
               🗑️ 白紙に戻す
             </button>
@@ -586,6 +600,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261029_07"></script>
+  <script src="app.js?v=20261029_08"></script>
 </body>
 </html>

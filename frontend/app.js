@@ -28,6 +28,55 @@
     strict: { rms: 0.0120, vuThresholdPercent: 14, hangoverMs: 280, eosSilenceMs: 750, label: '強めカット' }
   };
 
+  // 画風スタイル定義（水彩画・リアル・油絵・色鉛筆スケッチ）
+  const ART_STYLES = {
+    watercolor: {
+      key: 'watercolor',
+      name: '優しい水彩画',
+      badge: '🎨 優しい水彩画',
+      promptModifier: '温かい水彩画風、昭和のノスタルジー、水彩絵の具の優しいにじみとグラデーション、柔らかな光と穏やかな陰影',
+      svgRoleInstruction: '高齢者・回想法ケアのためのプロの水彩画家・絵本イラストレーター',
+      svgStyleRules: `
+1. 水彩画のような優しく深みのあるグラデーション（<linearGradient>, <radialGradient>）を空やモチーフに適用してください。
+2. 昭和ノスタルジーの温もりある色彩（茜色、若草色、空色、木目調の茶）を基調とし、絵の具のにじみを感じさせる表現にしてください。
+3. 人物のリアルな顔は描かず、情景・風景・静物の情緒を主役にしてください。`
+    },
+    realistic: {
+      key: 'realistic',
+      name: 'リアルな情景（写実）',
+      badge: '📷 リアルな情景',
+      promptModifier: '極めて写実的でリアルな情景、写真のような鮮やかさと精密なディテール、自然でドラマチックな光と影、被写界深度と立体的な質感',
+      svgRoleInstruction: '写実主義（リアリズム）および超高精細な情景描写を専門とするプロのアーティスト',
+      svgStyleRules: `
+1. 写真のようにリアルで実在感のある光と影（ハイライト、反射光、深みのある濃淡シャドウ）を精密に描き込んでください。
+2. モチーフの質感（木目の繊細なライン、ガラスや水のリアルな透明感・反射・屈折、植物の葉脈や果物のつややかな光沢、金属の輝き）を複数の階層レイヤーとグラデーションで立体的に描写してください。
+3. 遠近感（パースペクティブ）と被写界深度（前景の鮮明なフォーカスと遠景のソフトなボケ味）を意識し、息をのむような美しいリアリズムを表現してください。
+4. 人物の顔は描かず、情景・建築・自然・静物を写真のように鮮やかに描き出してください。`
+    },
+    oil_painting: {
+      key: 'oil_painting',
+      name: '重厚な油絵',
+      badge: '🖌️ 重厚な油絵',
+      promptModifier: '印象派・近代洋画のような重厚な油絵風、力強い筆跡（インパスト）、豊かで深みのある絵の具の重なり、重厚な陰影とクラシカルな質感',
+      svgRoleInstruction: '印象派・近代油彩画を専門とする熟練の洋画家',
+      svgStyleRules: `
+1. 油彩画の絵の具の厚塗り（インパスト）やキャンバスの布目を思わせる、力強く重厚なタッチと豊かなテクスチャ感を表現してください。
+2. 光と影のコントラスト（明暗対比・キアロスクーロ）を際立たせ、重みと気品のあるクラシカルな油彩画の風合いにしてください。
+3. 深みのある重層的なグラデーションとリッチな色彩（深いバーントアンバー、コバルトブルー、クリムゾンなど）を多用してください。`
+    },
+    colored_pencil: {
+      key: 'colored_pencil',
+      name: '色鉛筆スケッチ',
+      badge: '✏️ 色鉛筆スケッチ',
+      promptModifier: '温もりあふれる手描きの色鉛筆画風、素朴で繊細なハッチング線、優しい紙の質感と柔らかなタッチ',
+      svgRoleInstruction: '素朴で優しい色鉛筆画・ボタニカルアートの専門画家',
+      svgStyleRules: `
+1. 繊細な鉛筆のハッチング（斜線・クロスハッチング）や点描の質感を感じさせる、素朴で温かい手描き風タッチで描いてください。
+2. 画用紙の温かい地色を活かし、色鉛筆を何色も重ねて生み出されるような優しい混色と透明感を表現してください。
+3. 輪郭線には鉛筆らしい柔らかなストロークを施し、親しみやすく心安らぐスケッチ画に仕上げてください。`
+    }
+  };
+
   const state = {
     isConnected: false,
     isSessionActive: false,
@@ -39,6 +88,8 @@
     userRequestedStop: false,       // ユーザーが明示的に終了ボタンを押したか（放置時自動再接続用）
     keepaliveIntervalId: null,      // WebSocket放置切断防止用キープアライブタイマー
     sessionStartTime: null,         // セッション開始時刻（日報計算用）
+    currentArtStyle: 'watercolor',  // 選択中の画風スタイル (watercolor | realistic | oil_painting | colored_pencil)
+    currentArtifact: null,          // 現在キャンバスに表示中の絵画オブジェクト（保存用）
     previousSessionContext: (() => {
       try {
         const saved = sessionStorage.getItem('omoide_previous_session');
@@ -144,6 +195,8 @@
     captionTag: document.getElementById('captionTag'),
     captionFallbackBadge: document.getElementById('captionFallbackBadge'),
     captionFallbackNotice: document.getElementById('captionFallbackNotice'),
+    selectArtStyle: document.getElementById('selectArtStyle'),
+    btnSaveImage: document.getElementById('btnSaveImage'),
     btnClearCanvas: document.getElementById('btnClearCanvas'),
     btnDrawCurrentTopic: document.getElementById('btnDrawCurrentTopic'),
     soundIndicator: document.getElementById('soundIndicator'),
@@ -745,6 +798,10 @@
     dom.btnDiagAvatar.addEventListener('click', testCycleAvatars);
     dom.btnDrawCurrentTopic?.addEventListener('click', drawCurrentConversationScene);
     dom.btnClearCanvas?.addEventListener('click', clearCanvasState);
+    dom.btnSaveImage?.addEventListener('click', saveCurrentCanvasImage);
+    dom.selectArtStyle?.addEventListener('change', (e) => {
+      setArtStyle(e.target.value);
+    });
 
     // 思い出情景メモ・合意形成ボタン群
     dom.btnConfirmDraw?.addEventListener('click', () => {
@@ -778,6 +835,107 @@
       dom.vuMeterThreshold.style.left = `${thresholdPercent}%`;
     }
     logDiag(`周囲音対策モードを「${preset.label} (RMS>${preset.rms})」に変更しました。`);
+  }
+
+  function setArtStyle(styleKey) {
+    if (!ART_STYLES[styleKey]) return;
+    state.currentArtStyle = styleKey;
+    if (dom.selectArtStyle) {
+      dom.selectArtStyle.value = styleKey;
+    }
+    const style = ART_STYLES[styleKey];
+    logDiag(`画風スタイルを「${style.badge}」に変更しました。`);
+    if (dom.captionTag && !dom.captionTag.textContent.includes('白紙')) {
+      dom.captionTag.textContent = style.name;
+    }
+  }
+
+  async function saveCurrentCanvasImage() {
+    const imgSrc = dom.memoryImage?.src || (state.currentArtifact && state.currentArtifact.media_url);
+    if (!imgSrc || dom.memoryImage?.classList.contains('hidden')) {
+      alert('保存できる絵がありません。');
+      return;
+    }
+
+    const title = (dom.captionTitle?.textContent || '思い出の風景')
+      .replace(/[🎨🖼️\s]/g, '')
+      .replace(/[\\/:*?"<>|]/g, '_')
+      .slice(0, 20) || '思い出の絵';
+
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+    const filename = `おもいでキャンバス_${title}_${dateStr}.png`;
+
+    try {
+      if (dom.btnSaveImage) {
+        dom.btnSaveImage.disabled = true;
+        dom.btnSaveImage.textContent = '⏳ 保存中...';
+      }
+
+      // 1. SVG (DataURL) の場合: オフスクリーン Canvas (1600x1200) に高精細描画して PNG 化
+      if (imgSrc.startsWith('data:image/svg+xml')) {
+        const svgImg = new Image();
+        svgImg.crossOrigin = 'anonymous';
+        await new Promise((resolve, reject) => {
+          svgImg.onload = resolve;
+          svgImg.onerror = reject;
+          svgImg.src = imgSrc;
+        });
+
+        const offscreenCanvas = document.createElement('canvas');
+        offscreenCanvas.width = 1600;
+        offscreenCanvas.height = 1200;
+        const ctx = offscreenCanvas.getContext('2d');
+
+        // 白背景を敷いて透明部を保護
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 1600, 1200);
+        ctx.drawImage(svgImg, 0, 0, 1600, 1200);
+
+        const blob = await new Promise(res => offscreenCanvas.toBlob(res, 'image/png'));
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
+      } else {
+        // 2. 通常の画像 (JPEG/PNG/Blob URL)
+        const res = await fetch(imgSrc);
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 3000);
+      }
+
+      showCanvasUpdateToast(`「${title}」の絵を保存しました！`);
+      logDiag(`絵の保存が完了しました: ${filename}`);
+
+      if (dom.btnSaveImage) {
+        dom.btnSaveImage.classList.add('saved-success');
+        dom.btnSaveImage.textContent = '✅ 保存完了！';
+        setTimeout(() => {
+          dom.btnSaveImage.classList.remove('saved-success');
+          dom.btnSaveImage.textContent = '💾 絵を保存する';
+          dom.btnSaveImage.disabled = false;
+        }, 2500);
+      }
+    } catch (err) {
+      console.error('saveCurrentCanvasImage error:', err);
+      logDiag(`絵の保存エラー: ${err.message}`);
+      alert(`絵の保存中にエラーが発生しました: ${err.message}`);
+      if (dom.btnSaveImage) {
+        dom.btnSaveImage.textContent = '💾 絵を保存する';
+        dom.btnSaveImage.disabled = false;
+      }
+    }
   }
 
   // ============================================================================
@@ -960,6 +1118,7 @@ ${levelRules}
   // ============================================================================
   function clearCanvasState() {
     state.hasDrawnImage = false;
+    state.currentArtifact = null;
     state.lastUserModification = '';
     state.lastDrawnUtterance = '';
     state.pollinationsBlocked = false;
@@ -969,6 +1128,8 @@ ${levelRules}
       clearTimeout(state.pendingRefineTimer);
       state.pendingRefineTimer = null;
     }
+
+    dom.btnSaveImage?.classList.add('hidden');
 
     if (dom.memoryImage) {
       dom.memoryImage.src = '';
@@ -3136,35 +3297,45 @@ ${levelRules}
     const isRefinement = !!args.is_refinement || !!feedback;
     const finalPrompt = buildSafePromptJS(profile.dementia_level || 'mild', sceneType, elements);
 
+    const artStyleKey = args.art_style || state.currentArtStyle || 'watercolor';
+    const artStyle = ART_STYLES[artStyleKey] || ART_STYLES.watercolor;
+
     let mediaDataUrl = '';
     const apiKey = (state.sessionApiKey || '').trim();
 
     if (apiKey) {
-      // Step 0: Gemini 3.8 Flash によるオーダーメイド情景水彩画（SVG）生成
+      // Step 0: Gemini 3.8 Flash によるオーダーメイド情景画（SVG）生成
       // 外部画像サービスの Artists limit・レート制限に一切依存せず、Google公式APIで100%確実に話の内容を描画！
       try {
-        if (dom.drawingSubtext) dom.drawingSubtext.textContent = 'AI画家がお話の情景を描いています（約2〜4秒）...';
-        logDiag(`AI情景描画を開始します: 「${title}」 - 内容: 「${elements}」`);
+        if (dom.drawingSubtext) dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」でお話の情景を描いています（約2〜4秒）...`;
+        logDiag(`AI情景描画を開始します: 「${title}」 (画風: ${artStyle.name}) - 内容: 「${elements}」`);
 
-        const svgPrompt = `あなたは高齢者・回想法ケアのためのプロの情景画家・絵本イラストレーターです。
-ユーザーが語った思い出のお話に合わせて、指定された情景の温かく美しい水彩画風SVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
+        const svgPrompt = `あなたは高齢者・回想法ケアのための${artStyle.svgRoleInstruction}です。
+ユーザーが語った思い出のお話に合わせて、指定された情景の【${artStyle.name}】風SVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
 ${elements}
+
+【画風スタイル（最重要厳守）】:
+画風：${artStyle.name}
+表現方針：${artStyle.promptModifier}
 
 ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正・変更指示（絶対厳守！）】
 ユーザーは直前の絵に対して「${feedback}」という明確な修正を求めています。
 前回の絵と矛盾する要素（例：青空から夕焼けへの変更、花の追加、特定モチーフの変更など）がある場合は、必ずこの修正指示を最優先で上書き・反映してください！
 夕焼けなら空全体を燃えるような茜色・黄金色のグラデーション（アーベントロート）にし、花ならテーブルや窓際に美しい花瓶とお花をはっきりと描いてください。` : ''}
 
+【画風特化造形ルール（${artStyle.name}）】
+${artStyle.svgStyleRules}
+
 【必須造形ルール】
-1. ユーザーがお話しした具体的なモチーフ（山、夕焼け、海、学校、教室、喫茶店、花、木製テーブル、窓、雪、川など）を省略せず、すべて目に見える形で魅力的に描いてください。
+1. ユーザーがお話しした具体的なモチーフ（山、夕焼け、海、学校、教室、喫茶店、花、柿、木製テーブル、窓、雪、川など）を省略せず、すべて目に見える形で魅力的に描いてください。
+   - 喫茶店が話題の場合：木目のテーブル、カップ、花瓶、温かい照明、窓際の光と影を豊かに描いてください。
+   - 柿が話題の場合：鮮やかなオレンジ色の柿の実、つややかな質感、葉、枝、澄んだ秋の青空を生き生きと描いてください。
    - 山が話題の場合：鋭角な三角形やポリゴン（<polygon>）を使い、険しい岩肌や尖った山頂、雪渓をダイナミックに描いてください。
-   - 喫茶店や部屋が話題の場合：木目のテーブル、カップ、花瓶、温かい照明などを描いてください。
-2. <defs> 内に <linearGradient> や <radialGradient> を定義し、水彩画のような優しく深みのあるグラデーションを背景やモチーフに適用してください。
-3. 高齢者が安心できる、温かい昭和ノスタルジーの色彩（茜色、山吹色、若草色、空色、木目調の茶など）を基調にしてください。
-4. 人物のリアルな顔は描かず、情景・静物・風景を主役にしてください。
-5. 必ず <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。解説文やマークダウンのコード枠（\`\`\`xml 等）は一切含めないでください。`;
+2. <defs> 内に <linearGradient> や <radialGradient> を効果的に定義し、${artStyle.name}らしい深みのあるグラデーションを背景やモチーフに適用してください。
+3. 人物のリアルな顔は描かず、情景・静物・風景を主役にしてください。
+4. 必ず <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。解説文やマークダウンのコード枠（\`\`\`xml 等）は一切含めないでください。`;
 
         // 503高負荷やクォータ制限時も即座に代替できるよう多段モデルフォールバックを適用
         const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-flash'];
@@ -3619,10 +3790,12 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     }
 
     const isBlank = !!(mediaData.is_blank || !mediaData.media_url);
+    state.currentArtifact = mediaData;
 
     if (isBlank) {
       // ユーザー指示: AIモデルで描けなかった時は過去画像やダミー絵を出さず、白紙のまま報告する
       state.hasDrawnImage = false;
+      dom.btnSaveImage?.classList.add('hidden');
       dom.canvasPlaceholder.classList.remove('hidden');
       dom.memoryImage.classList.add('hidden');
       dom.memoryImage.src = '';
@@ -3648,8 +3821,10 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       }
     } else {
       state.hasDrawnImage = true;
+      dom.btnSaveImage?.classList.remove('hidden');
       dom.canvasPlaceholder.classList.add('hidden');
-      dom.captionTag.textContent = mediaData.media_format === 'video' ? '動く絵本' : '水彩画';
+      const curStyle = ART_STYLES[state.currentArtStyle] || ART_STYLES.watercolor;
+      dom.captionTag.textContent = mediaData.media_format === 'video' ? '動く絵本' : curStyle.name;
       dom.captionFallbackBadge?.classList.add('hidden');
       dom.captionFallbackNotice?.classList.add('hidden');
       dismissCanvasError();
@@ -4056,7 +4231,8 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     if (sc.place) elementsParts.push(`【場所・舞台】: ${sc.place}`);
     if (sc.seasonWeather) elementsParts.push(`【季節・天候・時間】: ${sc.seasonWeather}`);
     if (detailsArray.length > 0) elementsParts.push(`【情景ディテール】: ${detailsArray.join('、')}`);
-    elementsParts.push('温かい水彩画風、昭和のノスタルジー、澄み切った光と優しい陰影');
+    const curStyle = ART_STYLES[state.currentArtStyle] || ART_STYLES.watercolor;
+    elementsParts.push(`【画風スタイル（最重要）】: ${curStyle.name}（${curStyle.promptModifier}）`);
 
     const combinedElements = elementsParts.join(' / ');
 
@@ -4095,6 +4271,21 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
     // 2. ユーザーの絵の修正・描き直し指示を最優先で検知
     if (speaker === 'user') {
+      // 画風スタイルの切り替え指示を音声から自動検知
+      if (/(リアル|写実|写真みたい|写真風|本物みたい)/.test(clean)) {
+        setArtStyle('realistic');
+        showCanvasUpdateToast('画風を「📷 リアルな情景（写実）」に変更しました');
+      } else if (/(油絵|油彩|油絵風)/.test(clean)) {
+        setArtStyle('oil_painting');
+        showCanvasUpdateToast('画風を「🖌️ 重厚な油絵」に変更しました');
+      } else if (/(水彩|水彩画|水彩風)/.test(clean)) {
+        setArtStyle('watercolor');
+        showCanvasUpdateToast('画風を「🎨 優しい水彩画」に変更しました');
+      } else if (/(色鉛筆|鉛筆画|スケッチ|手描き風)/.test(clean)) {
+        setArtStyle('colored_pencil');
+        showCanvasUpdateToast('画風を「✏️ 色鉛筆スケッチ」に変更しました');
+      }
+
       const modIntent = detectModificationIntent(clean);
       if (modIntent) {
         handleUserModificationDetected(modIntent);
@@ -4462,7 +4653,8 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     if (sc.place) elementsParts.push(`【場所・舞台】: ${sc.place}`);
     if (sc.seasonWeather) elementsParts.push(`【季節・天候・時間】: ${sc.seasonWeather}`);
     if (detailsArray.length > 0) elementsParts.push(`【情景ディテール】: ${detailsArray.join('、')}`);
-    elementsParts.push('温かい水彩画風、昭和のノスタルジー、澄み切った光と優しい陰影');
+    const curStyle = ART_STYLES[state.currentArtStyle] || ART_STYLES.watercolor;
+    elementsParts.push(`【画風スタイル（最重要）】: ${curStyle.name}（${curStyle.promptModifier}）`);
 
     const combinedElements = elementsParts.join(' / ');
 
