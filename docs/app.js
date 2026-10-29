@@ -3715,10 +3715,17 @@ ${artStyle.svgStyleRules}
   // アバター表情切り替え（不要なDOM再描画・ちらつき防止付き）
   // ============================================================================
   function setAvatarState(avatarState) {
+    // 描画処理が進行中の間は、描画完了時（明示的な終了呼び出し）以外の状態変化を完全にブロック！
+    // （描画中に相槌音声やテキスト受信によってアバターがガタガタ動くのを100%防止）
+    if (state.isDrawingMedia && avatarState !== 'drawing' && avatarState !== 'idle' && avatarState !== 'force_reset') {
+      return;
+    }
+
     if (avatarState === 'drawing') {
       state.isDrawingMedia = true;
-    } else {
+    } else if (avatarState === 'force_reset') {
       state.isDrawingMedia = false;
+      avatarState = state.isSessionActive ? 'listening' : 'idle';
     }
 
     const currentAttr = dom.avatarContainer.getAttribute('data-state');
@@ -4139,19 +4146,25 @@ ${artStyle.svgStyleRules}
   }
 
   // ============================================================================
-  // ユーザーの絵の修正・変更指示（「夕焼けにして」「花を置いて」等）の検知・自動実行
+  // ユーザーの絵の修正・変更指示（「夕焼けにして」「花を置いて」等）の検知
+  // ※勝手な自動描画は行わず、ユーザーが「この指示で描き直す」を押した時のみ実行する
   // ============================================================================
   function detectModificationIntent(rawText) {
+    // キャンバスに絵が完成していない状態では、修正指示は判定しない
+    if (!state.hasDrawnImage) return null;
     if (!rawText || typeof rawText !== 'string') return null;
     const clean = rawText.replace(/[「」『』]/g, '').trim();
     if (clean.length < 2) return null;
 
-    // 1. 明示的な修正・変更リクエスト構文（「〜にして」「〜に変えて」等の語尾を厳格に要求）
+    // 「〜にします」「〜にしよう」などの日常の意思表明（料理等）は除外
+    if (/(にします|にしよう|にするよ|にするね)/.test(clean)) return null;
+
+    // 1. 明示的な絵の修正・変更リクエスト構文（文末一致で厳格に判定）
     const modPatterns = [
-      /(.+?)(?:にしてほしい|にしてくれ|にしてください|にしてよ|にして|に変えてほしい|に変えてくれ|に変えてください|に変えて|に描き直して|に描きかえて)/,
-      /(.+?)(?:を追加して|を足して|を置いて|を入れて|を描いてほしい|を描き足して|を描いてみて)/,
-      /(?:もっと|もうちょっと)(.+?)(?:にして|に変えて|を描いて)/,
-      /(?:もう一度|もう一回|新しく)(.+?)(?:描いて|描き直して)/
+      /(.+?)(?:にしてほしい|にしてくれ|にしてください|に変えてほしい|に変えてくれ|に変えてください|に描き直して|に描きかえて)$/,
+      /(.+?)(?:を追加して|を足して|を置いて|を入れて|を描き足して|を描いてみて)$/,
+      /(?:もっと|もうちょっと)(.+?)(?:にして|に変えて)$/,
+      /(?:もう一度|もう一回|新しく)(.+?)(?:描いて|描き直して)$/
     ];
 
     for (const pat of modPatterns) {
@@ -4162,7 +4175,7 @@ ${artStyle.svgStyleRules}
     }
 
     // 単独の修正キーワード
-    if (/(描き直して|描きかえて|書き直して|修正して|直してほしい|変えてみて)/.test(clean)) {
+    if (/^(描き直して|描きかえて|書き直して|修正して|直してほしい|変えてみて)$/.test(clean)) {
       return clean;
     }
 
@@ -4171,28 +4184,21 @@ ${artStyle.svgStyleRules}
 
   function handleUserModificationDetected(feedback) {
     if (!feedback) return;
-    logDiag(`ユーザーの絵の修正指示を検知: 「${feedback}」`);
+    logDiag(`ユーザーの絵の修正指示を検知: 「${feedback}」（描き直しボタンで実行可能）`);
     state.lastUserModification = feedback;
     state.sceneCollector.details.add(`【修正指示】${feedback}`);
 
     if (dom.refineHintText) {
-      dom.refineHintText.textContent = `💡 修正指示: 「${feedback}」を反映します`;
+      dom.refineHintText.textContent = `💡 修正指示: 「${feedback}」ボタンを押すと描き直せます`;
     }
     renderSceneCollectorUI();
 
-    // 既存のフォールバックタイマーがあればリセット
+    // ※会話の途中で勝手に自動描画が始まってしまう事故を防ぐため、自動タイマーは完全廃止！
+    // ユーザーが「この指示で描き直す」を押した時、または明示的に指示した時のみ安全に描き直します。
     if (state.pendingRefineTimer) {
       clearTimeout(state.pendingRefineTimer);
       state.pendingRefineTimer = null;
     }
-
-    // Gemini Live API が相槌だけでツール（refine_memory_visual）をスキップした場合の安全網（2.2秒）
-    state.pendingRefineTimer = setTimeout(async () => {
-      state.pendingRefineTimer = null;
-      if (!state.isSessionActive && !state.hasDrawnImage) return;
-      logDiag(`Gemini Live ツール未発行のため、クライアントから描き直しを自動実行: 「${feedback}」`);
-      await executeRefineDrawing(feedback);
-    }, 2200);
   }
 
   async function executeRefineDrawing(feedbackText = '') {
@@ -4471,15 +4477,14 @@ ${artStyle.svgStyleRules}
 
     // =========================================================================
     // 3. ユーザーからの明示的描画リクエスト・または合意返答の検知
-    // ※話題抽出の「後」に行うため、最新の話題（柿など）が確実に反映された状態で描画される
     // ※「〜を描きたい」「〜を書きたい」は話題提示なので即時描画トリガーには含めない
+    // ※会話中の単なる相槌（「はい」「うん」「そうですね」）での勝手な誤描画を完全防止
     // =========================================================================
     if (speaker === 'user') {
       const isExplicitDrawCommand = /(絵を描いてください|絵を書いてください|今の話題を絵にして|キャンバスに描いて|キャンバスに出して|この絵を描いて)/.test(clean);
-      const isApproval = /^(はい|うん|ええ|お願いします|お願い|描いてください|書いてください|そうして|やってみて|いいよ|ぜひ|頼む|おねがい)$/.test(clean.trim()) ||
-                         /^(そうですね|そうしよう|描こう|書こう)$/.test(clean.trim());
+      const isApprovalForPrompt = sc.isAwaitingConfirmation && /^(はい、?描いてください|描いてください|お願いします|お願い|描いて|そうして)$/.test(clean.trim());
 
-      if (isExplicitDrawCommand || (sc.isAwaitingConfirmation && isApproval)) {
+      if (isExplicitDrawCommand || isApprovalForPrompt) {
         const now = Date.now();
         if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
           logDiag(`描画中またはクールダウン中のため、重複トリガーをスキップ: 「${clean}」`);
@@ -4746,7 +4751,7 @@ ${artStyle.svgStyleRules}
       if (mySeqId === state.drawSequenceId) {
         updateDrawButtonsCooldownUI();
         renderSceneCollectorUI();
-        setAvatarState(state.isSessionActive ? 'listening' : 'idle');
+        setAvatarState('force_reset');
       }
     }
   }

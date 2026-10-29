@@ -303,7 +303,9 @@ class LiveSessionManager:
                             logger.debug(f"audio_stream_end notice: {eos_err}")
 
                     elif msg_type == "user_transcript":
-                        # ブラウザ音声認識で確定した字幕テキスト（話題記録・情景抽出・音声フォールバック用）
+                        # ブラウザ音声認識で確定した字幕テキスト（話題記録・情景抽出・日報用）
+                        # ※Gemini Live音声ストリームへ直接テキスト注入すると1011内部エラーでセッション切断されるため、
+                        #   音声対話は高感度マイクPCM＋VADに100%任せ、テキストは安全に話題履歴のみに蓄積する
                         user_text = data.get("text", "").strip()
                         if user_text:
                             logger.info(f"User transcript received (for history/scene): {user_text}")
@@ -311,15 +313,6 @@ class LiveSessionManager:
                             noise_words = ["聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト", "こんにちは", "こんばんは", "おはよう"]
                             if not any(w in user_text for w in noise_words) and len(user_text) >= 2:
                                 self.discussed_topics.append(user_text)
-
-                            # マイクPCMが小さくGemini Liveの音声認識が反応していない場合、
-                            # ブラウザ音声認識テキストをGeminiへ送り、さくらさんに確実に返答させる（音声不感帯・沈黙の完全防止）
-                            if time.time() >= self.echo_guard_until and not self.current_ai_turn_text:
-                                try:
-                                    logger.info(f"Relaying browser speech transcript to Gemini to ensure response: {user_text}")
-                                    await session.send(input=user_text, end_of_turn=True)
-                                except Exception as txt_err:
-                                    logger.warning(f"Failed to relay user transcript to Gemini: {txt_err}")
 
                     elif msg_type == "request_confirmed_draw":
                         # ユーザーが画面上で「🎨 今の話題を絵にする」または「🎨 はい、描いてください」を押した時のみ描画を実行
