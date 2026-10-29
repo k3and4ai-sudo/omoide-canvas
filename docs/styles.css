@@ -1123,21 +1123,25 @@ body {
 
 /* キャプションバー */
 .canvas-caption-bar {
-  height: 64px;
+  min-height: 64px;
+  height: auto;
   background: #ffffff;
   border-top: 1.5px solid var(--border-color);
-  padding: 0 24px;
+  padding: 8px 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .caption-content {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px 14px;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 320px;
+  flex-wrap: wrap;
 }
 
 .caption-actions {
@@ -1244,9 +1248,13 @@ body {
 
 .caption-title {
   font-family: 'Kiwi Maru', serif;
-  font-size: 20px;
+  font-size: clamp(15px, 1.8vw, 19px);
   color: var(--primary);
   font-weight: 500;
+  line-height: 1.35;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  margin: 0;
 }
 
 .caption-sound-indicator {
