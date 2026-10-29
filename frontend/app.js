@@ -39,6 +39,14 @@
     userRequestedStop: false,       // ユーザーが明示的に終了ボタンを押したか（放置時自動再接続用）
     keepaliveIntervalId: null,      // WebSocket放置切断防止用キープアライブタイマー
     sessionStartTime: null,         // セッション開始時刻（日報計算用）
+    previousSessionContext: (() => {
+      try {
+        const saved = sessionStorage.getItem('omoide_previous_session');
+        return saved ? JSON.parse(saved) : null;
+      } catch (e) {
+        return null;
+      }
+    })(),                           // セッション終了・再開時の話題継続用コンテキスト
     sessionTopics: [],              // セッション中の話題リスト
     sessionMemories: [],            // セッション中に生成した絵画リスト
     lastDrawnUtterance: '',         // 最後にキャンバス描画した発話テキスト
@@ -803,7 +811,7 @@
     return `${clean}さん`;
   }
 
-  function buildSystemInstructionJS(profile) {
+  function buildSystemInstructionJS(profile, resumeTopic = '', isResume = false) {
     const p = profile || DEFAULT_USER_PROFILE;
     const level = p.dementia_level || 'mild';
     let levelRules = '';
@@ -838,7 +846,7 @@
     const triggersStr = (p.trigger_words || []).join('、') || '故郷の風景、懐かしい仕事の思い出';
     const ngStr = (p.ng_topics || []).join('、') || '直近の記憶を試すこと、家族の不幸';
 
-    return `# あなたの役割とプロフィール（AIパートナー設定）
+    let baseInstruction = `# あなたの役割とプロフィール（AIパートナー設定）
 ・あなたの名前：「${partnerName}」
 ・あなたの年齢・性別：${partnerAge}・${partnerGender}
 ・あなたの性格・話し方：${partnerPersonality}
@@ -889,6 +897,17 @@ ${levelRules}
 
 # 【緊急通報（SOS）の絶対ルール】
 相手が「助けて」「苦しい」「痛い」等の発言をした場合は、まず「${nickname}、大丈夫ですか？ご家族に連絡を入れましょうか？」と確認し、本人が同意した場合のみ \`trigger_emergency_alert\` を呼び出してください。`;
+
+    if (isResume && resumeTopic) {
+      baseInstruction += `
+
+# 【直前の対話からの継続再開ルール（重要）】
+・このセッションは直前の対話からの「継続再開」です。直前まで${nickname}と「${resumeTopic}」について楽しくお話ししていました。
+・初回のような挨拶（「はじめまして」「今日もお元気でしたか」など）は決して行わず、直前の話題（${resumeTopic}）についての感想や質問から自然に会話を続けてください。
+・すでに画面上には先ほどお話しした「${resumeTopic}」の思い出の絵が描かれています。相手が絵について感想を述べたり修正を希望した場合は、前回の絵を踏まえて優しく対応してください。`;
+    }
+
+    return baseInstruction;
   }
 
   function sendPcmAudioChunk(pcm16Buffer) {
@@ -939,6 +958,8 @@ ${levelRules}
     state.lastUserModification = '';
     state.lastDrawnUtterance = '';
     state.pollinationsBlocked = false;
+    state.previousSessionContext = null;
+    try { sessionStorage.removeItem('omoide_previous_session'); } catch (e) {}
     if (state.pendingRefineTimer) {
       clearTimeout(state.pendingRefineTimer);
       state.pendingRefineTimer = null;
@@ -994,8 +1015,25 @@ ${levelRules}
     try {
       state.userRequestedStop = false;
       state.sessionStartTime = Date.now();
-      state.sessionTopics = [];
-      state.sessionMemories = [];
+
+      // 直前のセッションからの再開（続き）かどうかの判定
+      const hasPreviousContext = !!(state.previousSessionContext && (state.previousSessionContext.lastTopic || state.previousSessionContext.lastArtTitle));
+      const hasExistingArt = state.hasDrawnImage || (dom.memoryImage && !dom.memoryImage.classList.contains('hidden') && dom.memoryImage.src);
+
+      if (hasPreviousContext || hasExistingArt) {
+        // 前の話の続きとして再開する：キャンバスと話題を維持！
+        const resumeTopic = state.previousSessionContext?.lastArtTitle || state.previousSessionContext?.lastTopic || '前回の風景';
+        logDiag(`【再開】前回の話題（${resumeTopic}）を引き継いで再開します。`);
+        if (state.previousSessionContext?.topics && state.previousSessionContext.topics.length > 0) {
+          state.sessionTopics = [...state.previousSessionContext.topics];
+        }
+      } else {
+        // まったくの初回、または明示的に白紙に戻されている場合
+        state.sessionTopics = [];
+        state.sessionMemories = [];
+        clearCanvasState();
+      }
+
       state.isAiSpeaking = true; // 接続〜最初の挨拶完了までマイクを完全保護（エコー遮断ガード）
       if (state.aiSpeechEndTimer) clearTimeout(state.aiSpeechEndTimer);
       state.aiSpeechEndTimer = setTimeout(() => {
@@ -1005,7 +1043,6 @@ ${levelRules}
           if (!state.isDrawingMedia) setAvatarState('listening');
         }
       }, 5000);
-      clearCanvasState();
       updateStatus('マイクと接続を準備しています...', true);
       dom.btnSessionToggle.disabled = true;
 
@@ -1104,8 +1141,19 @@ ${levelRules}
   function connectLocalBackendWebSocket() {
     state.isDirectGeminiWs = false;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const keyParam = state.sessionApiKey ? `?api_key=${encodeURIComponent(state.sessionApiKey)}` : '';
-    const wsUrl = `${protocol}//${window.location.host}/ws/live${keyParam}`;
+    const params = new URLSearchParams();
+    if (state.sessionApiKey) {
+      params.set('api_key', state.sessionApiKey);
+    }
+    const topicForResume = state.previousSessionContext?.lastArtTitle || state.previousSessionContext?.lastTopic || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '');
+    const isResume = !!(topicForResume && (state.hasDrawnImage || state.previousSessionContext));
+    if (isResume && topicForResume) {
+      params.set('recent_topic', topicForResume);
+      params.set('last_art', state.previousSessionContext?.lastArtTitle || '');
+      params.set('is_resume', 'true');
+    }
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+    const wsUrl = `${protocol}//${window.location.host}/ws/live${queryString}`;
     state.socket = new WebSocket(wsUrl);
     state.socket.binaryType = 'arraybuffer';
 
@@ -1138,7 +1186,9 @@ ${levelRules}
     const profile = state.currentProfile || DEFAULT_USER_PROFILE;
     const partner = profile.partner || DEFAULT_USER_PROFILE.partner;
     const selectedVoice = partner.voice_name || (partner.gender === '男性' ? 'Puck' : 'Aoede');
-    const systemInstruction = buildSystemInstructionJS(profile);
+    const topicForResume = state.previousSessionContext?.lastArtTitle || state.previousSessionContext?.lastTopic || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '');
+    const isResume = !isReconnect && !!(topicForResume && (state.hasDrawnImage || state.previousSessionContext));
+    const systemInstruction = buildSystemInstructionJS(profile, topicForResume, isResume);
 
     let setupCompleted = false;
 
@@ -1245,7 +1295,12 @@ ${levelRules}
           const cleanName = (profile.call_name || 'お父さん').replace(/\s*さん$/, '');
           const pName = partner.name || 'さくら';
           dom.avatarContainer.setAttribute('data-gender', partner.gender || '女性');
-          dom.partnerStatusText.textContent = `${pName}：${cleanName}さんとお話し中`;
+          const topicForResume = state.previousSessionContext?.lastArtTitle || state.previousSessionContext?.lastTopic || '';
+          if (topicForResume && (state.hasDrawnImage || state.previousSessionContext)) {
+            dom.partnerStatusText.textContent = `${pName}：${cleanName}さんと「${topicForResume}」のお話を継続中`;
+          } else {
+            dom.partnerStatusText.textContent = `${pName}：${cleanName}さんとお話し中`;
+          }
 
           // 放置時切断防止用の無音キープアライブタイマー開始（20秒ごと）
           if (state.keepaliveIntervalId) clearInterval(state.keepaliveIntervalId);
@@ -1261,7 +1316,12 @@ ${levelRules}
           if (!isReconnect) {
             logDiag(`Gemini Live API 直結セッション確立 (voice=${selectedVoice})`);
             const nickname = formatUserNickname(profile.call_name);
-            const greetPrompt = `対話セッションが開始されました。あなたの名前は「${pName}」です。${nickname}に向かって、「こんにちは、${nickname}！${pName}です。今日も気持ちのいい日ですね。お元気でしたか？」のように、あなたの性格（${partner.personality || '優しく穏やか'}）らしく、短く温かく最初の挨拶を声に出して話しかけてください。`;
+            let greetPrompt = '';
+            if (isResume && topicForResume) {
+              greetPrompt = `対話セッションが再開されました。あなたの名前は「${pName}」です。直前まで${nickname}と「${topicForResume}」について楽しくお話ししていました。「${nickname}、先ほどの${topicForResume}のお話の続きをしましょうか！」のように、初対面の挨拶（こんにちは、今日もお元気でしたか等）は省略して、直前のお話の続きを自然に促す温かい第一声を声に出して話しかけてください。`;
+            } else {
+              greetPrompt = `対話セッションが開始されました。あなたの名前は「${pName}」です。${nickname}に向かって、「こんにちは、${nickname}！${pName}です。今日も気持ちのいい日ですね。お元気でしたか？」のように、あなたの性格（${partner.personality || '優しく穏やか'}）らしく、短く温かく最初の挨拶を声に出して話しかけてください。`;
+            }
             ws.send(JSON.stringify({
               client_content: {
                 turns: [{ role: 'user', parts: [{ text: greetPrompt }] }],
@@ -1452,12 +1512,25 @@ ${levelRules}
     const profile = state.currentProfile || DEFAULT_USER_PROFILE;
     const pName = profile.partner?.name || 'さくら';
     const nickname = formatUserNickname(profile.call_name);
-    dom.partnerStatusText.textContent = `${pName}：${nickname}とお話し中（デモ体験）`;
-    logDiag('【案内】デモ体験（シミュレーション）モードで開始しました。');
+    const topicForResume = state.previousSessionContext?.lastArtTitle || state.previousSessionContext?.lastTopic || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '');
+    const isResume = !!(topicForResume && (state.hasDrawnImage || state.previousSessionContext));
+
+    if (isResume && topicForResume) {
+      dom.partnerStatusText.textContent = `${pName}：${nickname}と「${topicForResume}」のお話を継続中`;
+      logDiag(`【案内】前回の話題「${topicForResume}」を引き継いでデモ対話を再開しました。`);
+    } else {
+      dom.partnerStatusText.textContent = `${pName}：${nickname}とお話し中（デモ体験）`;
+      logDiag('【案内】デモ体験（シミュレーション）モードで開始しました。');
+    }
 
     setTimeout(() => {
       if (!state.isSessionActive) return;
-      const greet = `こんにちは、${nickname}！パートナーの${pName}です。今日もいいお天気ですね。昔の懐かしい場所や、お仕事のお話を聞かせてくださいね。`;
+      let greet = '';
+      if (isResume && topicForResume) {
+        greet = `${nickname}、先ほどの${topicForResume}のお話の続きをしましょうか！`;
+      } else {
+        greet = `こんにちは、${nickname}！パートナーの${pName}です。今日もいいお天気ですね。昔の懐かしい場所や、お仕事のお話を聞かせてくださいね。`;
+      }
       dom.aiTranscriptText.textContent = greet;
       speakTextWithWebSpeech(greet);
     }, 500);
@@ -1466,6 +1539,26 @@ ${levelRules}
   async function stopSession() {
     state.userRequestedStop = true;
     updateStatus('お話を終了しています...', false);
+
+    // 直前の会話文脈（セッション再開時の継続用）を保存
+    try {
+      const lastTitle = (dom.captionTitle && dom.captionTitle.textContent && dom.captionTitle.textContent !== 'お話に出てきた風景をここに描きます')
+        ? dom.captionTitle.textContent.trim() : '';
+      const lastTopic = state.sceneCollector?.lastConfirmedTopic || state.sceneCollector?.topic || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '');
+      if (lastTitle || lastTopic || state.sessionTopics.length > 0 || state.hasDrawnImage) {
+        state.previousSessionContext = {
+          lastTopic: lastTopic || lastTitle,
+          lastArtTitle: lastTitle,
+          topics: [...state.sessionTopics],
+          hasDrawnImage: state.hasDrawnImage
+        };
+        sessionStorage.setItem('omoide_previous_session', JSON.stringify(state.previousSessionContext));
+        logDiag(`【文脈保存】会話を一時終了しました（次回再開時の話題: ${state.previousSessionContext.lastTopic || state.previousSessionContext.lastArtTitle}）`);
+      }
+    } catch (e) {
+      console.warn('Failed to save previous session context:', e);
+    }
+
     if (state.keepaliveIntervalId) {
       clearInterval(state.keepaliveIntervalId);
       state.keepaliveIntervalId = null;
@@ -3280,7 +3373,12 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
           if (data.partner_gender) {
             dom.avatarContainer.setAttribute('data-gender', data.partner_gender);
           }
-          dom.partnerStatusText.textContent = `${pName}：${cleanName}さんとお話し中`;
+          const topicForResume = state.previousSessionContext?.lastArtTitle || state.previousSessionContext?.lastTopic || '';
+          if (topicForResume && (state.hasDrawnImage || state.previousSessionContext)) {
+            dom.partnerStatusText.textContent = `${pName}：${cleanName}さんと「${topicForResume}」のお話を継続中`;
+          } else {
+            dom.partnerStatusText.textContent = `${pName}：${cleanName}さんとお話し中`;
+          }
           setAvatarState('listening');
           if (state.isSimulation) {
             logDiag('【案内】ローカルシミュレーションモードで接続しました。');

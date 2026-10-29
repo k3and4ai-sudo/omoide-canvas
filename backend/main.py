@@ -186,15 +186,26 @@ async def test_emergency_alert(channel: Optional[str] = "test"):
 @app.websocket("/ws/live")
 async def websocket_live_endpoint(
     websocket: WebSocket,
-    api_key: Optional[str] = Query(default=None)
+    api_key: Optional[str] = Query(default=None),
+    recent_topic: Optional[str] = Query(default=""),
+    last_art: Optional[str] = Query(default=""),
+    is_resume: Optional[bool] = Query(default=False)
 ):
     """
     本人用キャンバス画面とのリアルタイム双方向通信エンドポイント
     クライアントがログイン時に入力した api_key をこのセッション限定で使用する
+    直前のセッションからの再開時は recent_topic / last_art / is_resume を受け取る
     """
     await websocket.accept()
     profile = load_user_profile()
-    session_mgr = LiveSessionManager(websocket, profile, api_key=api_key)
+    session_mgr = LiveSessionManager(
+        websocket,
+        profile,
+        api_key=api_key,
+        recent_topic=recent_topic or "",
+        last_art=last_art or "",
+        is_resume=bool(is_resume)
+    )
 
     key_status = "UserKey" if (api_key and len(api_key.strip()) > 10) else "DemoSimulation"
     logger.info(f"WebSocket client connected for user: {profile.call_name} (mode={key_status})")

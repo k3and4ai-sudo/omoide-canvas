@@ -56,14 +56,25 @@ class LiveSessionManager:
     1クライアントと Gemini Live API 間の双方向リアルタイム接続を統括するマネージャー
     """
 
-    def __init__(self, websocket: WebSocket, profile: UserProfile, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        websocket: WebSocket,
+        profile: UserProfile,
+        api_key: Optional[str] = None,
+        recent_topic: str = "",
+        last_art: str = "",
+        is_resume: bool = False
+    ):
         self.websocket = websocket
         self.profile = profile
         self.api_key = (api_key or "").strip()
+        self.recent_topic = (recent_topic or "").strip()
+        self.last_art = (last_art or "").strip()
+        self.is_resume = bool(is_resume)
         self.is_active = False
         self.session_task: Optional[asyncio.Task] = None
         self.generated_memories: List[MemoryArtifact] = []
-        self.discussed_topics: List[str] = []
+        self.discussed_topics: List[str] = [self.recent_topic] if self.recent_topic else []
         self.start_time: Optional[float] = None
         self.current_ai_turn_text: str = ""
         self.current_user_turn_text: str = ""
@@ -88,7 +99,12 @@ class LiveSessionManager:
 
         try:
             client = genai.Client(api_key=api_key)
-            system_instruction = build_system_instruction(self.profile)
+            system_instruction = build_system_instruction(
+                self.profile,
+                recent_topic=self.recent_topic,
+                last_art=self.last_art,
+                is_resume=self.is_resume
+            )
 
             # Function Calling ツール定義
             def generate_memory_visual(
@@ -169,15 +185,26 @@ class LiveSessionManager:
                     "dementia_level": self.profile.dementia_level.value
                 })
 
-                # セッション開始直後にAIパートナーから温かい第一声（挨拶）を発話させる
+                # セッション開始直後にAIパートナーから温かい第一声（挨拶または前回の続き）を発話させる
                 raw_name = (self.profile.call_name or "お父さん").strip()
                 nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
                 p_name = partner.name if (partner and partner.name) else "さくら"
-                initial_greeting_prompt = (
-                    f"対話セッションが開始されました。あなたの名前は「{p_name}」です。"
-                    f"{nickname}に向かって、「こんにちは、{nickname}！{p_name}です。今日も気持ちのいい日ですね。お元気でしたか？」のように、"
-                    f"あなたの性格（{partner.personality if partner else '優しく穏やか'}）らしく、短く温かく最初の挨拶を声に出して話しかけてください。"
-                )
+                topic_for_resume = (self.last_art or self.recent_topic).strip()
+
+                if self.is_resume and topic_for_resume:
+                    initial_greeting_prompt = (
+                        f"対話セッションが再開されました。あなたの名前は「{p_name}」です。"
+                        f"直前まで{nickname}と「{topic_for_resume}」について楽しくお話ししていました。"
+                        f"{nickname}に向かって、「{nickname}、先ほどの{topic_for_resume}のお話の続きをしましょうか！」や"
+                        f"「{topic_for_resume}の続きを聞かせてくださいね」のように、"
+                        f"初対面の挨拶（こんにちは、今日もお元気でしたか等）は完全に省略して、直前のお話の続きを自然に促す温かい第一声を声に出して話しかけてください。"
+                    )
+                else:
+                    initial_greeting_prompt = (
+                        f"対話セッションが開始されました。あなたの名前は「{p_name}」です。"
+                        f"{nickname}に向かって、「こんにちは、{nickname}！{p_name}です。今日も気持ちのいい日ですね。お元気でしたか？」のように、"
+                        f"あなたの性格（{partner.personality if partner else '優しく穏やか'}）らしく、短く温かく最初の挨拶を声に出して話しかけてください。"
+                    )
                 try:
                     # 最初の挨拶を発話している間（約6.0秒）はスピーカー音をマイクが拾って中断しないようエコーガードを設定
                     self.echo_guard_until = time.time() + 6.0
@@ -623,9 +650,15 @@ class LiveSessionManager:
             "simulation": True
         })
 
-        # 擬似挨拶
+        # 擬似挨拶（再開時は前回の話題の続き）
         await asyncio.sleep(0.5)
-        greeting_text = f"こんにちは、{self.profile.call_name}さん！今日もいいお天気ですね。昔の懐かしい場所や、お仕事のお話を聞かせてくださいね。"
+        raw_name = (self.profile.call_name or "お父さん").strip()
+        nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+        topic_for_resume = (self.last_art or self.recent_topic).strip()
+        if self.is_resume and topic_for_resume:
+            greeting_text = f"{nickname}、先ほどの{topic_for_resume}のお話の続きをしましょうか！"
+        else:
+            greeting_text = f"こんにちは、{nickname}！今日もいいお天気ですね。昔の懐かしい場所や、お仕事のお話を聞かせてくださいね。"
         await self.websocket.send_json({
             "type": "transcript",
             "role": "model",

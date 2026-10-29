@@ -6,10 +6,16 @@
 from backend.models import UserProfile, DementiaLevel
 
 
-def build_system_instruction(profile: UserProfile) -> str:
+def build_system_instruction(
+    profile: UserProfile,
+    recent_topic: str = "",
+    last_art: str = "",
+    is_resume: bool = False
+) -> str:
     """
     対象者プロフィールおよび進行度レベルに基づき、
     Gemini Live API に渡す動的システムプロンプト (system_instruction) を構築する。
+    直前のセッションからの再開 (is_resume) の場合は、直前の話題・絵画の文脈を自然に引き継ぐ指示を付与する。
     """
 
     # 進行度別の対話ルール
@@ -131,4 +137,15 @@ def build_system_instruction(profile: UserProfile) -> str:
 必ずまず「{nickname}、大丈夫ですか？ご家族に今すぐ連絡を入れましょうか？」と優しく確認してください。
 本人が同意（「呼んで」「お願い」等）した場合のみ、`trigger_emergency_alert` を呼び出してください。昔話の中の「助けて」やテレビの話題など、誤検知と思われる場合は通報してはなりません。
 """
+    # 直前のセッションからの再開の場合、直前の話題・絵画の文脈を自然に引き継ぐルールを追記
+    topic_context = (last_art or recent_topic).strip()
+    if is_resume and topic_context:
+        system_instruction += f"""
+
+# 【直前の対話からの継続再開ルール（重要）】
+・このセッションは直前の対話からの「継続再開」です。直前まで{nickname}と「{topic_context}」について楽しくお話ししていました。
+・初回のような挨拶（「はじめまして」「今日もお元気でしたか」など）は決して行わず、直前の話題（{topic_context}）についての感想や質問から自然に会話を続けてください。
+・すでに画面上には先ほどお話しした「{topic_context}」の思い出の絵が描かれています。相手が絵について感想を述べたり修正を希望した場合は、前回の絵を踏まえて優しく対応してください。
+"""
+
     return system_instruction.strip()
