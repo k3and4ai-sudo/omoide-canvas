@@ -4093,65 +4093,79 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
       }
     }
 
-    // 2. ユーザーからの明示的描画リクエスト・または合意返答の検知
+    // 2. ユーザーの絵の修正・描き直し指示を最優先で検知
     if (speaker === 'user') {
-      // 絵の修正・描き直し指示を最優先で検知
       const modIntent = detectModificationIntent(clean);
       if (modIntent) {
         handleUserModificationDetected(modIntent);
         return;
       }
+    }
 
-      const isExplicitDrawCommand = /(絵を描いて|絵を書いて|絵にして|絵描いて|絵書いて|描いてみて|書いてみて|キャンバスに描いて|キャンバスに書いて|キャンバスに出して|キャンバスに映して|描いてください|書いてください|描いて|書いて)/.test(clean);
-      const isApproval = /^(はい|うん|ええ|お願いします|お願い|描いて|書いて|そうして|やってみて|いいよ|ぜひ|頼む|おねがい)/.test(clean) ||
-                         /^(そうですね|そうしよう|描こう|書こう)/.test(clean);
+    // =========================================================================
+    // 【最重要】発話内容から話題・場所・天候・情景ディテールを先行抽出する！
+    // （描画コマンドや合意をチェックする前に、まず新しい話題やモチーフを確定させる）
+    // =========================================================================
 
-      if (isExplicitDrawCommand || (sc.isAwaitingConfirmation && isApproval)) {
-        const now = Date.now();
-        if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
-          logDiag(`描画中またはクールダウン中のため、重複トリガーをスキップ: 「${clean}」`);
-          return;
-        }
-        logDiag(`ユーザーの描画合意・指示を検知: 「${clean}」`);
-        sc.isAwaitingConfirmation = false;
-        executeConfirmedDrawing();
-        return;
+    // A. 「〜の絵」「〜について」「〜を描きたい」などの明示的トピックフレーズの優先抽出
+    let detectedNewTopic = '';
+    const topicPhraseMatch = clean.match(/(?:(.+?)(?:の絵|について|のお話|の情景|を描きたい|を書きたい|を描こう|を書こう))/);
+    if (topicPhraseMatch && topicPhraseMatch[1]) {
+      const cand = topicPhraseMatch[1].replace(/^(あの|その|ええと|えーと|じゃあ|それでは|次は|今度は|絵を)\s*/, '').trim();
+      if (cand.length >= 1 && cand.length <= 15) {
+        detectedNewTopic = cand;
       }
     }
 
-    // 3. 話題・テーマの抽出
-    const topicRegex = /(赤いバラ|バラ|ばら|薔薇|バラ園|花壇|庭園|お花|花|ガーデニング|犬|いぬ|イヌ|マルチーズ|柴犬|ペット|子犬|猫|ねこ|散歩|お買い物|買い物|商店街|文化祭|模擬店|運動会|山登り|登山|ハイキング|お祭り|祭り|旅行|卒業式|入学式|紅葉狩り|お花見|ドライブ|仕事|授業|畑仕事|収穫)/;
+    // B. 話題・テーマ辞書による抽出（柿、果物、野菜、秋の味覚などを網羅）
+    const topicRegex = /(枝に実った柿|秋の柿|柿の実|柿の木|柿|かき|カキ|リンゴ|りんご|林檎|みかん|ミカン|蜜柑|ぶどう|ブドウ|葡萄|栗|くり|クリ|さつまいも|サツマイモ|焼き芋|秋の味覚|果物|くだもの|家庭菜園|収穫|赤いバラ|バラ|ばら|薔薇|バラ園|花壇|庭園|お花|花|ガーデニング|犬|いぬ|イヌ|マルチーズ|柴犬|ペット|子犬|猫|ねこ|散歩|お買い物|買い物|商店街|文化祭|模擬店|運動会|山登り|登山|ハイキング|お祭り|祭り|旅行|卒業式|入学式|紅葉狩り|お花見|ドライブ|仕事|授業|畑仕事)/;
     const tm = clean.match(topicRegex);
     if (tm) {
-      if (!sc.topic || tm[0].length >= sc.topic.length) {
-        sc.topic = tm[0];
+      detectedNewTopic = tm[0];
+    }
+
+    // C. 新しい話題の反映 ＆ 話題転換時の古いディテール刷新
+    if (detectedNewTopic) {
+      if (!sc.topic || !sc.topic.includes(detectedNewTopic)) {
+        logDiag(`新しい話題を検知: 「${detectedNewTopic}」（前回の話題: ${sc.topic || 'なし'}）`);
+        // まったく別のカテゴリへの転換（例: バラから柿、犬から山など）なら前回のディテールをリフレッシュ
+        const isRose = /(バラ|薔薇)/.test(sc.topic || '');
+        const isNewRose = /(バラ|薔薇)/.test(detectedNewTopic);
+        const isPersimmon = /(柿|かき)/.test(sc.topic || '');
+        const isNewPersimmon = /(柿|かき)/.test(detectedNewTopic);
+        if ((isRose && !isNewRose) || (isPersimmon && !isNewPersimmon) || (!isRose && !isPersimmon && sc.topic !== detectedNewTopic)) {
+          sc.details.clear();
+          sc.place = '';
+          sc.seasonWeather = '';
+        }
+        sc.topic = detectedNewTopic;
         changed = true;
       }
     }
 
-    // 4. 場所・舞台の抽出
-    const placeRegex = /(バラ園|庭園|花壇|庭|中庭|芝生の庭|座敷|和室|畳|お部屋|家の中|リビング|北アルプス|南アルプス|中央アルプス|槍ヶ岳|穂高岳|常念岳|富士山|八ヶ岳|美ヶ原|上高地|信州|松本|喫茶店の中|喫茶店|カフェ|純喫茶|教室の中|教室|校舎|学校|体育館|校庭|海|海岸|砂浜|波打ち際|港|駅|ホーム|公園|商店街|田んぼ|畑|リンゴ畑|りんご畑|神社|お寺|故郷|実家)/;
+    // D. 場所・舞台の抽出
+    const placeRegex = /(柿の木の下|庭の柿の木|果樹園|畑|里山|庭先|縁側|軒先|バラ園|庭園|花壇|庭|中庭|芝生の庭|座敷|和室|畳|お部屋|家の中|リビング|北アルプス|南アルプス|中央アルプス|槍ヶ岳|穂高岳|常念岳|富士山|八ヶ岳|美ヶ原|上高地|信州|松本|喫茶店の中|喫茶店|カフェ|純喫茶|教室の中|教室|校舎|学校|体育館|校庭|海|海岸|砂浜|波打ち際|港|駅|ホーム|公園|商店街|田んぼ|リンゴ畑|りんご畑|神社|お寺|故郷|実家)/;
     const pm = clean.match(placeRegex);
     if (pm) {
       sc.place = pm[0];
       if (!sc.topic) {
-        sc.topic = `${pm[0]}の思い出`;
+        sc.topic = `${pm[0]}の風景`;
       }
       changed = true;
     }
 
-    // 5. 季節・天候・時間帯の抽出
-    const seasonRegex = /(春|夏|秋|冬|朝|昼|夕暮れ|夕方|夕焼け|夜|星空|快晴|青空|雲海|雪|残雪|新緑|紅葉|秋晴れ|澄み切った空)/;
+    // E. 季節・天候・時間帯の抽出
+    const seasonRegex = /(秋晴れの澄んだ青空|澄み切った秋の空|秋の空|秋晴れ|晴れ渡った青空|青空|快晴|秋|春|夏|冬|朝|昼|夕暮れ|夕方|夕焼け|夜|星空|雲海|雪|残雪|新緑|紅葉)/;
     const sm = clean.match(seasonRegex);
     if (sm) {
-      if (!sc.seasonWeather) {
-        sc.seasonWeather = sm[0];
-        changed = true;
-      }
+      sc.seasonWeather = sm[0];
+      changed = true;
     }
 
-    // 6. 情景ディテール（事物・要素）の抽出
+    // F. 情景ディテール（事物・要素）の抽出
     const detailList = [
+      // 柿・秋の果物・庭
+      '枝に一つだけ実った大きな柿', '枝に実った柿', '鮮やかなオレンジ色の柿', '熟した柿の実', 'たわわに実った柿', '澄み切った秋の青空', '秋晴れの澄んだ空', '秋の高い空', '柿の木の枝', '紅葉した柿の葉', '軒先の干し柿', '青い空に映える柿', '秋の里山',
       // バラ・花・庭園
       '赤いバラ', '真っ赤なバラ', '満開のバラ', 'バラの花壇', '白い木製の柵', '白い柵', '緑の芝生', '石畳の小道', 'レンガの小道', '木製ベンチ', '庭のベンチ', '庭の池', '植木鉢', '藤棚', '満開の桜', 'ひまわり', 'コスモス', '朝顔', '紫陽花', '小鳥のさえずり', '温かい日差し',
       // ペット・動物・和室
@@ -4174,6 +4188,39 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
         }
       }
     });
+
+    // G. 柿・秋の情景の自動補強ルール
+    if (/(柿|かき|カキ)/.test(clean)) {
+      if (!sc.topic) {
+        sc.topic = '秋の柿の木';
+        changed = true;
+      }
+      if (clean.includes('1') || clean.includes('一つ') || clean.includes('ひとつ') || clean.includes('一箇') || clean.includes('拡大')) {
+        if (!sc.details.has('枝に一つだけ実った大きな柿')) {
+          sc.details.add('枝に一つだけ実った大きな柿');
+          changed = true;
+        }
+      } else {
+        if (!sc.details.has('鮮やかなオレンジ色の柿の実')) {
+          sc.details.add('鮮やかなオレンジ色の柿の実');
+          changed = true;
+        }
+      }
+      if (clean.includes('空') || clean.includes('秋') || clean.includes('晴')) {
+        if (!sc.details.has('澄み切った秋の青空')) {
+          sc.details.add('澄み切った秋の青空');
+          changed = true;
+        }
+        if (!sc.seasonWeather) {
+          sc.seasonWeather = '秋晴れの澄んだ青空';
+          changed = true;
+        }
+      }
+      if (!sc.place) {
+        sc.place = '秋の庭先';
+        changed = true;
+      }
+    }
 
     // バラ・庭が話題なら自動補強（ユーザーの会話から具体ディテールを確実に反映）
     if (/(バラ|ばら|薔薇)/.test(clean)) {
@@ -4228,6 +4275,29 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
           sc.details.add('温かい店内と木製テーブル');
           changed = true;
         }
+      }
+    }
+
+    // =========================================================================
+    // 3. ユーザーからの明示的描画リクエスト・または合意返答の検知
+    // ※話題抽出の「後」に行うため、最新の話題（柿など）が確実に反映された状態で描画される
+    // ※「〜を描きたい」「〜を書きたい」は話題提示なので即時描画トリガーには含めない
+    // =========================================================================
+    if (speaker === 'user') {
+      const isExplicitDrawCommand = /(絵を描いてください|絵を書いてください|今の話題を絵にして|キャンバスに描いて|キャンバスに出して|この絵を描いて)/.test(clean);
+      const isApproval = /^(はい|うん|ええ|お願いします|お願い|描いてください|書いてください|そうして|やってみて|いいよ|ぜひ|頼む|おねがい)$/.test(clean.trim()) ||
+                         /^(そうですね|そうしよう|描こう|書こう)$/.test(clean.trim());
+
+      if (isExplicitDrawCommand || (sc.isAwaitingConfirmation && isApproval)) {
+        const now = Date.now();
+        if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
+          logDiag(`描画中またはクールダウン中のため、重複トリガーをスキップ: 「${clean}」`);
+          return;
+        }
+        logDiag(`ユーザーの描画合意・指示を検知: 「${clean}」`);
+        sc.isAwaitingConfirmation = false;
+        executeConfirmedDrawing();
+        return;
       }
     }
 
@@ -4382,11 +4452,12 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
 
     const sc = state.sceneCollector;
     const pArgs = sc.pendingArgs?.args;
-    const topic = manualTopic || pArgs?.japanese_title || sc.topic || sc.place || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '思い出の風景');
+    const topic = manualTopic || sc.topic || pArgs?.japanese_title || sc.place || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '思い出の風景');
 
     // 収集された情景情報を総合して高精細プロンプトを作成
     const detailsArray = Array.from(sc.details);
     const elementsParts = [];
+    elementsParts.push(`【描く情景の主題・モチーフ（最優先）】: ${topic}`);
     if (pArgs?.visual_elements) elementsParts.push(`【AI情景描写】: ${pArgs.visual_elements}`);
     if (sc.place) elementsParts.push(`【場所・舞台】: ${sc.place}`);
     if (sc.seasonWeather) elementsParts.push(`【季節・天候・時間】: ${sc.seasonWeather}`);
@@ -4499,7 +4570,7 @@ ${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正�
     }
     if (!candidate && dom.aiTranscriptText) {
       const aiTxt = dom.aiTranscriptText.textContent || '';
-      const m = aiTxt.match(/(槍ヶ岳|北アルプス|山登り|山頂|喫茶店|カフェ|クリームソーダ|ホットケーキ|教室|校舎|文化祭|模擬店|海|桜|夕焼け|雪景色|公園|電車|リンゴ)/);
+      const m = aiTxt.match(/(柿|かき|カキ|槍ヶ岳|北アルプス|山登り|山頂|喫茶店|カフェ|クリームソーダ|ホットケーキ|教室|校舎|文化祭|模擬店|海|桜|バラ|夕焼け|雪景色|公園|電車|リンゴ)/);
       if (m && m[0]) {
         candidate = `${m[0]}の情景`;
       }
