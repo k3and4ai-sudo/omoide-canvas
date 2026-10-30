@@ -548,16 +548,6 @@
       if (res.ok) {
         const data = await res.json();
         state.hasLocalBackend = (data && data.app === 'omoide-canvas');
-        if (data.server_has_api_key) {
-          state.isLoggedIn = true;
-          state.sessionApiKey = state.sessionApiKey || '';
-          if (dom.apiKeyStatusBadge) {
-            dom.apiKeyStatusBadge.textContent = `認証済 (${data.masked_key || 'サーバー設定済'})`;
-          }
-          dom.btnOpenLoginModal?.classList.add('active-key');
-          dom.loginModal?.classList.add('hidden');
-          logDiag(`サーバー設定済みのGemini APIキーを自動検出・認証完了 (${data.masked_key})`);
-        }
         return state.hasLocalBackend;
       }
     } catch (e) {}
@@ -643,11 +633,18 @@
   }
 
   async function handleLoginSubmit(e) {
-    e.preventDefault();
-    const rawKey = (dom.inputSessionApiKey?.value || '').trim();
+    if (e && e.preventDefault) e.preventDefault();
+    if (e && e.stopPropagation) e.stopPropagation();
+
+    const rawKey = (dom.inputSessionApiKey?.value || '').trim().replace(/[\r\n\s]/g, '');
     if (!rawKey) {
       showLoginMessage('Gemini APIキーを入力してください（キーなしで試す場合は下の「デモ体験」を押してください）。', true);
       return;
+    }
+
+    // 入力枠をクリーンアップしたキーで上書き保持（絶対に消さない！）
+    if (dom.inputSessionApiKey) {
+      dom.inputSessionApiKey.value = rawKey;
     }
 
     if (dom.btnLoginSubmit) {
@@ -660,6 +657,10 @@
       const data = await verifyApiKeyDirectOrBackend(rawKey);
       if (!data.valid) {
         showLoginMessage(data.message || 'APIキーの認証に失敗しました。', true);
+        // 失敗しても入力したキーは絶対消さずそのまま残す！
+        if (dom.inputSessionApiKey) {
+          dom.inputSessionApiKey.value = rawKey;
+        }
         return;
       }
 
@@ -667,7 +668,7 @@
       state.sessionApiKey = rawKey;
       state.isLoggedIn = true;
 
-      // 端末ブラウザへの保存設定
+      // 端末ブラウザへの保存設定（チェックされている場合のみ保存）
       try {
         if (dom.chkRememberKeyOnDevice?.checked) {
           localStorage.setItem(STORAGE_KEY_API, rawKey);
@@ -738,9 +739,19 @@
 
     // ログイン・APIキー設定モーダル
     dom.btnOpenLoginModal?.addEventListener('click', openLoginModal);
+    dom.btnLoginSubmit?.addEventListener('click', handleLoginSubmit);
     dom.loginApiKeyForm?.addEventListener('submit', handleLoginSubmit);
     dom.btnLoginDemoMode?.addEventListener('click', handleLoginDemoMode);
     dom.btnClearSavedKey?.addEventListener('click', handleClearSavedKey);
+
+    // 入力欄でEnterキーを押した時も安全に認証を実行（ページリロードを完全防止）
+    dom.inputSessionApiKey?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        handleLoginSubmit(e);
+      }
+    });
 
     // クリップボードからの貼り付けボタン
     dom.btnPasteApiKey?.addEventListener('click', async () => {

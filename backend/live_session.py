@@ -67,8 +67,7 @@ class LiveSessionManager:
     ):
         self.websocket = websocket
         self.profile = profile
-        env_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
-        self.api_key = (api_key or "").strip() or (env_key if env_key != "your_gemini_api_key_here" else "")
+        self.api_key = (api_key or "").strip()
         self.recent_topic = (recent_topic or "").strip()
         self.last_art = (last_art or "").strip()
         self.is_resume = bool(is_resume)

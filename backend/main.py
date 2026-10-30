@@ -92,17 +92,13 @@ class ApiKeyVerifyRequest(BaseModel):
 
 @app.get("/api/health")
 async def health_check():
-    """死活監視・API接続確認（サーバー側設定済みキーの自動検出）"""
-    server_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
-    server_has_key = bool(server_key and len(server_key) > 20 and server_key != "your_gemini_api_key_here")
-    masked = f"{server_key[:6]}...{server_key[-4:]}" if server_has_key else ""
+    """死活監視・API接続確認（毎回ユーザー自身によるAPIキー入力方式）"""
     return {
         "status": "ok",
         "app": "omoide-canvas",
         "version": "2.0.0",
-        "server_has_api_key": server_has_key,
-        "masked_key": masked,
-        "require_user_api_key": not server_has_key
+        "server_has_api_key": False,
+        "require_user_api_key": True
     }
 
 
@@ -110,8 +106,8 @@ async def health_check():
 async def verify_user_api_key(req: ApiKeyVerifyRequest):
     """ユーザーがログイン画面で入力した Gemini API キーの有効性を検証"""
     key = (req.api_key or "").strip()
-    if not key or len(key) < 20:
-        return {"valid": False, "message": "APIキーの形式が正しくありません（AIza... で始まるキーを入力してください）"}
+    if not key or len(key) < 15:
+        return {"valid": False, "message": "APIキーの文字数が不足しています。正しいGemini APIキーを入力してください。"}
     try:
         client = genai.Client(api_key=key)
         # 軽量なモデルメタデータ取得でキーの有効性を確認（トークン消費なし）
@@ -201,8 +197,7 @@ async def websocket_live_endpoint(
     """
     await websocket.accept()
     profile = load_user_profile()
-    server_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
-    effective_key = (api_key or "").strip() or (server_key if server_key != "your_gemini_api_key_here" else "")
+    effective_key = (api_key or "").strip()
     session_mgr = LiveSessionManager(
         websocket,
         profile,

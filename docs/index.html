@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261030_05">
+  <link rel="stylesheet" href="styles.css?v=20261030_06">
 </head>
 <body>
 
@@ -20,7 +20,7 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="サーバーキー自動検出認証・ペースト消失防止＆クリップボード貼り付け対応版">v20261030_05</span>
+      <span class="app-version-badge" title="毎回手動キー入力運用・フォーム送信リロード完全廃止＆ペースト消失根絶版">v20261030_06</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
@@ -537,7 +537,7 @@
           <span class="login-subnote">※入力されたキーはあなたの現在の通信セッションでのみ使用され、他の利用者に共有・公開されることはありません。</span>
         </p>
 
-        <form id="loginApiKeyForm" class="login-form">
+        <div id="loginApiKeyForm" class="login-form">
           <div class="form-group">
             <label for="inputSessionApiKey">🔑 Gemini API キー（Google AI Studio）</label>
             <div class="api-key-input-wrap">
@@ -555,14 +555,14 @@
           </div>
 
           <label class="remember-key-label">
-            <input type="checkbox" id="chkRememberKeyOnDevice" checked>
-            <span>この端末（スマホ・PC）のブラウザにのみ記憶する（次回から自動入力）</span>
+            <input type="checkbox" id="chkRememberKeyOnDevice">
+            <span>この端末（スマホ・PC）のブラウザに記憶する（※毎回手入力する場合はチェックを外してください）</span>
           </label>
 
           <div id="loginErrorMsg" class="login-msg hidden"></div>
 
           <div class="login-actions">
-            <button type="submit" id="btnLoginSubmit" class="btn-primary btn-login-main">
+            <button type="button" id="btnLoginSubmit" class="btn-primary btn-login-main">
               🚀 このAPIキーでログインして開始
             </button>
             <div class="login-secondary-actions">
@@ -574,7 +574,7 @@
               </button>
             </div>
           </div>
-        </form>
+        </div>
 
         <div class="login-help-box">
           <div>
@@ -602,6 +602,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261030_05"></script>
+  <script src="app.js?v=20261030_06"></script>
 </body>
 </html>
