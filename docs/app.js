@@ -4540,19 +4540,6 @@ ${artStyle.svgStyleRules}
       }
     }
 
-      if (isExplicitDrawCommand || isApprovalForPrompt) {
-        const now = Date.now();
-        if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
-          logDiag(`描画中またはクールダウン中のため、重複トリガーをスキップ: 「${clean}」`);
-          return;
-        }
-        logDiag(`ユーザーの描画合意・指示を検知: 「${clean}」`);
-        sc.isAwaitingConfirmation = false;
-        executeConfirmedDrawing();
-        return;
-      }
-    }
-
     if (changed || sc.status === 'idle') {
       if (sc.details.size >= 2 || (sc.place && sc.details.size >= 1)) {
         sc.status = 'ready';
