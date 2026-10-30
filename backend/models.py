@@ -87,8 +87,8 @@ class UserProfile(BaseModel):
     )
     partner: PartnerProfile = Field(default_factory=PartnerProfile, description="AIパートナーの設定")
     noise_gate_mode: str = Field(
-        default="tv_cut",
-        description="周囲音・テレビ音声カットモード (normal: 静かな部屋 / tv_cut: テレビ・周囲音カット推奨 / strict: 強めカット)"
+        default="normal",
+        description="周囲音・テレビ音声カットモード (normal: 標準高感度・おすすめ / tv_cut: テレビ・周囲音カット / strict: 強めカット)"
     )
     emergency_contact: EmergencyContact = Field(default_factory=EmergencyContact, description="緊急連絡先")
 

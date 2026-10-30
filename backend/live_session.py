@@ -336,14 +336,13 @@ class LiveSessionManager:
                             if not any(w in user_text for w in noise_words) and len(user_text) >= 2:
                                 self.discussed_topics.append(user_text)
 
-                            # マイク入力が小さかったりかすれ声でも、ブラウザ音声認識結果をrealtime_inputとしてGeminiへ届ける
-                            # これにより、音声ストリームを乱すことなく確実にさくらさんが即座に応答を返す（沈黙・途切れの完全解消）
-                            if time.time() >= self.echo_guard_until and not self.current_ai_turn_text:
-                                try:
-                                    logger.info(f"Relaying user transcript as realtime input to Gemini: {user_text}")
-                                    await session.send_realtime_input(text=user_text)
-                                except Exception as txt_err:
-                                    logger.warning(f"Failed to relay realtime text input to Gemini: {txt_err}")
+                            # ユーザーが話したことが確定した時はエコーガードを即座に解除して確実にGeminiに届ける
+                            self.echo_guard_until = 0.0
+                            try:
+                                logger.info(f"Relaying user transcript as realtime input to Gemini: {user_text}")
+                                await session.send_realtime_input(text=user_text)
+                            except Exception as txt_err:
+                                logger.warning(f"Failed to relay realtime text input to Gemini: {txt_err}")
 
                     elif msg_type == "request_confirmed_draw":
                         # ユーザーが画面上で「🎨 今の話題を絵にする」または「🎨 はい、描いてください」を押した時のみ描画を実行
@@ -460,11 +459,35 @@ class LiveSessionManager:
                                 })
 
                         if getattr(server_content, "turn_complete", False):
+                            completed_ai_turn = self.current_ai_turn_text
                             self.current_ai_turn_text = ""
+                            self.echo_guard_until = 0.0  # AI発話完了で直ちにマイクガード解除
                             await self.websocket.send_json({
                                 "type": "avatar_state",
                                 "state": "listening"
                             })
+
+                            # 【セーフティネット】AIが「描いてみましょう」「描いてみます」「少々お待ちください」と発話したのに
+                            # ツール呼び出し（tool_call）が行われなかった場合、バックエンドが自動で描画タスクを起動！
+                            if not self.tool_called_in_turn and completed_ai_turn:
+                                draw_intent_words = [
+                                    "描いてみましょうか", "描いてみます", "キャンバスに描いて", "少々お待ちください",
+                                    "少しお待ちください", "描いてみましょう", "描きますね", "絵にしてみますね"
+                                ]
+                                if any(w in completed_ai_turn for w in draw_intent_words):
+                                    logger.info(f"AI expressed drawing intent in speech without tool_call: '{completed_ai_turn}'. Activating fallback media generation.")
+                                    topic = self.discussed_topics[-1] if self.discussed_topics else "思い出の風景"
+                                    await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
+                                    asyncio.create_task(
+                                        self._handle_media_generation(session, None, {
+                                            "scene_type": "past_memory",
+                                            "japanese_title": topic[:18],
+                                            "visual_elements": f"【AIとご本人が語り合った情景】: {completed_ai_turn}（話題: {topic}）",
+                                            "media_format": "image",
+                                            "ambient_sound": "autumn_insects"
+                                        })
+                                    )
+
                             self.tool_called_in_turn = False
 
                     # 2. ツール呼び出し（Function Call）
