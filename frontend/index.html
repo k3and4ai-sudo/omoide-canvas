@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261030_04">
+  <link rel="stylesheet" href="styles.css?v=20261030_05">
 </head>
 <body>
 
@@ -20,7 +20,7 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="固定辞書完全撤廃・会話からの動的短文・単語リアルタイム抽出・描画連動版">v20261030_04</span>
+      <span class="app-version-badge" title="サーバーキー自動検出認証・ペースト消失防止＆クリップボード貼り付け対応版">v20261030_05</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
@@ -542,12 +542,14 @@
             <label for="inputSessionApiKey">🔑 Gemini API キー（Google AI Studio）</label>
             <div class="api-key-input-wrap">
               <input
-                type="password"
+                type="text"
                 id="inputSessionApiKey"
-                placeholder="AIzaSy... で始まるご自身のAPIキーを入力"
+                placeholder="AIzaSy... または AQ... で始まるAPIキーを入力"
                 autocomplete="off"
                 spellcheck="false"
+                style="font-family: monospace; letter-spacing: 0.5px;"
               >
+              <button type="button" id="btnPasteApiKey" class="btn-eye" title="クリップボードから貼り付け" style="width: auto; padding: 0 10px; font-size: 0.85rem;">📋 貼り付け</button>
               <button type="button" id="btnToggleKeyVisibility" class="btn-eye" title="キーの表示/非表示を切り替え">👁️</button>
             </div>
           </div>
@@ -600,6 +602,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261030_04"></script>
+  <script src="app.js?v=20261030_05"></script>
 </body>
 </html>

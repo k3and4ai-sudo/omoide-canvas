@@ -26,10 +26,8 @@ from backend.live_session import LiveSessionManager
 from backend.emergency_tool import dispatch_emergency_alert
 from backend.report_generator import generate_daily_condition_report
 
-# 環境変数ロード（ただしサーバー所有者のGEMINI_API_KEYが第三者セッションで自動使用されないよう環境変数から除外）
+# 環境変数ロード
 load_dotenv()
-os.environ.pop("GEMINI_API_KEY", None)
-os.environ.pop("GOOGLE_API_KEY", None)
 
 # ロギング設定
 logging.basicConfig(
@@ -94,12 +92,17 @@ class ApiKeyVerifyRequest(BaseModel):
 
 @app.get("/api/health")
 async def health_check():
-    """死活監視・API接続確認（セッション別APIキー入力方式）"""
+    """死活監視・API接続確認（サーバー側設定済みキーの自動検出）"""
+    server_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+    server_has_key = bool(server_key and len(server_key) > 20 and server_key != "your_gemini_api_key_here")
+    masked = f"{server_key[:6]}...{server_key[-4:]}" if server_has_key else ""
     return {
         "status": "ok",
         "app": "omoide-canvas",
         "version": "2.0.0",
-        "require_user_api_key": True
+        "server_has_api_key": server_has_key,
+        "masked_key": masked,
+        "require_user_api_key": not server_has_key
     }
 
 
@@ -198,16 +201,18 @@ async def websocket_live_endpoint(
     """
     await websocket.accept()
     profile = load_user_profile()
+    server_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+    effective_key = (api_key or "").strip() or (server_key if server_key != "your_gemini_api_key_here" else "")
     session_mgr = LiveSessionManager(
         websocket,
         profile,
-        api_key=api_key,
+        api_key=effective_key,
         recent_topic=recent_topic or "",
         last_art=last_art or "",
         is_resume=bool(is_resume)
     )
 
-    key_status = "UserKey" if (api_key and len(api_key.strip()) > 10) else "DemoSimulation"
+    key_status = "UserKey" if (effective_key and len(effective_key) > 10) else "DemoSimulation"
     logger.info(f"WebSocket client connected for user: {profile.call_name} (mode={key_status})")
     try:
         await session_mgr.run()

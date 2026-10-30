@@ -157,6 +157,7 @@
     loginModal: document.getElementById('loginModal'),
     loginApiKeyForm: document.getElementById('loginApiKeyForm'),
     inputSessionApiKey: document.getElementById('inputSessionApiKey'),
+    btnPasteApiKey: document.getElementById('btnPasteApiKey'),
     btnToggleKeyVisibility: document.getElementById('btnToggleKeyVisibility'),
     chkRememberKeyOnDevice: document.getElementById('chkRememberKeyOnDevice'),
     loginErrorMsg: document.getElementById('loginErrorMsg'),
@@ -547,6 +548,16 @@
       if (res.ok) {
         const data = await res.json();
         state.hasLocalBackend = (data && data.app === 'omoide-canvas');
+        if (data.server_has_api_key) {
+          state.isLoggedIn = true;
+          state.sessionApiKey = state.sessionApiKey || '';
+          if (dom.apiKeyStatusBadge) {
+            dom.apiKeyStatusBadge.textContent = `認証済 (${data.masked_key || 'サーバー設定済'})`;
+          }
+          dom.btnOpenLoginModal?.classList.add('active-key');
+          dom.loginModal?.classList.add('hidden');
+          logDiag(`サーバー設定済みのGemini APIキーを自動検出・認証完了 (${data.masked_key})`);
+        }
         return state.hasLocalBackend;
       }
     } catch (e) {}
@@ -600,8 +611,8 @@
   }
 
   async function verifyApiKeyDirectOrBackend(rawKey) {
-    if (!rawKey || rawKey.length < 20) {
-      return { valid: false, message: 'APIキーの形式が正しくありません（AIza... で始まるキーを入力してください）' };
+    if (!rawKey || rawKey.length < 15) {
+      return { valid: false, message: 'APIキーの文字数が不足しています。正しいGemini APIキーを入力してください。' };
     }
     if (state.hasLocalBackend) {
       try {
@@ -619,7 +630,7 @@
     }
     // ブラウザから直接 Google Gemini API エンドポイントでキーの有効性を検証（トンネル・バックエンド不要）
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash?key=${encodeURIComponent(rawKey)}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash?key=${encodeURIComponent(rawKey)}`;
       const res = await fetch(url);
       if (res.ok) {
         const masked = `${rawKey.slice(0, 6)}...${rawKey.slice(-4)}`;
@@ -730,6 +741,33 @@
     dom.loginApiKeyForm?.addEventListener('submit', handleLoginSubmit);
     dom.btnLoginDemoMode?.addEventListener('click', handleLoginDemoMode);
     dom.btnClearSavedKey?.addEventListener('click', handleClearSavedKey);
+
+    // クリップボードからの貼り付けボタン
+    dom.btnPasteApiKey?.addEventListener('click', async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text && dom.inputSessionApiKey) {
+          const cleanKey = text.trim().replace(/[\r\n\s]/g, '');
+          dom.inputSessionApiKey.value = cleanKey;
+          showLoginMessage('📋 クリップボードから貼り付けました', false);
+        }
+      } catch (err) {
+        // クリップボード読み取り権限がない場合はペーストショートカットを案内
+        showLoginMessage('Ctrl + V で入力枠に貼り付けてください', false);
+      }
+    });
+
+    // ペースト時の改行・空白除去による消失・誤送信の完全防止
+    dom.inputSessionApiKey?.addEventListener('paste', (e) => {
+      const clipboardData = e.clipboardData || window.clipboardData;
+      if (clipboardData) {
+        e.preventDefault();
+        const pastedText = clipboardData.getData('text') || '';
+        const cleanKey = pastedText.trim().replace(/[\r\n\s]/g, '');
+        dom.inputSessionApiKey.value = cleanKey;
+      }
+    });
+
     dom.btnToggleKeyVisibility?.addEventListener('click', () => {
       if (!dom.inputSessionApiKey) return;
       const isPwd = dom.inputSessionApiKey.type === 'password';
