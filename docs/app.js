@@ -213,12 +213,19 @@
     collectorStatusLabel: document.getElementById('collectorStatusLabel'),
     collectorCounter: document.getElementById('collectorCounter'),
     collectorDetailCount: document.getElementById('collectorDetailCount'),
+    btnStartListening: document.getElementById('btnStartListening'),
     cardTopic: document.getElementById('cardTopic'),
     valTopic: document.getElementById('valTopic'),
+    btnFocusTopic: document.getElementById('btnFocusTopic'),
+    btnClearTopic: document.getElementById('btnClearTopic'),
     cardPlace: document.getElementById('cardPlace'),
     valPlace: document.getElementById('valPlace'),
+    btnFocusPlace: document.getElementById('btnFocusPlace'),
+    btnClearPlace: document.getElementById('btnClearPlace'),
     cardDetails: document.getElementById('cardDetails'),
     valDetailsList: document.getElementById('valDetailsList'),
+    btnFocusDetails: document.getElementById('btnFocusDetails'),
+    btnClearDetails: document.getElementById('btnClearDetails'),
     collectorActionBanner: document.getElementById('collectorActionBanner'),
     collectorActionText: document.getElementById('collectorActionText'),
     btnConfirmDraw: document.getElementById('btnConfirmDraw'),
@@ -851,6 +858,26 @@
     dom.btnSaveImage?.addEventListener('click', saveCurrentCanvasImage);
     dom.selectArtStyle?.addEventListener('change', (e) => {
       setArtStyle(e.target.value);
+    });
+
+    // 思い出情景メモ・3ステップ聞き取り ＆ 項目別クリア
+    dom.btnStartListening?.addEventListener('click', () => startListeningSession(true));
+    dom.btnFocusTopic?.addEventListener('click', () => focusStep('topic'));
+    dom.btnFocusPlace?.addEventListener('click', () => focusStep('place'));
+    dom.btnFocusDetails?.addEventListener('click', () => focusStep('details'));
+    dom.btnClearTopic?.addEventListener('click', clearTopic);
+    dom.btnClearPlace?.addEventListener('click', clearPlace);
+    dom.btnClearDetails?.addEventListener('click', clearDetails);
+
+    // カードクリックで直接フォーカス切り替え
+    dom.cardTopic?.addEventListener('click', (e) => {
+      if (!e.target.closest('button')) focusStep('topic');
+    });
+    dom.cardPlace?.addEventListener('click', (e) => {
+      if (!e.target.closest('button')) focusStep('place');
+    });
+    dom.cardDetails?.addEventListener('click', (e) => {
+      if (!e.target.closest('button')) focusStep('details');
     });
 
     // 思い出情景メモ・合意形成ボタン群
@@ -4198,11 +4225,176 @@ ${artStyle.svgStyleRules}
       seasonWeather: '',
       details: new Set(),
       status: 'idle',
+      activeStep: 'topic', // 'topic' | 'place' | 'details'
       isAwaitingConfirmation: false,
       lastConfirmedTopic: '',
       drawConfirmedByUser: false
     };
     renderSceneCollectorUI();
+  }
+
+  /**
+   * 絵画のための聞き取りセッションを開始する（ボタンまたはさくらさんの発話連動）
+   */
+  function startListeningSession(triggerPrompt = false) {
+    const sc = state.sceneCollector;
+    if (sc.status === 'drawing' || state.isDrawingMedia) {
+      logDiag('描画進行中のため、聞き取り開始は待機します。');
+      return;
+    }
+    sc.status = 'collecting';
+    sc.activeStep = 'topic';
+    setAvatarState('listening');
+    renderSceneCollectorUI();
+    logDiag('🎙️ 絵画のための聞き取りセッションを開始しました（ステップ①: 話題）');
+
+    // ボタンから直接押された場合、さくらさんに誘導を促す（シミュレーション時等）
+    if (triggerPrompt) {
+      const msg = 'それでは絵画のための聞き取りをしますね。まず、どんな思い出の絵を描きましょうか？テーマや話題を教えていただけますか？';
+      dom.aiTranscriptText.textContent = msg;
+      if (state.isSimulation) {
+        speakTextWithWebSpeech(msg);
+      } else if (state.socket && state.socket.readyState === WebSocket.OPEN && state.isDirectGeminiWs) {
+        // Gemini側へ聞き取り開始のユーザー意図テキストを送信
+        state.socket.send(JSON.stringify({
+          client_content: {
+            turns: [{ role: 'user', parts: [{ text: '絵画の聞き取りを始めてください。' }] }],
+            turn_complete: true
+          }
+        }));
+      }
+    }
+  }
+
+  /**
+   * 聞き取りフォーカスステップの切り替え
+   */
+  function focusStep(step) {
+    const sc = state.sceneCollector;
+    sc.activeStep = step;
+    if (sc.status === 'idle') {
+      sc.status = 'collecting';
+    }
+    setAvatarState('listening');
+    renderSceneCollectorUI();
+    const label = step === 'topic' ? '① 話題' : (step === 'place' ? '② 場所・舞台' : '③ 情景ディテール');
+    logDiag(`聞き取りステップを切り替えました: ${label}`);
+  }
+
+  /**
+   * 項目別の消去・クリア
+   */
+  function clearTopic() {
+    const sc = state.sceneCollector;
+    sc.topic = '';
+    renderSceneCollectorUI();
+    showCanvasUpdateToast('話題を取り消しました');
+    logDiag('【クリア】話題（タイトル）を消去しました');
+  }
+
+  function clearPlace() {
+    const sc = state.sceneCollector;
+    sc.place = '';
+    sc.seasonWeather = '';
+    renderSceneCollectorUI();
+    showCanvasUpdateToast('場所・舞台を取り消しました');
+    logDiag('【クリア】場所・舞台を消去しました');
+  }
+
+  function clearDetails() {
+    const sc = state.sceneCollector;
+    sc.details.clear();
+    renderSceneCollectorUI();
+    showCanvasUpdateToast('情景ディテールを全消去しました');
+    logDiag('【クリア】情景ディテールを全消去しました');
+  }
+
+  function removeDetailItem(item) {
+    if (!item) return;
+    const sc = state.sceneCollector;
+    if (sc.details.has(item)) {
+      sc.details.delete(item);
+      renderSceneCollectorUI();
+      showCanvasUpdateToast(`「${item}」を取り消しました`);
+      logDiag(`【クリア】情景ディテールから「${item}」を削除しました`);
+    }
+  }
+
+  /**
+   * 音声発話による取り消し・クリア指示の検知 ＆ 実行
+   * （例：「これ取り消して」「〇〇じゃなくて」「話題を消して」等）
+   */
+  function detectAndExecuteVoiceClear(cleanText) {
+    if (!cleanText || typeof cleanText !== 'string') return false;
+    const sc = state.sceneCollector;
+
+    // 1. 「話題・タイトル」の明示的取り消し
+    if (/(?:話題|タイトル|テーマ)(?:を取り消して|を消して|じゃなくて|ではなくて|はなしで|はやめて|クリア)/.test(cleanText)) {
+      clearTopic();
+      return true;
+    }
+
+    // 2. 「場所・舞台」の明示的取り消し
+    if (/(?:場所|舞台|どこ)(?:を取り消して|を消して|じゃなくて|ではなくて|はなしで|はやめて|クリア)/.test(cleanText)) {
+      clearPlace();
+      return true;
+    }
+
+    // 3. 「ディテール・詳細・特徴」の明示的取り消し
+    if (/(?:ディテール|詳細|全部|特徴)(?:を取り消して|を消して|じゃなくて|ではなくて|はなしで|はやめて|クリア)/.test(cleanText)) {
+      clearDetails();
+      return true;
+    }
+
+    // 4. 「〇〇じゃなくて」「〇〇はやめて」「〇〇はなしで」による特定単語の取り消し
+    const wordCancelMatch = cleanText.match(/(?:(.+?))(?:じゃなくて|ではなくて|はやめて|はなしで|は入れないで|はいらない)/);
+    if (wordCancelMatch && wordCancelMatch[1]) {
+      const target = wordCancelMatch[1].replace(/^(あの|その|ええと|えーと)\s*/, '').trim();
+      if (target.length >= 1 && target.length <= 15) {
+        let removedAny = false;
+        // ディテールからの削除
+        for (const d of Array.from(sc.details)) {
+          if (d.includes(target) || target.includes(d)) {
+            removeDetailItem(d);
+            removedAny = true;
+          }
+        }
+        // 場所・舞台との一致
+        if (sc.place && (sc.place.includes(target) || target.includes(sc.place))) {
+          clearPlace();
+          removedAny = true;
+        }
+        // 話題との一致
+        if (sc.topic && (sc.topic.includes(target) || target.includes(sc.topic))) {
+          clearTopic();
+          removedAny = true;
+        }
+        if (removedAny) return true;
+      }
+    }
+
+    // 5. 「これ取り消して」「今の取り消して」「間違えました」による直近/現在項目のクリア
+    if (/(?:これ取り消して|これ消して|今の取り消して|今の消して|間違えました|取り消して|キャンセルして)/.test(cleanText)) {
+      if (sc.activeStep === 'topic' && sc.topic) {
+        clearTopic();
+        return true;
+      } else if (sc.activeStep === 'place' && sc.place) {
+        clearPlace();
+        return true;
+      } else if (sc.details.size > 0) {
+        const lastItem = Array.from(sc.details).pop();
+        removeDetailItem(lastItem);
+        return true;
+      } else if (sc.place) {
+        clearPlace();
+        return true;
+      } else if (sc.topic) {
+        clearTopic();
+        return true;
+      }
+    }
+
+    return false;
   }
 
   // ============================================================================
@@ -4458,6 +4650,13 @@ ${artStyle.svgStyleRules}
 
     // 1. AIの発話検知
     if (speaker === 'ai') {
+      // (0) さくらさんの「絵画のための聞き取りをしますね」発話を検知して聞き取り開始
+      const isStartListeningPhrase = /(絵画のための聞き取りをしますね|絵画のための聞き取りを始め|絵のための聞き取りを|聞き取りをしますね|聞き取りをはじめますね|聞き取りを始めますね)/.test(clean);
+      if (isStartListeningPhrase) {
+        startListeningSession(false);
+        return;
+      }
+
       // (1) 絵を描き始めた段階：発話を検知して直ちに聞き取りを中止し drawing へ
       const isDrawingStart = /(描いてみますね|描きますね|描いてみます！|描きます！|少々お待ちください|少しお待ちください|少しの間お待ちください|いま一生懸命描)/.test(clean);
       if (isDrawingStart) {
@@ -4478,8 +4677,15 @@ ${artStyle.svgStyleRules}
       }
     }
 
-    // 2. ユーザーの絵の修正・描き直し指示を最優先で検知
+    // 2. ユーザーの音声発話の検知
     if (speaker === 'user') {
+      // (0) 音声による取り消し・クリア指示の優先検知（「これ取り消して」「〇〇じゃなくて」「間違えました」等）
+      const handledVoiceClear = detectAndExecuteVoiceClear(clean);
+      if (handledVoiceClear) {
+        return;
+      }
+
+      // 画風スタイルの切り替え指示を音声から自動検知
       if (/(リアル|写実|写真みたい|写真風|本物みたい)/.test(clean)) {
         setArtStyle('realistic');
         showCanvasUpdateToast('画風を「📷 リアルな情景（写実）」に変更しました');
@@ -4555,6 +4761,9 @@ ${artStyle.svgStyleRules}
         logDiag(`新しい話題を検知: 「${detectedNewTopic}」（前回の話題: ${sc.topic || 'なし'}）`);
         sc.topic = detectedNewTopic;
         changed = true;
+        if (!sc.place) {
+          sc.activeStep = 'place'; // 次のステップ「場所・舞台」へ自動誘導
+        }
       }
     }
 
@@ -4566,6 +4775,7 @@ ${artStyle.svgStyleRules}
         sc.topic = `${placeMatch[0]}の風景`;
       }
       changed = true;
+      sc.activeStep = 'details'; // 次のステップ「情景ディテール」へ自動誘導
     }
 
     // C. 季節・天候・時間帯の動的抽出
@@ -4636,13 +4846,43 @@ ${artStyle.svgStyleRules}
         dom.collectorStatusLabel.textContent = '情景がまとまりました（いつでも描けます）';
       } else if (sc.status === 'collecting') {
         dom.collectorStatusIcon.textContent = '📝';
-        dom.collectorStatusLabel.textContent = '思い出の情景を聞き取り中...';
+        const stepName = sc.activeStep === 'topic' ? '① 話題' : (sc.activeStep === 'place' ? '② 場所・舞台' : '③ 情景ディテール');
+        dom.collectorStatusLabel.textContent = `思い出の情景を聞き取り中...（${stepName}）`;
       } else {
         // idle（日常会話・おしゃべり中）
         dom.collectorStatusIcon.textContent = '💬';
-        dom.collectorStatusLabel.textContent = '日常のおしゃべり中（情景のお話で聞き取り開始）';
+        dom.collectorStatusLabel.textContent = '日常のおしゃべり中（絵画の聞き取り前）';
       }
     }
+
+    // 「聞き取り開始」ヘッダーボタンの表示更新
+    if (dom.btnStartListening) {
+      if (sc.status === 'collecting') {
+        const stepName = sc.activeStep === 'topic' ? '① 話題' : (sc.activeStep === 'place' ? '② 場所' : '③ ディテール');
+        dom.btnStartListening.textContent = `✅ 聞き取り中 (${stepName})`;
+        dom.btnStartListening.classList.add('is-listening');
+      } else if (sc.status === 'ready' || sc.status === 'confirming') {
+        dom.btnStartListening.textContent = '✨ 情景まとめ完了';
+        dom.btnStartListening.classList.add('is-listening');
+      } else if (sc.status === 'drawing') {
+        dom.btnStartListening.textContent = '🎨 描画中...';
+        dom.btnStartListening.classList.remove('is-listening');
+      } else {
+        dom.btnStartListening.textContent = '🎙️ 聞き取り開始';
+        dom.btnStartListening.classList.remove('is-listening');
+      }
+    }
+
+    // カードのフォーカスハイライト切り替え
+    const active = sc.activeStep || 'topic';
+    const isCollecting = (sc.status === 'collecting' || sc.status === 'ready');
+    dom.cardTopic?.classList.toggle('active-focus', isCollecting && active === 'topic');
+    dom.cardPlace?.classList.toggle('active-focus', isCollecting && active === 'place');
+    dom.cardDetails?.classList.toggle('active-focus', isCollecting && active === 'details');
+
+    dom.btnFocusTopic?.classList.toggle('active', isCollecting && active === 'topic');
+    dom.btnFocusPlace?.classList.toggle('active', isCollecting && active === 'place');
+    dom.btnFocusDetails?.classList.toggle('active', isCollecting && active === 'details');
 
     // ディテール件数
     if (dom.collectorDetailCount) {
@@ -4667,18 +4907,32 @@ ${artStyle.svgStyleRules}
       dom.valPlace.title = sc.place || '';
     }
 
-    // 情景ディテールタグ一覧
+    // 情景ディテールタグ一覧（各タグに個別消去ボタン✕を装備）
     if (dom.valDetailsList) {
       if (sc.details.size === 0) {
         if (sc.status === 'collecting') {
           dom.valDetailsList.innerHTML = '<span class="tag-placeholder">情景の特徴を聞き取っています</span>';
         } else {
-          dom.valDetailsList.innerHTML = '<span class="tag-placeholder">情景のお話が始まるとここにメモされます</span>';
+          dom.valDetailsList.innerHTML = '<span class="tag-placeholder">聞き取りが始まるとここにメモされます</span>';
         }
       } else {
         dom.valDetailsList.innerHTML = Array.from(sc.details)
-          .map(d => `<span class="detail-tag">・${d}</span>`)
+          .map(d => `
+            <span class="detail-tag">
+              <span>・${d}</span>
+              <button type="button" class="tag-del-btn" data-detail="${d}" title="このディテールを取り消す">✕</button>
+            </span>
+          `)
           .join('');
+
+        // タグ削除ボタンのイベントハンドラー接続
+        dom.valDetailsList.querySelectorAll('.tag-del-btn').forEach(btn => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const item = btn.getAttribute('data-detail');
+            removeDetailItem(item);
+          });
+        });
       }
     }
 
