@@ -1362,7 +1362,7 @@ ${levelRules}
     ws.onopen = () => {
       const setupPayload = {
         setup: {
-          model: 'models/gemini-2.5-flash-native-audio-latest',
+          model: 'models/gemini-2.5-flash-native-audio-preview-09-2025',
           generationConfig: {
             responseModalities: ['AUDIO'],
             speechConfig: {

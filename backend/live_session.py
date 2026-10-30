@@ -48,7 +48,7 @@ def get_pacific_reset_time_jst() -> str:
         return "16:00"
 
 # Live API 対応モデル（デフォルト: 双方向オーディオ対応ネイティブモデル）
-DEFAULT_LIVE_MODEL = os.getenv("GEMINI_LIVE_MODEL", "gemini-2.5-flash-native-audio-latest")
+DEFAULT_LIVE_MODEL = os.getenv("GEMINI_LIVE_MODEL", "gemini-2.5-flash-native-audio-preview-09-2025")
 
 
 class LiveSessionManager:
@@ -188,56 +188,80 @@ class LiveSessionManager:
                 tools=[generate_memory_visual, refine_memory_visual, trigger_emergency_alert]
             )
 
-            logger.info(f"Connecting to Gemini Live API ({DEFAULT_LIVE_MODEL}, voice={selected_voice}, noise_mode={noise_mode})...")
-            async with client.aio.live.connect(model=DEFAULT_LIVE_MODEL, config=config) as session:
-                logger.info("Connected to Gemini Live API successfully!")
-                await self.websocket.send_json({
-                    "type": "session_ready",
-                    "call_name": self.profile.call_name,
-                    "partner_name": partner.name if partner else "さくら",
-                    "partner_gender": partner.gender if partner else "女性",
-                    "noise_gate_mode": noise_mode,
-                    "dementia_level": self.profile.dementia_level.value
-                })
-
-                # セッション開始直後にAIパートナーから温かい第一声（挨拶または前回の続き）を発話させる
-                raw_name = (self.profile.call_name or "お父さん").strip()
-                nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
-                p_name = partner.name if (partner and partner.name) else "さくら"
-                topic_for_resume = (self.last_art or self.recent_topic).strip()
-
-                if self.is_resume and topic_for_resume:
-                    initial_greeting_prompt = (
-                        f"対話セッションが再開されました。あなたの名前は「{p_name}」です。"
-                        f"直前まで{nickname}と「{topic_for_resume}」について楽しくお話ししていました。"
-                        f"{nickname}に向かって、「{nickname}、先ほどの{topic_for_resume}のお話の続きをしましょうか！」や"
-                        f"「{topic_for_resume}の続きを聞かせてくださいね」のように、"
-                        f"初対面の挨拶（こんにちは、今日もお元気でしたか等）は完全に省略して、直前のお話の続きを自然に促す温かい第一声を声に出して話しかけてください。"
-                    )
-                else:
-                    initial_greeting_prompt = (
-                        f"対話セッションが開始されました。あなたの名前は「{p_name}」です。"
-                        f"{nickname}に向かって、「こんにちは、{nickname}！{p_name}です。今日も気持ちのいい日ですね。お元気でしたか？」のように、"
-                        f"あなたの性格（{partner.personality if partner else '優しく穏やか'}）らしく、短く温かく最初の挨拶を声に出して話しかけてください。"
-                    )
+            reconnect_attempts = 0
+            max_reconnects = 3
+            while self.is_active and reconnect_attempts < max_reconnects:
                 try:
-                    # 最初の挨拶を発話している間はスピーカー音をマイクが拾って中断しないよう一時保護
-                    self.echo_guard_until = time.time() + 3.0
-                    await session.send(input=initial_greeting_prompt, end_of_turn=True)
-                except Exception as greet_err:
-                    logger.warning(f"Initial greeting trigger warning: {greet_err}")
+                    logger.info(f"Connecting to Gemini Live API ({DEFAULT_LIVE_MODEL}, voice={selected_voice}, noise_mode={noise_mode}, attempt={reconnect_attempts + 1})...")
+                    async with client.aio.live.connect(model=DEFAULT_LIVE_MODEL, config=config) as session:
+                        logger.info("Connected to Gemini Live API successfully!")
+                        reconnect_attempts = 0
+                        await self.websocket.send_json({
+                            "type": "session_ready",
+                            "call_name": self.profile.call_name,
+                            "partner_name": partner.name if partner else "さくら",
+                            "partner_gender": partner.gender if partner else "女性",
+                            "noise_gate_mode": noise_mode,
+                            "dementia_level": self.profile.dementia_level.value
+                        })
 
-                # 上り（ブラウザ -> Gemini）と下り（Gemini -> ブラウザ）を並走
-                client_to_gemini = asyncio.create_task(self._relay_client_to_gemini(session))
-                gemini_to_client = asyncio.create_task(self._relay_gemini_to_client(session))
+                        # セッション開始直後にAIパートナーから温かい第一声（挨拶または前回の続き）を発話させる
+                        raw_name = (self.profile.call_name or "お父さん").strip()
+                        nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+                        p_name = partner.name if (partner and partner.name) else "さくら"
+                        topic_for_resume = (self.last_art or self.recent_topic or (self.discussed_topics[-1] if self.discussed_topics else "")).strip()
 
-                done, pending = await asyncio.wait(
-                    [client_to_gemini, gemini_to_client],
-                    return_when=asyncio.FIRST_COMPLETED
-                )
+                        if self.is_resume and topic_for_resume:
+                            initial_greeting_prompt = (
+                                f"対話セッションが再開されました。あなたの名前は「{p_name}」です。"
+                                f"直前まで{nickname}と「{topic_for_resume}」について楽しくお話ししていました。"
+                                f"{nickname}に向かって、「{nickname}、先ほどの{topic_for_resume}のお話の続きをしましょうか！」や"
+                                f"「{topic_for_resume}の続きを聞かせてくださいね」のように、"
+                                f"初対面の挨拶（こんにちは、今日もお元気でしたか等）は完全に省略して、直前のお話の続きを自然に促す温かい第一声を声に出して話しかけてください。"
+                            )
+                        else:
+                            initial_greeting_prompt = (
+                                f"対話セッションが開始されました。あなたの名前は「{p_name}」です。"
+                                f"{nickname}に向かって、「こんにちは、{nickname}！{p_name}です。今日も気持ちのいい日ですね。お元気でしたか？」のように、"
+                                f"あなたの性格（{partner.personality if partner else '優しく穏やか'}）らしく、短く温かく最初の挨拶を声に出して話しかけてください。"
+                            )
+                        try:
+                            # 最初の挨拶を発話している間はスピーカー音をマイクが拾って中断しないよう一時保護
+                            self.echo_guard_until = time.time() + 3.0
+                            await session.send_client_content(
+                                turns=[types.Content(role="user", parts=[types.Part.from_text(text=initial_greeting_prompt)])],
+                                turn_complete=True
+                            )
+                        except Exception as greet_err:
+                            logger.warning(f"Initial greeting trigger warning: {greet_err}")
 
-                for task in pending:
-                    task.cancel()
+                        # 上り（ブラウザ -> Gemini）と下り（Gemini -> ブラウザ）を並走
+                        client_to_gemini = asyncio.create_task(self._relay_client_to_gemini(session))
+                        gemini_to_client = asyncio.create_task(self._relay_gemini_to_client(session))
+
+                        done, pending = await asyncio.wait(
+                            [client_to_gemini, gemini_to_client],
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
+
+                        for task in pending:
+                            task.cancel()
+
+                except Exception as e:
+                    logger.warning(f"Live session connection warning (attempt {reconnect_attempts + 1}): {e}")
+                    if not self.is_active:
+                        break
+                    reconnect_attempts += 1
+                    if reconnect_attempts < max_reconnects:
+                        logger.info(f"Reconnecting to Gemini Live API in 1.0s... ({reconnect_attempts}/{max_reconnects})")
+                        self.is_resume = True
+                        if self.discussed_topics:
+                            self.recent_topic = self.discussed_topics[-1]
+                        await asyncio.sleep(1.0)
+                    else:
+                        logger.error(f"Exceeded max reconnect attempts ({max_reconnects}). Terminating session.")
+                        await self.websocket.send_json({"type": "error", "message": f"Gemini接続エラー: {e}"})
+                        break
 
         except Exception as e:
             logger.error(f"Live session encountered error: {e}", exc_info=True)
@@ -460,20 +484,18 @@ class LiveSessionManager:
 
                                 # 1. Gemini側へ直ちにツール完了を返送（会話を継続させ、AIが自然にリアクションできるようにする）
                                 try:
-                                    await session.send(
-                                        input=types.LiveClientToolResponse(
-                                            function_responses=[
-                                                types.FunctionResponse(
-                                                    id=call_id,
-                                                    name=func_name,
-                                                    response={
-                                                        "status": "success",
-                                                        "title": title,
-                                                        "message": f"「{title}」の情景をキャンバスに描きました。"
-                                                    }
-                                                )
-                                            ]
-                                        )
+                                    await session.send_tool_response(
+                                        function_responses=[
+                                            types.FunctionResponse(
+                                                id=call_id,
+                                                name=func_name,
+                                                response={
+                                                    "status": "success",
+                                                    "title": title,
+                                                    "message": f"「{title}」の情景をキャンバスに描きました。"
+                                                }
+                                            )
+                                        ]
                                     )
                                 except Exception as resp_err:
                                     logger.warning(f"Error sending tool response to Gemini: {resp_err}")
@@ -635,12 +657,13 @@ class LiveSessionManager:
                 "type": "emergency_dispatched",
                 "result": res
             })
-            await session.send(input=types.LiveClientToolResponse(
+            await session.send_tool_response(
                 function_responses=[types.FunctionResponse(
                     id=call_id,
+                    name="trigger_emergency_alert",
                     response={"output": res}
                 )]
-            ))
+            )
         except Exception as e:
             logger.error(f"Error handling emergency alert: {e}")
 
