@@ -482,7 +482,24 @@ class LiveSessionManager:
                                 elements = args.get("visual_elements") or args.get("scene_description") or args.get("description", "")
                                 logger.info(f"AI tool call: {func_name} for '{title}' (elements: '{elements}'). Generating visual artifact...")
 
-                                # 1. Gemini側へ直ちにツール完了を返送（会話を継続させ、AIが自然にリアクションできるようにする）
+                                # 1. Gemini側へ直ちにツール応答を返送（「現在描画進行中」であることを伝え、描き上がる前に「描きました」と嘘をつかせない）
+                                raw_name = (self.profile.call_name or "お父さん").strip()
+                                nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+                                if func_name == "refine_memory_visual":
+                                    tool_msg = (
+                                        f"「{title}」の描き直し（情景修正）をいまキャンバスで開始しました。"
+                                        f"現在一生懸命描き直している最中ですので、{nickname}に向かって"
+                                        f"「いま一生懸命描き直していますね！少しだけ待っていてくださいね」と優しく伝えてください。"
+                                        f"※まだ絵は完成していません。「もう描き直しましたよ」や「どうですか？」と先走って嘘をつくのは厳禁です。"
+                                    )
+                                else:
+                                    tool_msg = (
+                                        f"「{title}」の情景の描画をいまキャンバスで開始しました。"
+                                        f"現在一生懸命描いている最中ですので、{nickname}に向かって"
+                                        f"「今からキャンバスに描いてみますね！少しだけ待っていてくださいね」と優しく伝えてください。"
+                                        f"※まだ絵は完成していません。「描きましたよ」や「どうですか？」と先走って嘘をつくのは厳禁です。"
+                                    )
+
                                 try:
                                     await session.send_tool_response(
                                         function_responses=[
@@ -490,9 +507,9 @@ class LiveSessionManager:
                                                 id=call_id,
                                                 name=func_name,
                                                 response={
-                                                    "status": "success",
+                                                    "status": "drawing_in_progress",
                                                     "title": title,
-                                                    "message": f"「{title}」の情景をキャンバスに描きました。"
+                                                    "message": tool_msg
                                                 }
                                             )
                                         ]
@@ -607,7 +624,18 @@ class LiveSessionManager:
                 "is_fallback": getattr(artifact, "is_fallback", False),
                 "is_blank": is_blank
             })
-            # ※ツールレスポンスは呼び出し検知時に即座に返送済みのため、ここでは再送しない（プロトコル多重送信の防止）
+
+            # 絵が画面に出た瞬間にさくらさんに声で知らせる（画面表示のタイミングで初めて声かけ）
+            try:
+                raw_name = (self.profile.call_name or "お父さん").strip()
+                nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+                done_notice = f"【描画完了通知】「{artifact.title}」の絵が完成し、{nickname}の画面に表示されました！{nickname}に向かって、「{nickname}、画面に絵が浮かびましたよ！こんな雰囲気でしたか？」と温かく声をかけてください。"
+                await session.send_client_content(
+                    turns=[types.Content(role="user", parts=[types.Part.from_text(text=done_notice)])],
+                    turn_complete=True
+                )
+            except Exception as notice_err:
+                logger.debug(f"Done notice error: {notice_err}")
 
         except Exception as e:
             logger.error(f"Error handling media generation: {e}", exc_info=True)
@@ -623,6 +651,10 @@ class LiveSessionManager:
             feedback = args.get("user_feedback", "")
             elements = args.get("updated_visual_elements", "")
 
+            # 直前のメモリIDがあればそれを優先
+            if not original_id and self.generated_memories:
+                original_id = self.generated_memories[-1].memory_id
+
             new_artifact = await refine_memory_visual_artifact(
                 original_memory_id=original_id,
                 user_feedback=feedback,
@@ -632,17 +664,43 @@ class LiveSessionManager:
             )
             if new_artifact:
                 self.generated_memories.append(new_artifact)
+                is_blank = getattr(new_artifact, "is_fallback", False) and not new_artifact.media_url
+                visual_desc = getattr(new_artifact, "visual_description", elements) or elements
                 await self.websocket.send_json({
                     "type": "new_media",
                     "memory_id": new_artifact.memory_id,
                     "title": new_artifact.title,
+                    "visual_elements": visual_desc,
                     "media_url": new_artifact.media_url,
                     "media_format": new_artifact.media_format.value,
-                    "ambient_sound": new_artifact.ambient_sound_type.value
+                    "ambient_sound": new_artifact.ambient_sound_type.value,
+                    "is_fallback": getattr(new_artifact, "is_fallback", False),
+                    "is_blank": is_blank
                 })
-            # ※ツールレスポンスは呼び出し検知時に即座に返送済みのため、ここでは再送しない
+
+                # 絵が画面に出た瞬間にさくらさんに声で知らせる（描き上がったタイミングで初めて声かけ）
+                try:
+                    raw_name = (self.profile.call_name or "お父さん").strip()
+                    nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+                    done_notice = f"【描画完了通知】「{new_artifact.title}」の描き直しが完了し、{nickname}の画面に表示されました！{nickname}に向かって、「{nickname}、描き直した絵が画面に出ましたよ！こんな雰囲気でしたか？」と温かく声をかけてください。"
+                    await session.send_client_content(
+                        turns=[types.Content(role="user", parts=[types.Part.from_text(text=done_notice)])],
+                        turn_complete=True
+                    )
+                except Exception as notice_err:
+                    logger.debug(f"Done notice error: {notice_err}")
+            else:
+                # 失敗時も必ず描画オーバーレイを解除
+                await self.websocket.send_json({
+                    "type": "avatar_state",
+                    "state": "listening"
+                })
         except Exception as e:
             logger.error(f"Error in media refinement: {e}")
+            await self.websocket.send_json({
+                "type": "avatar_state",
+                "state": "listening"
+            })
 
     async def _handle_emergency_alert(self, session, call_id: str, args: dict):
         """緊急通報処理"""

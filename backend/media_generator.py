@@ -572,28 +572,46 @@ async def refine_memory_visual_artifact(
     """
     meta_path = MEDIA_DIR / f"{original_memory_id}.json"
     if not meta_path.exists():
-        logger.warning(f"Original memory {original_memory_id} not found.")
-        return None
+        # Geminiが架空のIDを指定した場合や直前メモリを探す場合のセーフティネットフォールバック
+        json_files = sorted(MEDIA_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if json_files:
+            meta_path = json_files[0]
+            logger.info(f"Original memory '{original_memory_id}' not found. Falling back to latest memory: {meta_path.stem}")
+        else:
+            meta_path = None
 
-    with open(meta_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    if meta_path and meta_path.exists():
+        with open(meta_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        orig_title = data.get("title", "思い出の風景")
+        orig_desc = data.get("visual_description", "")
+        scene_type_str = data.get("scene_type", SceneType.PAST_MEMORY.value)
+    else:
+        data = {}
+        orig_title = "思い出の情景"
+        orig_desc = updated_visual_elements or user_feedback
+        scene_type_str = SceneType.PAST_MEMORY.value
 
-    # 更新版プロンプト作成
-    new_visual_elements = f"{data['visual_description']}, updated with detail: {updated_visual_elements}"
+    # 更新版プロンプト作成（相手の修正指示 user_feedback と updated_visual_elements を最優先で結合）
+    refine_details = f"【修正指示】{user_feedback}。{updated_visual_elements}".strip()
+    new_visual_elements = f"{orig_desc}、{refine_details}" if orig_desc else refine_details
+    new_title = f"{orig_title.replace(' (修正版)', '')} (修正版)"
+
     new_artifact = await generate_memory_visual_artifact(
         user_id=data.get("user_id", "default_user"),
         dementia_level=dementia_level,
-        scene_type=SceneType(data.get("scene_type", SceneType.PAST_MEMORY)),
-        japanese_title=f"{data['title']} (修正版)",
+        scene_type=SceneType(scene_type_str),
+        japanese_title=new_title,
         visual_elements=new_visual_elements,
-        media_format=MediaFormat(data.get("media_format", MediaFormat.IMAGE)),
-        ambient_sound=AmbientSoundType(data.get("ambient_sound_type", AmbientSoundType.NONE)),
+        media_format=MediaFormat(data.get("media_format", MediaFormat.IMAGE.value)),
+        ambient_sound=AmbientSoundType(data.get("ambient_sound_type", AmbientSoundType.NONE.value)),
         api_key=api_key
     )
 
-    # 履歴引き継ぎ
-    new_artifact.refine_history = data.get("refine_history", []) + [user_feedback]
-    with open(MEDIA_DIR / f"{new_artifact.memory_id}.json", "w", encoding="utf-8") as f:
-        json.dump(new_artifact.model_dump(mode="json"), f, ensure_ascii=False, indent=2)
+    if new_artifact:
+        # 履歴引き継ぎ
+        new_artifact.refine_history = data.get("refine_history", []) + [user_feedback]
+        with open(MEDIA_DIR / f"{new_artifact.memory_id}.json", "w", encoding="utf-8") as f:
+            json.dump(new_artifact.model_dump(mode="json"), f, ensure_ascii=False, indent=2)
 
     return new_artifact
