@@ -156,8 +156,8 @@ class LiveSessionManager:
                 "Puck" if (partner and partner.gender == "男性") else "Aoede"
             )
 
-            # ノイズ・息遣いによる誤反応を抑止するため、VAD感度はBALANCED、沈黙判定は1200msに設定
-            noise_mode = getattr(self.profile, "noise_gate_mode", "tv_cut") or "tv_cut"
+            # ノイズ感度: 標準高感度（normal）をデフォルトにし、ご本人の小さな声やささやきも確実に拾う
+            noise_mode = getattr(self.profile, "noise_gate_mode", "normal") or "normal"
 
             config = types.LiveConnectConfig(
                 response_modalities=["AUDIO"],
