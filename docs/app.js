@@ -4279,6 +4279,94 @@ ${artStyle.svgStyleRules}
     renderSceneCollectorUI();
   }
 
+  /**
+   * 会話テキスト（ユーザー発話またはさくらさんの返答）から、
+   * 固定辞書に頼らず、会話内容そのものから短文や単語（情景ディテール）を動的抽出する
+   */
+  function extractDynamicDetailsFromSpeech(text) {
+    if (!text || typeof text !== 'string') return [];
+    const clean = text.replace(/[「」『』"']/g, '').trim();
+    if (clean.length < 2) return [];
+
+    const results = new Set();
+    const ignorePhrases = [
+      'はい', 'いいえ', 'うん', 'ええ', 'そうですね', 'そうです', 'そうでした', 'なるほど',
+      'あー', 'えーと', 'あのね', 'あの', 'その', 'まあ', 'ちょっと', 'どうも', 'ありがとう',
+      'こんにちは', 'こんばんは', 'おはよう', '元気でしたよ', '元気です', 'もしもし', '聞こえますか',
+      'テスト', '楽しいところ', '普通', 'そう', 'ところ', 'もの', 'こと', '何か', '何', 'どれ', 'これ', 'あれ', 'それ',
+      '少々お待ちください', '少しお待ちください', 'お待ちください', 'お待ち', 'お話し', 'お話'
+    ];
+
+    if (ignorePhrases.includes(clean)) return [];
+
+    // 1. 句読点、並立助詞（と・や・とか・など・および）でセグメント分割
+    const rawSegments = clean.split(/[、,。!\?\n\r\t]|\s+|(?<=[^\s])(?:と|や|とか|および|なら|ならびに|など)(?=[^\s])/);
+
+    for (let seg of rawSegments) {
+      if (!seg) continue;
+      let s = seg.trim();
+
+      // 文頭のフィラー・指示語・美化語除去
+      s = s.replace(/^(あの|その|ええと|えーと|じゃあ|それでは|次は|今度は|絵を|絵に|お|ご)\s*/, '');
+
+      // 文末の動詞・述語・過去形・感想・助動詞の包括的トリミング
+      s = s.replace(/(?:に通っていた頃の絵です|に通っていた頃|に通っていました|に通っていた|に通った)$/, '');
+      s = s.replace(/(?:があったように思います|がありました|があった|がある|があります)$/, '');
+      s = s.replace(/(?:が咲いてました|が咲いていました|が咲いていた|が咲いている)$/, '');
+      s = s.replace(/(?:が来ていたんですよ|が来ていました|が来ていた|が来て|に来ていた|に来て)$/, '');
+      s = s.replace(/(?:で音が鳴っていました|が鳴っていました|で鳴っていた|が鳴っていた)$/, '');
+      s = s.replace(/(?:になってました|になっていました|になっていた|になった|になって)$/, '');
+      s = s.replace(/(?:を描いてみましょうか|を描きますね|を描いてみますね|を描きたいです|を描きたい|を描こう)$/, '');
+      s = s.replace(/(?:に描いてみましょうか|に描きますね|に描いてみますね)$/, '');
+      s = s.replace(/(?:少々お待ちください|少しお待ちください|お待ちください|お待ち)$/, '');
+      s = s.replace(/(?:でしたね|でしたよ|でした|ですね|ですよ|です|ますね|ましたね|ました|ね|よ|よね)$/, '');
+      s = s.replace(/(?:とか|などを|など|という|といった|のある|の風景|の景色|の絵|について)$/, '');
+      s = s.replace(/(?:と思う|と思います|と感じる|と感じます)$/, '');
+
+      // 端部の助詞・不要記号の除去
+      s = s.replace(/^[をにがはでもへからとやで]/, '').replace(/[をにがはでもへからとやで]$/, '');
+      s = s.trim();
+
+      if (s.length >= 1 && s.length <= 16) {
+        if (!ignorePhrases.includes(s) && !/^[\d\s\-_.,]+$/.test(s) && !/(?:描いて|書いて|キャンバス|お話し|お話|いかが|どう|の絵)/.test(s)) {
+          results.add(s);
+        }
+      }
+
+      // セグメント内の名詞複合句（「〇〇の〇〇」「〇〇状の〇〇」）
+      const phraseMatches = s.match(/(?:[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FA]{2,6}(?:状の|のような|の|風の|色の)[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FA]{2,6})/g);
+      if (phraseMatches) {
+        phraseMatches.forEach(p => {
+          let item = p.replace(/^[をにがはでもへからとやで]/, '').replace(/[をにがはでもへからとやで]$/, '').trim();
+          if (item.length >= 3 && item.length <= 15 && !ignorePhrases.includes(item)) {
+            results.add(item);
+          }
+        });
+      }
+    }
+
+    // 2. 主語抽出（漢字1文字または2〜10文字の名詞句：「〇〇がある」「〇〇が咲いている」等）
+    const subjectMatches = clean.match(/(?:[\u4E00-\u9FFF]|[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FA]{2,10})が(?:ある|あった|咲い|見え|実っ|通っ|遊んで|泳いで|鳴っ|来て|建っ)/g);
+    if (subjectMatches) {
+      subjectMatches.forEach(sm => {
+        const subj = sm.replace(/が(?:ある|あった|咲い|見え|実っ|通っ|遊んで|泳いで|鳴っ|来て|建っ)$/, '').trim();
+        if (subj.length >= 1 && subj.length <= 12 && !ignorePhrases.includes(subj)) {
+          results.add(subj);
+        }
+      });
+    }
+
+    // 3. 包含関係の整理（長いフレーズに含まれる重複単語や不要句を除去）
+    const arr = Array.from(results);
+    const filtered = arr.filter(item => {
+      const hasLonger = arr.some(other => other !== item && other.includes(item) && other.length <= 14);
+      if (hasLonger && item.length <= 2) return false;
+      return true;
+    });
+
+    return filtered;
+  }
+
   function updateSceneCollectorFromText(text, speaker = 'user') {
     if (!text || typeof text !== 'string') return;
     const clean = text.replace(/[「」『』]/g, '').trim();
@@ -4323,230 +4411,62 @@ ${artStyle.svgStyleRules}
     }
 
     // =========================================================================
-    // 【最重要】発話内容から話題・場所・天候・情景ディテールを先行抽出する！
-    // （描画コマンドや合意をチェックする前に、まず新しい話題やモチーフを確定させる）
+    // 【最重要】辞書に頼らず、会話内容そのものから短文や単語を動的抽出する！
     // =========================================================================
+    const dynamicDetails = extractDynamicDetailsFromSpeech(clean);
 
-    // A. 「〜の絵」「〜について」「〜を描きたい」などの明示的トピックフレーズの優先抽出
+    if (dynamicDetails.length > 0) {
+      dynamicDetails.forEach(item => {
+        // 短い単語がすでに長いフレーズに包含されていなければ追加
+        if (!sc.details.has(item)) {
+          sc.details.add(item);
+          changed = true;
+          logDiag(`情景ディテールを動的抽出: 「${item}」`);
+        }
+      });
+    }
+
+    // A. 話題（トピック）の動的決定
+    // 「〜の絵」「〜について」「〜を描きたい」などの明示的トピックフレーズの優先抽出
     let detectedNewTopic = '';
     const topicPhraseMatch = clean.match(/(?:(.+?)(?:の絵|について|のお話|の情景|を描きたい|を書きたい|を描こう|を書こう))/);
     if (topicPhraseMatch && topicPhraseMatch[1]) {
       const cand = topicPhraseMatch[1].replace(/^(あの|その|ええと|えーと|じゃあ|それでは|次は|今度は|絵を)\s*/, '').trim();
-      if (cand.length >= 1 && cand.length <= 15) {
+      if (cand.length >= 2 && cand.length <= 15) {
         detectedNewTopic = cand;
       }
     }
 
-    // B. 話題・テーマ辞書による抽出（幼稚園、学校、花壇、果物、野菜、秋の味覚、昭和の思い出などを網羅）
-    const topicRegex = /(幼稚園|ようちえん|保育園|ほいくえん|小学校|中学校|学校|校舎|園庭|校庭|校門|アーチ状の門|アーチの門|チューリップ|すみれ|スミレ|キク|きく|菊|コスモス|ひまわり|桜|さくら|バラ|ばら|薔薇|バラ園|花壇|庭園|お花|花|ガーデニング|枝に実った柿|秋の柿|柿の実|柿の木|柿|かき|カキ|リンゴ|りんご|林檎|みかん|ミカン|蜜柑|ぶどう|ブドウ|葡萄|栗|くり|クリ|さつまいも|サツマイモ|焼き芋|秋の味覚|果物|くだもの|家庭菜園|収穫|犬|いぬ|イヌ|マルチーズ|柴犬|ペット|子犬|猫|ねこ|散歩|お買い物|買い物|商店街|文化祭|模擬店|運動会|山登り|登山|ハイキング|お祭り|祭り|旅行|卒業式|入学式|紅葉狩り|お花見|ドライブ|仕事|授業|畑仕事)/;
-    const tm = clean.match(topicRegex);
-    if (tm) {
-      detectedNewTopic = tm[0];
+    // 明示的トピックがなければ、動的抽出された主要な短文・単語からトピックを推定
+    if (!detectedNewTopic && !sc.topic && dynamicDetails.length > 0) {
+      detectedNewTopic = dynamicDetails[0];
     }
 
-    // C. 新しい話題の反映 ＆ 話題転換時の古いディテール刷新
+    // 新しい話題の反映 ＆ まったく新しい話題への転換時のリフレッシュ
     if (detectedNewTopic) {
-      if (!sc.topic || !sc.topic.includes(detectedNewTopic)) {
+      if (!sc.topic || (!sc.topic.includes(detectedNewTopic) && !detectedNewTopic.includes(sc.topic))) {
         logDiag(`新しい話題を検知: 「${detectedNewTopic}」（前回の話題: ${sc.topic || 'なし'}）`);
-        // まったく別のカテゴリへの転換なら前回のディテールをリフレッシュ
-        const isRose = /(バラ|薔薇)/.test(sc.topic || '');
-        const isNewRose = /(バラ|薔薇)/.test(detectedNewTopic);
-        const isPersimmon = /(柿|かき)/.test(sc.topic || '');
-        const isNewPersimmon = /(柿|かき)/.test(detectedNewTopic);
-        const isSchool = /(幼稚園|保育園|小学校|学校)/.test(sc.topic || '');
-        const isNewSchool = /(幼稚園|保育園|小学校|学校)/.test(detectedNewTopic);
-        if ((isRose && !isNewRose) || (isPersimmon && !isNewPersimmon) || (isSchool && !isNewSchool) || (!isRose && !isPersimmon && !isSchool && sc.topic !== detectedNewTopic)) {
-          sc.details.clear();
-          sc.place = '';
-          sc.seasonWeather = '';
-        }
         sc.topic = detectedNewTopic;
         changed = true;
       }
     }
 
-    // D. 場所・舞台の抽出
-    const placeRegex = /(幼稚園の園庭|幼稚園の門|幼稚園|保育園|小学校の校庭|小学校|校庭|園庭|校門|正門|門の前|花壇の前|柿の木の下|庭の柿の木|果樹園|畑|里山|庭先|縁側|軒先|バラ園|庭園|花壇|庭|中庭|芝生の庭|座敷|和室|畳|お部屋|家の中|リビング|北アルプス|南アルプス|中央アルプス|槍ヶ岳|穂高岳|常念岳|富士山|八ヶ岳|美ヶ原|上高地|信州|松本|喫茶店の中|喫茶店|カフェ|純喫茶|教室の中|教室|校舎|学校|体育館|海|海岸|砂浜|波打ち際|港|駅|ホーム|公園|商店街|田んぼ|リンゴ畑|りんご畑|神社|お寺|故郷|実家)/;
-    const pm = clean.match(placeRegex);
-    if (pm) {
-      sc.place = pm[0];
+    // B. 場所・舞台の動的抽出
+    // 「〜の園庭」「〜の門」「〜の前」「〜の中」「〜の庭」「〜先」「〜園」「〜館」「〜室」「〜場」などの地名・場所語尾を検出
+    const placeMatch = clean.match(/(?:[^\s、。!\?]{2,10}(?:園庭|校庭|校門|正門|の門|花壇|庭園|中庭|庭先|縁側|軒先|座敷|和室|お部屋|リビング|カフェ|喫茶店|教室|校舎|学校|体育館|海岸|砂浜|公園|商店街|田んぼ|畑|果樹園|駅|ホーム|港|神社|お寺|故郷|実家|アルプス|山|川|海))/);
+    if (placeMatch) {
+      sc.place = placeMatch[0];
       if (!sc.topic) {
-        sc.topic = `${pm[0]}の風景`;
+        sc.topic = `${placeMatch[0]}の風景`;
       }
       changed = true;
     }
 
-    // E. 季節・天候・時間帯の抽出
-    const seasonRegex = /(春の温かい日差し|春の光|秋晴れの澄んだ青空|澄み切った秋の空|秋の空|秋晴れ|晴れ渡った青空|青空|快晴|秋|春|夏|冬|朝|昼|夕暮れ|夕方|夕焼け|夜|星空|雲海|雪|残雪|新緑|紅葉)/;
-    const sm = clean.match(seasonRegex);
-    if (sm) {
-      sc.seasonWeather = sm[0];
+    // C. 季節・天候・時間帯の動的抽出
+    const seasonMatch = clean.match(/(?:春の温かい日差し|春の光|秋晴れの澄んだ青空|澄み切った秋の空|秋の空|秋晴れ|晴れ渡った青空|青空|快晴|秋晴れ|夕暮れ|夕焼け|夕日|星空|雲海|雪景色|雪渓|残雪|新緑|紅葉|春|夏|秋|冬|朝|昼|夕方|夜)/);
+    if (seasonMatch) {
+      sc.seasonWeather = seasonMatch[0];
       changed = true;
-    }
-
-    // F. 情景ディテール（事物・要素）の抽出
-    const detailList = [
-      // 幼稚園・学校・遊具
-      'アーチ状の門', 'アーチの門', '幼稚園の門', '木製の門', '木製の校門', '広い園庭', 'ブランコ', 'すべり台', '砂場', '遊具', '花壇', '黒板', 'チョーク', '木の机', '木の椅子', '教卓', '白いカーテン', '窓ガラス',
-      // 花・植物・花壇
-      'チューリップの花壇', '赤や黄色のチューリップ', 'チューリップ', '紫のすみれ', '可憐なすみれ', 'すみれ', '黄色いキク', 'キクの花', 'キク', '菊の花壇', '菊の花', '菊', 'バラの花壇', '赤いバラ', '真っ赤なバラ', '満開のバラ', '白い木製の柵', '白い柵', '緑の芝生', '石畳の小道', 'レンガの小道', '木製ベンチ', '庭のベンチ', '庭の池', '植木鉢', '藤棚', '満開の桜', 'ひまわり', 'コスモス', '朝顔', '紫陽花', '小鳥のさえずり', '温かい日差し',
-      // 柿・秋の果物・庭
-      '枝に一つだけ実った大きな柿', '枝に実った柿', '鮮やかなオレンジ色の柿', '熟した柿の実', 'たわわに実った柿', '澄み切った秋の青空', '秋晴れの澄んだ空', '秋の高い空', '柿の木の枝', '紅葉した柿の葉', '軒先の干し柿', '青い空に映える柿', '秋の里山',
-      // ペット・動物・和室
-      'マルチーズ', '元気な白い犬', '白い子犬', '犬', 'ワンちゃん', 'ペット', '畳', '障子', '座敷', '座布団', '温かい光',
-      // 山・自然
-      '鋭い岩峰', '険しい岩肌', '切り立った岩', '尖った山頂', '白い雪渓', '連峰', '山脈', '岩肌', '雲海', '青空', '緑の山並み', 'ハイマツ',
-      // 喫茶店・カフェ
-      '丸い木製テーブル', '丸いテーブル', '赤い布張り椅子', '赤い椅子', '革張りソファー', 'カウンター席', '窓際の席', 'クリームソーダ', 'メロンソーダ', 'バニラアイス', '赤いチェリー', 'ホットケーキ', 'サイフォン', 'コーヒー', '珈琲', 'ティーカップ',
-      // 故郷・農村・庭
-      '赤いリンゴ', '実ったリンゴ', '小川のせせらぎ', '夕日', '黄金色の稲穂', '赤とんぼ', '桜並木'
-    ];
-
-    detailList.forEach(item => {
-      if (clean.includes(item)) {
-        if (!sc.details.has(item)) {
-          sc.details.add(item);
-          changed = true;
-        }
-      }
-    });
-
-    // G. 幼稚園・学校・お花畑の自動補強ルール
-    if (/(幼稚園|ようちえん|保育園)/.test(clean)) {
-      if (!sc.topic) {
-        sc.topic = '幼稚園の思い出';
-        changed = true;
-      }
-      if (!sc.place) {
-        sc.place = '幼稚園の園庭';
-        changed = true;
-      }
-    }
-    if (/(アーチ|門)/.test(clean)) {
-      const archItem = clean.includes('アーチ') ? 'アーチ状の門' : '正門の風景';
-      if (!sc.details.has(archItem)) {
-        sc.details.add(archItem);
-        changed = true;
-      }
-    }
-    if (/(花壇|チューリップ|すみれ|キク|菊)/.test(clean)) {
-      if (clean.includes('チューリップ') && !sc.details.has('赤や黄色のチューリップ')) {
-        sc.details.add('赤や黄色のチューリップ');
-        changed = true;
-      }
-      if ((clean.includes('すみれ') || clean.includes('スミレ')) && !sc.details.has('可憐な紫のすみれ')) {
-        sc.details.add('可憐な紫のすみれ');
-        changed = true;
-      }
-      if ((clean.includes('キク') || clean.includes('菊')) && !sc.details.has('色鮮やかなキクの花壇')) {
-        sc.details.add('色鮮やかなキクの花壇');
-        changed = true;
-      }
-      if (clean.includes('花壇') && !sc.details.has('花壇')) {
-        sc.details.add('手入れされた花壇');
-        changed = true;
-      }
-    }
-
-    // G. 柿・秋の情景の自動補強ルール
-    if (/(柿|かき|カキ)/.test(clean)) {
-      if (!sc.topic) {
-        sc.topic = '秋の柿の木';
-        changed = true;
-      }
-      if (clean.includes('1') || clean.includes('一つ') || clean.includes('ひとつ') || clean.includes('一箇') || clean.includes('拡大')) {
-        if (!sc.details.has('枝に一つだけ実った大きな柿')) {
-          sc.details.add('枝に一つだけ実った大きな柿');
-          changed = true;
-        }
-      } else {
-        if (!sc.details.has('鮮やかなオレンジ色の柿の実')) {
-          sc.details.add('鮮やかなオレンジ色の柿の実');
-          changed = true;
-        }
-      }
-      if (clean.includes('空') || clean.includes('秋') || clean.includes('晴')) {
-        if (!sc.details.has('澄み切った秋の青空')) {
-          sc.details.add('澄み切った秋の青空');
-          changed = true;
-        }
-        if (!sc.seasonWeather) {
-          sc.seasonWeather = '秋晴れの澄んだ青空';
-          changed = true;
-        }
-      }
-      if (!sc.place) {
-        sc.place = '秋の庭先';
-        changed = true;
-      }
-    }
-
-    // バラ・庭が話題なら自動補強（ユーザーの会話から具体ディテールを確実に反映）
-    if (/(バラ|ばら|薔薇)/.test(clean)) {
-      if (!sc.details.has('真っ赤なバラの花壇')) {
-        sc.details.add('真っ赤なバラの花壇');
-        changed = true;
-      }
-      if (clean.includes('白') || clean.includes('柵') || clean.includes('フェンス')) {
-        if (!sc.details.has('白い木製の柵')) {
-          sc.details.add('白い木製の柵');
-          changed = true;
-        }
-      }
-      if (!sc.place) {
-        sc.place = 'バラの咲く明るい庭';
-        changed = true;
-      }
-      if (!sc.topic) {
-        sc.topic = '赤いバラの庭園';
-        changed = true;
-      }
-    }
-
-    // 犬・マルチーズが話題なら自動補強
-    if (/(マルチーズ|犬|いぬ|イヌ|子犬|ワンちゃん)/.test(clean)) {
-      if (!sc.details.has('元気に遊ぶマルチーズ')) {
-        sc.details.add('元気に遊ぶマルチーズ');
-        changed = true;
-      }
-      if (!sc.place) {
-        sc.place = '座敷の中';
-        changed = true;
-      }
-      if (!sc.topic) {
-        sc.topic = '飼っていたマルチーズ';
-        changed = true;
-      }
-    }
-
-    // 山が話題なら鋭い岩峰・雪渓を自動補強
-    if (/(槍ヶ岳|北アルプス|鋭い山|岩山|アルプス)/.test(clean) || (sc.place && /(槍ヶ岳|北アルプス)/.test(sc.place))) {
-      if (!sc.details.has('鋭い岩峰と雪渓')) {
-        sc.details.add('鋭い岩峰と雪渓');
-        changed = true;
-      }
-    }
-
-    // 喫茶店の中の場合の基本ディテール補強
-    if (clean.includes('喫茶店') || (sc.place && sc.place.includes('喫茶店'))) {
-      if (clean.includes('中') || clean.includes('店内') || clean.includes('テーブル')) {
-        if (!sc.details.has('温かい店内と木製テーブル')) {
-          sc.details.add('温かい店内と木製テーブル');
-          changed = true;
-        }
-      }
-    }
-
-    // H. 自然言語からの動的ディテール抽出（「〜があった」「〜が咲いていた」「〜に通っていた」等の名詞句）
-    const verbMatches = clean.match(/(?:(?:きれいな|綺麗で|大きな|小さな|色とりどりの|赤い|黄色い|白い|青い|昔の|古い)?[\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FA]{2,10})(?:がある|があった|が見える|が見えた|が咲いている|が咲いていた|に通っていた|で遊んでいた)/g);
-    if (verbMatches) {
-      verbMatches.forEach(phrase => {
-        const item = phrase.replace(/(がある|があった|が見える|が見えた|が咲いている|が咲いていた|に通っていた|で遊んでいた)$/, '').trim();
-        if (item && item.length >= 2 && item.length <= 15 && !sc.details.has(item)) {
-          sc.details.add(item);
-          changed = true;
-        }
-      });
     }
 
     // =========================================================================
@@ -4557,6 +4477,19 @@ ${artStyle.svgStyleRules}
     if (speaker === 'user') {
       const isExplicitDrawCommand = /(絵を描いてください|絵を書いてください|絵に描いてください|絵に書いてください|今の話題を絵にして|キャンバスに描いて|キャンバスに出して|この絵を描いて)/.test(clean);
       const isApprovalForPrompt = sc.isAwaitingConfirmation && /^(はい、?(絵を|絵に)?(描い|書い)てください|(描い|書い)てください|お願いします|お願い|描いて|書いて|そうして)$/.test(clean.trim());
+
+      if (isExplicitDrawCommand || isApprovalForPrompt) {
+        const now = Date.now();
+        if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
+          logDiag(`描画中またはクールダウン中のため、重複トリガーをスキップ: 「${clean}」`);
+          return;
+        }
+        logDiag(`ユーザーの描画合意・指示を検知: 「${clean}」`);
+        sc.isAwaitingConfirmation = false;
+        executeConfirmedDrawing();
+        return;
+      }
+    }
 
       if (isExplicitDrawCommand || isApprovalForPrompt) {
         const now = Date.now();
