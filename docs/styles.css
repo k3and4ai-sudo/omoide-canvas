@@ -326,6 +326,111 @@ body {
   50% { transform: scale(1.4); opacity: 0.6; }
 }
 
+/* さくらさんの声の大きさ（スピーカー音量）カード */
+.speaker-volume-card {
+  background: #ffffff;
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 8px 14px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.volume-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.volume-label {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--primary-color);
+}
+
+.volume-value {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: #f0f4f2;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.volume-control-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-volume-mute {
+  background: #f7faf8;
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.2s ease;
+}
+
+.btn-volume-mute:hover {
+  background: #e2ece7;
+  transform: scale(1.05);
+}
+
+.btn-volume-mute.is-muted {
+  background: #fde8e8;
+  border-color: #f87171;
+}
+
+.volume-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 10px;
+  border-radius: 5px;
+  background: #e2ece7;
+  outline: none;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.volume-slider::-webkit-slider-thumb:hover,
+.volume-slider::-webkit-slider-thumb:active {
+  transform: scale(1.2);
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+  cursor: pointer;
+}
+
 /* マイク音量・オシロスコープ波形モニター */
 .audio-monitor-card {
   background: #ffffff;

@@ -20,7 +20,7 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="3ステップ聞き取り誘導＆項目別クリア・音声取り消し即応版">v20261030_09</span>
+      <span class="app-version-badge" title="スマホ音量スライダー・GainNode制御対応版">v20261103_01</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
@@ -116,6 +116,18 @@
         <div class="partner-name-badge">
           <span class="badge-dot"></span>
           <span id="partnerStatusText">パートナー：準備完了</span>
+        </div>
+      </div>
+
+      <!-- さくらさんの声の大きさ（スピーカー音量スライダー） -->
+      <div class="speaker-volume-card" id="speakerVolumeCard">
+        <div class="volume-header">
+          <span class="volume-label">🔊 さくらさんの声の大きさ</span>
+          <span class="volume-value" id="speakerVolumeValue">75%</span>
+        </div>
+        <div class="volume-control-row">
+          <button type="button" id="btnVolumeMute" class="btn-volume-mute" title="ミュート切替" aria-label="音量ミュート切替">🔊</button>
+          <input type="range" id="speakerVolumeSlider" class="volume-slider" min="0" max="100" value="75" step="5" aria-label="さくらさんの声の大きさ調整">
         </div>
       </div>
 

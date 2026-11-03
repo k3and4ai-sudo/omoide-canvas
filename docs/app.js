@@ -120,6 +120,10 @@
     pendingUserTranscript: '',      // 送信待ちの発話テキスト
     audioContextIn: null,
     audioContextOut: null,
+    outputGainNode: null,           // AI音声スピーカー再生用マスターGainNode（音量調整・音割れ防止）
+    speakerVolume: 0.75,            // スピーカー音量（デフォルト75%・スマホでの爆音防止）
+    isMuted: false,                 // ミュート中フラグ
+    preMuteVolume: 0.75,            // ミュート直前の音量
     analyserNode: null,
     micStream: null,
     cameraStream: null,
@@ -168,6 +172,10 @@
     // パートナー＆セッション
     avatarContainer: document.getElementById('avatarContainer'),
     partnerStatusText: document.getElementById('partnerStatusText'),
+    speakerVolumeCard: document.getElementById('speakerVolumeCard'),
+    speakerVolumeSlider: document.getElementById('speakerVolumeSlider'),
+    speakerVolumeValue: document.getElementById('speakerVolumeValue'),
+    btnVolumeMute: document.getElementById('btnVolumeMute'),
     btnSessionToggle: document.getElementById('btnSessionToggle'),
     sessionHint: document.getElementById('sessionHint'),
 
@@ -564,6 +572,7 @@
 
   async function init() {
     setupEventListeners();
+    setupSpeakerVolume();
     initLoginModalState();
     clearCanvasState();
     renderQuotaUI();
@@ -735,6 +744,104 @@
     }
     dom.btnOpenLoginModal?.classList.remove('active-key');
     showLoginMessage('この端末に保存されていたAPIキーを消去しました。', false);
+  }
+
+  // ============================================================================
+  // スピーカー音量制御（さくらさんの声の大きさ・スマホ対応・GainNode）
+  // ============================================================================
+  const STORAGE_KEY_SPEAKER_VOL = 'omoide_speaker_volume_v1';
+
+  function updateSpeakerVolumeUI() {
+    const percent = Math.round(state.speakerVolume * 100);
+    if (dom.speakerVolumeValue) {
+      dom.speakerVolumeValue.textContent = state.isMuted ? 'ミュート (0%)' : `${percent}%`;
+    }
+    if (dom.btnVolumeMute) {
+      if (state.isMuted || percent === 0) {
+        dom.btnVolumeMute.textContent = '🔇';
+        dom.btnVolumeMute.classList.add('is-muted');
+        dom.btnVolumeMute.title = 'ミュート解除';
+      } else if (percent < 40) {
+        dom.btnVolumeMute.textContent = '🔉';
+        dom.btnVolumeMute.classList.remove('is-muted');
+        dom.btnVolumeMute.title = 'ミュートにする';
+      } else {
+        dom.btnVolumeMute.textContent = '🔊';
+        dom.btnVolumeMute.classList.remove('is-muted');
+        dom.btnVolumeMute.title = 'ミュートにする';
+      }
+    }
+  }
+
+  function applySpeakerGain() {
+    if (state.outputGainNode && state.audioContextOut) {
+      const targetGain = state.isMuted ? 0 : state.speakerVolume;
+      try {
+        state.outputGainNode.gain.setValueAtTime(targetGain, state.audioContextOut.currentTime);
+      } catch (e) {
+        state.outputGainNode.gain.value = targetGain;
+      }
+    }
+  }
+
+  function setupSpeakerVolume() {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_SPEAKER_VOL);
+      if (saved !== null) {
+        const val = parseFloat(saved);
+        if (!isNaN(val) && val >= 0 && val <= 1) {
+          state.speakerVolume = val;
+          if (val === 0) state.isMuted = true;
+        }
+      }
+    } catch (e) {}
+
+    if (dom.speakerVolumeSlider) {
+      dom.speakerVolumeSlider.value = Math.round(state.speakerVolume * 100);
+      dom.speakerVolumeSlider.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value, 10);
+        state.speakerVolume = val / 100;
+        if (val === 0) {
+          state.isMuted = true;
+        } else {
+          state.isMuted = false;
+          state.preMuteVolume = state.speakerVolume;
+        }
+        updateSpeakerVolumeUI();
+        applySpeakerGain();
+        try {
+          localStorage.setItem(STORAGE_KEY_SPEAKER_VOL, state.speakerVolume);
+        } catch (e) {}
+      });
+    }
+
+    if (dom.btnVolumeMute) {
+      dom.btnVolumeMute.addEventListener('click', () => {
+        if (state.isMuted || state.speakerVolume === 0) {
+          // ミュート解除
+          state.isMuted = false;
+          state.speakerVolume = state.preMuteVolume > 0 ? state.preMuteVolume : 0.75;
+          if (dom.speakerVolumeSlider) {
+            dom.speakerVolumeSlider.value = Math.round(state.speakerVolume * 100);
+          }
+        } else {
+          // ミュート
+          state.preMuteVolume = state.speakerVolume;
+          state.isMuted = true;
+          state.speakerVolume = 0;
+          if (dom.speakerVolumeSlider) {
+            dom.speakerVolumeSlider.value = 0;
+          }
+        }
+        updateSpeakerVolumeUI();
+        applySpeakerGain();
+        try {
+          localStorage.setItem(STORAGE_KEY_SPEAKER_VOL, state.speakerVolume);
+        } catch (e) {}
+      });
+    }
+
+    updateSpeakerVolumeUI();
   }
 
   // ============================================================================
@@ -1298,6 +1405,20 @@ ${levelRules}
         await state.audioContextOut.resume();
       }
       state.audioContextIn = state.audioContextOut;
+
+      // 出力用マスター GainNode の初期化（スピーカー音量調整・音割れ＆スマホ爆音防止）
+      if (!state.outputGainNode) {
+        state.outputGainNode = state.audioContextOut.createGain();
+        const targetGain = state.isMuted ? 0 : state.speakerVolume;
+        try {
+          state.outputGainNode.gain.setValueAtTime(targetGain, state.audioContextOut.currentTime);
+        } catch (e) {
+          state.outputGainNode.gain.value = targetGain;
+        }
+        state.outputGainNode.connect(state.audioContextOut.destination);
+      } else {
+        applySpeakerGain();
+      }
 
       // スマホ（iOS/Android）の音声再生ロック解除用・無音バッファ即時再生
       try {
@@ -3701,7 +3822,19 @@ ${artStyle.svgStyleRules}
 
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(ctx.destination);
+
+    // 出力用GainNodeを介して再生（音量調整・スマホでの爆音＆音割れ防止）
+    if (!state.outputGainNode) {
+      state.outputGainNode = ctx.createGain();
+      const targetGain = state.isMuted ? 0 : state.speakerVolume;
+      try {
+        state.outputGainNode.gain.setValueAtTime(targetGain, ctx.currentTime);
+      } catch (e) {
+        state.outputGainNode.gain.value = targetGain;
+      }
+      state.outputGainNode.connect(ctx.destination);
+    }
+    source.connect(state.outputGainNode);
 
     const currentTime = ctx.currentTime;
     if (state.nextPlaybackTime < currentTime) {
@@ -3758,6 +3891,7 @@ ${artStyle.svgStyleRules}
     utter.lang = 'ja-JP';
     utter.rate = 0.95; // 高齢者に聞き取りやすいように少しゆっくり
     utter.pitch = 1.05;
+    utter.volume = state.isMuted ? 0 : state.speakerVolume; // スピーカー音量設定を反映
 
     // 日本語の優しい声を探す
     const voices = window.speechSynthesis.getVoices();
