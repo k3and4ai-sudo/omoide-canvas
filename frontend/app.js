@@ -774,10 +774,17 @@
   }
 
   function applySpeakerGain() {
-    if (state.outputGainNode && state.audioContextOut) {
+    if (state.audioContextOut) {
+      if (!state.outputGainNode) {
+        state.outputGainNode = state.audioContextOut.createGain();
+        state.outputGainNode.connect(state.audioContextOut.destination);
+      }
       const targetGain = state.isMuted ? 0 : state.speakerVolume;
+      const now = state.audioContextOut.currentTime;
       try {
-        state.outputGainNode.gain.setValueAtTime(targetGain, state.audioContextOut.currentTime);
+        state.outputGainNode.gain.cancelScheduledValues(now);
+        // 20ms（0.02秒）の指数フェードにより、急激な段差によるプチプチノイズを消しつつ瞬時に音量反映
+        state.outputGainNode.gain.setTargetAtTime(targetGain, now, 0.02);
       } catch (e) {
         state.outputGainNode.gain.value = targetGain;
       }
@@ -3818,13 +3825,8 @@ ${artStyle.svgStyleRules}
     const int16Array = new Int16Array(arrayBuffer);
     const float32Array = new Float32Array(int16Array.length);
 
-    // 物理PCMサンプルの直接音量スケーリング（スマホOSやブラウザのオーディオルーティング・GainNode制限を100%回避）
-    const effectiveVolume = state.isMuted
-      ? 0.0
-      : (typeof state.speakerVolume === 'number' ? Math.max(0, Math.min(1, state.speakerVolume)) : 0.60);
-
     for (let i = 0; i < int16Array.length; i++) {
-      float32Array[i] = (int16Array[i] / 32768.0) * effectiveVolume;
+      float32Array[i] = int16Array[i] / 32768.0;
     }
 
     const audioBuffer = ctx.createBuffer(1, float32Array.length, SAMPLE_RATE_OUT);
@@ -3832,7 +3834,19 @@ ${artStyle.svgStyleRules}
 
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(ctx.destination);
+
+    // 出力用マスター GainNode に接続（再生中バッファも0ミリ秒で即時音量変更・ミュート可能）
+    if (!state.outputGainNode) {
+      state.outputGainNode = ctx.createGain();
+      const targetGain = state.isMuted ? 0 : state.speakerVolume;
+      try {
+        state.outputGainNode.gain.setValueAtTime(targetGain, ctx.currentTime);
+      } catch (e) {
+        state.outputGainNode.gain.value = targetGain;
+      }
+      state.outputGainNode.connect(ctx.destination);
+    }
+    source.connect(state.outputGainNode);
 
     const currentTime = ctx.currentTime;
     if (state.nextPlaybackTime < currentTime) {
