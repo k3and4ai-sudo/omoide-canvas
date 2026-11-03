@@ -326,13 +326,31 @@ class LiveSessionManager:
                         except Exception as eos_err:
                             logger.debug(f"audio_stream_end notice: {eos_err}")
 
+                    elif msg_type == "start_listening":
+                        # 画面上で「🎙️ 聞き取り開始」が押された時、さくらさんに3ステップ聞き取りの第一声を促す
+                        logger.info("User triggered start_listening button.")
+                        self.echo_guard_until = time.time() + 2.5
+                        try:
+                            await session.send_client_content(
+                                turns=[types.Content(role="user", parts=[types.Part.from_text(
+                                    text="画面の「🎙️ 聞き取り開始」ボタンが押されました。「それでは絵画のための聞き取りをしますね。まず、どんな思い出の絵を描きましょうか？テーマや話題を教えていただけますか？」と優しく声に出して尋ね、ステップ①（話題）の聞き取りを開始してください。"
+                                )])],
+                                turn_complete=True
+                            )
+                        except Exception as sl_err:
+                            logger.warning(f"Failed to send start_listening prompt: {sl_err}")
+
                     elif msg_type == "user_transcript":
                         # ブラウザ音声認識で確定した字幕テキスト（話題記録・情景抽出・日報用 ＆ 音声不感帯フォールバック）
                         user_text = data.get("text", "").strip()
                         if user_text:
                             logger.info(f"User transcript received: {user_text}")
-                            # 挨拶やマイク確認以外の実質的な話題のみ履歴に追加
-                            noise_words = ["聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト", "こんにちは", "こんばんは", "おはよう"]
+                            # 挨拶・相槌・体調伺い以外の実質的な話題のみ履歴に追加
+                            noise_words = [
+                                "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
+                                "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
+                                "さくらさんは", "お天気は", "いい天気", "悪くない", "何もしてない", "ブラブラ"
+                            ]
                             if not any(w in user_text for w in noise_words) and len(user_text) >= 2:
                                 self.discussed_topics.append(user_text)
 
@@ -442,9 +460,19 @@ class LiveSessionManager:
                         if output_trans and getattr(output_trans, "text", None):
                             if self.current_user_turn_text.strip():
                                 full_user_utt = self.current_user_turn_text.strip()
-                                noise_words = ["聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト", "こんにちは"]
+                                noise_words = [
+                                    "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
+                                    "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
+                                    "さくらさんは", "お天気は", "いい天気", "悪くない", "何もしてない", "ブラブラ"
+                                ]
                                 if not any(w in full_user_utt for w in noise_words) and len(full_user_utt) >= 2:
                                     self.discussed_topics.append(full_user_utt)
+                                await self.websocket.send_json({
+                                    "type": "transcript",
+                                    "role": "user",
+                                    "text": full_user_utt,
+                                    "turn_complete": True
+                                })
                                 self.current_user_turn_text = ""
                                 # ※毎ターンの勝手な自動描画は行わない（会話ストリームの継続とクォータを保護）
 
@@ -455,27 +483,59 @@ class LiveSessionManager:
                                 await self.websocket.send_json({
                                     "type": "transcript",
                                     "role": "model",
-                                    "text": ai_txt
+                                    "text": self.current_ai_turn_text,
+                                    "turn_complete": False
                                 })
 
                         if getattr(server_content, "turn_complete", False):
-                            completed_ai_turn = self.current_ai_turn_text
+                            if self.current_user_turn_text.strip():
+                                full_user_utt = self.current_user_turn_text.strip()
+                                noise_words = [
+                                    "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
+                                    "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
+                                    "さくらさんは", "お天気は", "いい天気", "悪くない", "何もしてない", "ブラブラ"
+                                ]
+                                if not any(w in full_user_utt for w in noise_words) and len(full_user_utt) >= 2:
+                                    self.discussed_topics.append(full_user_utt)
+                                await self.websocket.send_json({
+                                    "type": "transcript",
+                                    "role": "user",
+                                    "text": full_user_utt,
+                                    "turn_complete": True
+                                })
+                                self.current_user_turn_text = ""
+
+                            completed_ai_turn = self.current_ai_turn_text.strip()
                             self.current_ai_turn_text = ""
                             self.echo_guard_until = 0.0  # AI発話完了で直ちにマイクガード解除
+                            if completed_ai_turn:
+                                await self.websocket.send_json({
+                                    "type": "transcript",
+                                    "role": "model",
+                                    "text": completed_ai_turn,
+                                    "turn_complete": True
+                                })
                             await self.websocket.send_json({
                                 "type": "avatar_state",
                                 "state": "listening"
                             })
 
-                            # 【セーフティネット】AIが「描いてみましょう」「描いてみます」「少々お待ちください」と発話したのに
-                            # ツール呼び出し（tool_call）が行われなかった場合、バックエンドが自動で描画タスクを起動！
-                            if not self.tool_called_in_turn and completed_ai_turn:
-                                draw_intent_words = [
-                                    "描いてみましょうか", "描いてみます", "キャンバスに描いて", "少々お待ちください",
-                                    "少しお待ちください", "描いてみましょう", "描きますね", "絵にしてみますね"
+                            # 【セーフティネット】AIが明確に「今から描いてみますね」と描画実行を宣言したのに
+                            # ツール呼び出し（tool_call）が行われなかった場合のみ、バックエンドが描画タスクを起動！
+                            # ※「描いてみましょうか？」「どんな思い出を描きたいですか？」「お話を伺いますね」等の質問・提案や、
+                            #   聞き取り十分な話題（2件以上）がない開始直後には絶対に発火させない！
+                            if not self.tool_called_in_turn and completed_ai_turn and len(self.discussed_topics) >= 2:
+                                draw_exec_words = [
+                                    "今からキャンバスに描いてみます", "今から描いてみます", "キャンバスに描きますね",
+                                    "描いてみますね", "絵にしてみますね", "いま一生懸命描"
                                 ]
-                                if any(w in completed_ai_turn for w in draw_intent_words):
-                                    logger.info(f"AI expressed drawing intent in speech without tool_call: '{completed_ai_turn}'. Activating fallback media generation.")
+                                non_draw_questions = [
+                                    "描いてみましょうか", "描きましょうか", "どんな思い出", "どんな絵",
+                                    "どんな場所", "どんな様子", "お話を伺います", "聞き取りをします",
+                                    "聞き取りを始め", "教えていただけますか", "いかがですか"
+                                ]
+                                if any(w in completed_ai_turn for w in draw_exec_words) and not any(q in completed_ai_turn for q in non_draw_questions):
+                                    logger.info(f"AI expressed explicit drawing execution in speech without tool_call: '{completed_ai_turn}'. Activating fallback media generation.")
                                     topic = self.discussed_topics[-1] if self.discussed_topics else "思い出の風景"
                                     await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
                                     asyncio.create_task(
@@ -501,13 +561,38 @@ class LiveSessionManager:
                             logger.info(f"Tool call received: {func_name} with args: {args}")
 
                             if func_name in ("generate_memory_visual", "refine_memory_visual"):
+                                raw_name = (self.profile.call_name or "お父さん").strip()
+                                nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+
+                                # 【ガード】開始直後の挨拶段階（ご本人から具体的な話題がまだ1つも出ていない状態）での勝手なツール呼び出しを完全ブロック
+                                if func_name == "generate_memory_visual" and len(self.discussed_topics) == 0:
+                                    logger.warning(f"Blocked premature generate_memory_visual call before any user topic was discussed (args={args}).")
+                                    try:
+                                        await session.send_tool_response(
+                                            function_responses=[
+                                                types.FunctionResponse(
+                                                    id=call_id,
+                                                    name=func_name,
+                                                    response={
+                                                        "status": "rejected_need_listening_first",
+                                                        "message": (
+                                                            f"まだ{nickname}から具体的な思い出の話題や場所・情景をお伺いしていないため、まだ絵を描き始めることはできません。"
+                                                            f"開始直後に勝手に絵を描かず、まずは日常のおしゃべりをするか、"
+                                                            f"「それでは絵画のための聞き取りをしますね。どんな思い出の絵を描きましょうか？」と尋ねてステップ①（話題）から順番に聞き取ってください。"
+                                                        )
+                                                    }
+                                                )
+                                            ]
+                                        )
+                                    except Exception as resp_err:
+                                        logger.warning(f"Error sending premature tool rejection response: {resp_err}")
+                                    continue
+
                                 title = args.get("japanese_title") or args.get("title") or (self.discussed_topics[-1] if self.discussed_topics else "思い出の風景")
                                 elements = args.get("visual_elements") or args.get("scene_description") or args.get("description", "")
                                 logger.info(f"AI tool call: {func_name} for '{title}' (elements: '{elements}'). Generating visual artifact...")
 
                                 # 1. Gemini側へ直ちにツール応答を返送（「現在描画進行中」であることを伝え、描き上がる前に「描きました」と嘘をつかせない）
-                                raw_name = (self.profile.call_name or "お父さん").strip()
-                                nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
                                 if func_name == "refine_memory_visual":
                                     tool_msg = (
                                         f"「{title}」の描き直し（情景修正）をいまキャンバスで開始しました。"

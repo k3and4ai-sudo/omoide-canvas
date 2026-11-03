@@ -1236,15 +1236,22 @@ ${levelRules}
 0. 【最重要】ご本人の言葉に100%忠実な具体的ディテールの反映（抽象化・勝手な置き換えの禁止）：
    相手が語った具体的な事物（例：「赤いバラ」「白い柵」「庭」「コスモス」「信州松本駅」「丸いテーブル」など、花・植物・建物・色彩・道具の名称）を、必ずそのままツールの \`japanese_title\`（例：「庭いっぱいに咲く赤いバラ」）および \`visual_elements\`（例：「満開の赤いバラ、白い木製の柵、緑の芝生、晴れ渡る青空」）に漏れなく正確に指定してください。
    「日差しが降り注ぐ」「風が吹いている」といった抽象的なテンプレート表現だけで済ませるのは厳禁です。
-1. 勝手な即時描画の絶対禁止：
-   相手が昔の思い出の風景や場所（例：文化祭、教室、喫茶店の中、故郷、海、山など）を話し始めても、【絶対にすぐにツールを呼んで絵を描いてはいけません】。
-2. ディテールの優しい掘り下げ（情景情報の収集）：
-   まずは「どんな場所でしたか？」「季節やお天気はどうでしたか？」「どんなものが置いてありましたか？」「誰と行かれたんですか？」と、温かく関心を持って思い出の情景ディテールをじっくり聞き取ってください。
+1. 【最重要】開始直後の勝手な描画提案・即時描画の完全禁止：
+   ・会話の開始直後や、日常の挨拶・雑談（「お元気でしたか？」「いいお天気ですね」「今日は何をしていましたか？」など）の段階では、【絶対に自分から「今日は思い出の絵をキャンバスに描いてみましょうか？」などと絵の話を切り出したり、ツールを呼んで絵を描き始めたりしてはいけません】。
+   ・まずは穏やかな日常のおしゃべりを楽しんでください。
+   ・ご本人から「絵を描きたい」「思い出の絵を描いて」「聞き取りをして」と言われた時、または聞き取り開始の合図があった時のみ、必ず「それでは絵画のための聞き取りをしますね。」と明言してから聞き取りを開始してください。
+2. 3ステップ順次の丁寧な聞き取り（①話題 → ②場所・舞台 → ③情景ディテール）：
+   絵画のための聞き取りを行う際は、一度にたくさん質問せず、以下の順番で1つずつ順番に優しく尋ねてください。
+   ・ステップ①（話題）：「まず、どんな思い出の絵を描きましょうか？テーマや話題を教えていただけますか？」
+   ・ステップ②（場所・舞台）：話題が決まったら、「素敵なテーマですね！それはどこでの思い出ですか？どんな場所や舞台だったか教えてください。」
+   ・ステップ③（情景ディテール）：場所が分かったら、「その場所にはどんなものがありましたか？季節やお天気、周りに見えた色や様子を教えていただけますか？」
+   （※日常の雑談の言葉は絵のディテールに混ぜないでください）
 3. 描画前の確認（合意形成ステップ）：
-   情景の特徴やディテールがまとまってきたら、必ず言葉で相手に描画の確認を入れてください：
-   例：「〇〇の風景ですね。とても素敵です！その情景をキャンバスに描いてみましょうか？」
+   ①話題、②場所・舞台、③情景ディテールの3つが揃ったら、必ず言葉で相手に描画の確認を入れてください：
+   例：「〇〇（場所）での〇〇（話題）の風景ですね。とても素敵です！その情景をキャンバスに描いてみましょうか？」
 4. 描画の実行タイミング（完了合図）：
-   相手が「うん」「お願い」「描いて」「そうして」「はい」等と同意した時、あるいは相手から「絵を描いて」「キャンバスに映して」と指示された時のみ、はじめて \`generate_memory_visual\`（または \`refine_memory_visual\`）ツールを呼び出してください。
+   相手が「うん」「お願い」「描いて」「そうして」「はい」等と明確に同意した時、あるいは相手から「今すぐこの絵を描いて」「キャンバスに映して」と明確に実行指示された時のみ、はじめて \`generate_memory_visual\`（または \`refine_memory_visual\`）ツールを呼び出してください。
+   ツールを呼び出す際は「それでは今からキャンバスに描いてみますね。少しの間お待ちください。」と伝えてください。
 5. 描画後の温かい声かけ：
    絵が表示されたら「${nickname}、キャンバスに絵が浮かびましたよ。こんな雰囲気でしたか？」と温かく声をかけてください。
 6. 【最重要】絵の修正・描き直し（refine_memory_visual）ルール：
@@ -2303,15 +2310,28 @@ ${levelRules}
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
 
+      const ignoredResultIndices = new Set();
+
       recognition.onspeechstart = () => {
+        if (state.isAiSpeaking) return;
         state.userSpeakingUntil = Date.now() + 2500;
       };
 
       recognition.onresult = (event) => {
+        // さくらさんが発話中はスピーカー出力の回り込みを防ぐため音声認識結果を無視する
+        if (state.isAiSpeaking) {
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            ignoredResultIndices.add(i);
+          }
+          state.pendingUserTranscript = '';
+          return;
+        }
+
         let interimTranscript = '';
         let finalTranscript = '';
 
         for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (ignoredResultIndices.has(i)) continue;
           if (event.results[i].isFinal) {
             finalTranscript += event.results[i][0].transcript;
           } else {
@@ -2330,12 +2350,15 @@ ${levelRules}
             state.pendingUserTranscript = interimTranscript.trim();
           }
 
-          // ユーザーが話し終えた（600msの沈黙）を検知して処理
+          // ユーザーが話し終えた（700msの沈黙）を検知して処理
           if (state.speechDebounceTimer) {
             clearTimeout(state.speechDebounceTimer);
           }
           state.speechDebounceTimer = setTimeout(async () => {
-            if (!state.isSessionActive) return;
+            if (!state.isSessionActive || state.isAiSpeaking) {
+              state.pendingUserTranscript = '';
+              return;
+            }
             const textToSend = state.pendingUserTranscript;
             state.pendingUserTranscript = '';
             if (!textToSend || textToSend.length < 2) return;
@@ -2373,11 +2396,9 @@ ${levelRules}
             }
 
             if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-              // 発話テキストから情景情報を抽出・蓄積（毎ターン自動描画は行わない）
-              updateSceneCollectorFromText(textToSend, 'user');
-
               if (state.isDirectGeminiWs) {
-                // Gemini直結時も、ブラウザで正確に聞き取れた日本語字幕テキストを送信して聞き間違いをゼロにする
+                // Gemini直結時はWeb Speech APIの確定テキストから情景抽出＆送信
+                updateSceneCollectorFromText(textToSend, 'user');
                 state.socket.send(JSON.stringify({
                   client_content: {
                     turns: [{ role: 'user', parts: [{ text: textToSend }] }],
@@ -2386,6 +2407,10 @@ ${levelRules}
                 }));
                 logDiag(`認識テキストを送信: 「${textToSend}」`);
               } else {
+                // ローカルバックエンド接続時：シミュレーション時はここで抽出、Gemini Live接続時はバックエンドのturn_complete付きtranscriptで一元処理（重複防止機能付き）
+                if (state.isSimulation) {
+                  updateSceneCollectorFromText(textToSend, 'user');
+                }
                 state.socket.send(JSON.stringify({
                   type: 'user_transcript',
                   text: textToSend
@@ -3763,17 +3788,26 @@ ${artStyle.svgStyleRules}
         }
 
         case 'transcript':
-          // 文字起こし字幕の更新 ＆ リアルタイム情景ディテール抽出
+          // 文字起こし字幕の更新 ＆ 発話完了時のみの情景ディテール抽出
           if (data.role === 'model' && data.text) {
             dom.aiTranscriptText.textContent = data.text;
-            updateSceneCollectorFromText(data.text, 'ai');
-            // シミュレーションモード時はブラウザ音声合成で喋らせる！
-            if (state.isSimulation) {
-              speakTextWithWebSpeech(data.text);
+            // 「絵画のための聞き取りをしますね」の開始合図だけはストリーミング中でも即座に反応させる
+            if (/(絵画のための聞き取りをしますね|絵画のための聞き取りを始め|絵のための聞き取りを)/.test(data.text) && state.sceneCollector.status === 'idle') {
+              startListeningSession(false);
+            }
+            if (data.turn_complete !== false) {
+              updateSceneCollectorFromText(data.text, 'ai');
+              // シミュレーションモード時はブラウザ音声合成で喋らせる！
+              if (state.isSimulation) {
+                speakTextWithWebSpeech(data.text);
+              }
             }
           } else if (data.role === 'user' && data.text) {
             dom.userTranscriptText.textContent = `「${data.text}」`;
-            updateSceneCollectorFromText(data.text, 'user');
+            // 1文字ずつのストリーミング断片では抽出せず、発話ターン完了時のみ1回だけ抽出する
+            if (data.turn_complete === true) {
+              updateSceneCollectorFromText(data.text, 'user');
+            }
           }
           break;
 
@@ -4394,20 +4428,27 @@ ${artStyle.svgStyleRules}
     renderSceneCollectorUI();
     logDiag('🎙️ 絵画のための聞き取りセッションを開始しました（ステップ①: 話題）');
 
-    // ボタンから直接押された場合、さくらさんに誘導を促す（シミュレーション時等）
+    // ボタンから直接押された場合、さくらさんに誘導を促す
     if (triggerPrompt) {
       const msg = 'それでは絵画のための聞き取りをしますね。まず、どんな思い出の絵を描きましょうか？テーマや話題を教えていただけますか？';
       dom.aiTranscriptText.textContent = msg;
       if (state.isSimulation) {
         speakTextWithWebSpeech(msg);
-      } else if (state.socket && state.socket.readyState === WebSocket.OPEN && state.isDirectGeminiWs) {
-        // Gemini側へ聞き取り開始のユーザー意図テキストを送信
-        state.socket.send(JSON.stringify({
-          client_content: {
-            turns: [{ role: 'user', parts: [{ text: '絵画の聞き取りを始めてください。' }] }],
-            turn_complete: true
-          }
-        }));
+      } else if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+        if (state.isDirectGeminiWs) {
+          // Gemini直結側へ聞き取り開始のユーザー意図テキストを送信
+          state.socket.send(JSON.stringify({
+            client_content: {
+              turns: [{ role: 'user', parts: [{ text: '絵画の聞き取りを始めてください。「それでは絵画のための聞き取りをしますね。まず、どんな思い出の絵を描きましょうか？」と話しかけてください。' }] }],
+              turn_complete: true
+            }
+          }));
+        } else {
+          // ローカルバックエンド経由でGeminiに聞き取り開始を指示
+          state.socket.send(JSON.stringify({
+            type: 'start_listening'
+          }));
+        }
       }
     }
   }
@@ -4656,19 +4697,46 @@ ${artStyle.svgStyleRules}
   }
 
   /**
-   * 会話テキスト（ユーザー発話またはさくらさんの返答）から、
+   * 日常の挨拶・雑談・相槌など、絵画の情景ではない一般発話かどうかを判定する
+   */
+  function isCasualNonSceneUtterance(text) {
+    if (!text || typeof text !== 'string') return true;
+    const clean = text.replace(/[「」『』"'\s]/g, '').trim();
+    if (clean.length < 2) return true;
+
+    // 明確に絵のテーマや描画希望を述べている場合は雑談ではない
+    if (/(?:の絵|を描き|を書き|を描いて|を書いて|キャンバス)/.test(clean)) {
+      return false;
+    }
+
+    const casualPatterns = [
+      /^(?:こんにちは|こんばんは|おはようございます|おはよう|はじめまして|よろしく)/,
+      /(?:元気でした|元気ですよ|元気です|おかげさまで|ぼちぼちです|まあまあです|変わりないです)/,
+      /(?:さくらさんは|そちらはどう|お天気はどう|調子はどう|聞こえますか|もしもし)/,
+      /(?:いいお?天気ですね|悪くないですね|暖かいですね|寒いですね|暑いですね|涼しいですね)/,
+      /(?:何もしてない|なにもしてない|特に何も|家でブラブラ|ブラブラして|ゆっくりして|のんびりして|テレビを見て|お茶を飲んで)/,
+      /^(?:はい|いいえ|うん|ええ|そうですね|そうですか|なるほど|わかりました|ありがとうございます|ありがとう|どうも|ちょっと|さあ|どうかな)(?:ね|よ|な|。|！)*$/
+    ];
+
+    return casualPatterns.some(pat => pat.test(clean));
+  }
+
+  /**
+   * 会話テキスト（ユーザー発話）から、
    * 固定辞書に頼らず、会話内容そのものから短文や単語（情景ディテール）を動的抽出する
    */
   function extractDynamicDetailsFromSpeech(text) {
     if (!text || typeof text !== 'string') return [];
     const clean = text.replace(/[「」『』"']/g, '').trim();
-    if (clean.length < 2) return [];
+    if (clean.length < 2 || isCasualNonSceneUtterance(clean)) return [];
 
     const results = new Set();
     const ignorePhrases = [
       'はい', 'いいえ', 'うん', 'ええ', 'そうですね', 'そうです', 'そうでした', 'なるほど',
       'あー', 'えーと', 'あのね', 'あの', 'その', 'まあ', 'ちょっと', 'どうも', 'ありがとう',
       'こんにちは', 'こんばんは', 'おはよう', '元気でしたよ', '元気です', 'もしもし', '聞こえますか',
+      'さくらさん', 'さくらさんは', 'お父さん', 'お母さん', '私', '僕', '自分', '今日', '昨日', '今',
+      'ブラブラ', '家でブラブラ', '何もしてない', 'いい天気', '悪くない', 'ちょっと絵', '思い出の絵', '思い出', '絵',
       'テスト', '楽しいところ', '普通', 'そう', 'ところ', 'もの', 'こと', '何か', '何', 'どれ', 'これ', 'あれ', 'それ',
       '少々お待ちください', '少しお待ちください', 'お待ちください', 'お待ち', 'お話し', 'お話'
     ];
@@ -4683,7 +4751,7 @@ ${artStyle.svgStyleRules}
       let s = seg.trim();
 
       // 文頭のフィラー・指示語・美化語除去
-      s = s.replace(/^(あの|その|ええと|えーと|じゃあ|それでは|次は|今度は|絵を|絵に|お|ご)\s*/, '');
+      s = s.replace(/^(あの|その|ええと|えーと|じゃあ|それでは|次は|今度は|ちょっと|なんか|絵を|絵に|お|ご)\s*/, '');
 
       // 文末の動詞・述語・過去形・感想・助動詞の包括的トリミング
       s = s.replace(/(?:に通っていた頃の絵です|に通っていた頃|に通っていました|に通っていた|に通った)$/, '');
@@ -4692,19 +4760,24 @@ ${artStyle.svgStyleRules}
       s = s.replace(/(?:が来ていたんですよ|が来ていました|が来ていた|が来て|に来ていた|に来て)$/, '');
       s = s.replace(/(?:で音が鳴っていました|が鳴っていました|で鳴っていた|が鳴っていた)$/, '');
       s = s.replace(/(?:になってました|になっていました|になっていた|になった|になって)$/, '');
-      s = s.replace(/(?:を描いてみましょうか|を描きますね|を描いてみますね|を描きたいです|を描きたい|を描こう)$/, '');
+      s = s.replace(/(?:を描いてみましょうか|を描きますね|を描いてみますね|を描いてみたいですね|を描いてみたい|を書きたいです|を描きたいです|を描きたい|を書きたい|を描こう)$/, '');
       s = s.replace(/(?:に描いてみましょうか|に描きますね|に描いてみますね)$/, '');
       s = s.replace(/(?:少々お待ちください|少しお待ちください|お待ちください|お待ち)$/, '');
-      s = s.replace(/(?:でしたね|でしたよ|でした|ですね|ですよ|です|ますね|ましたね|ました|ね|よ|よね)$/, '');
+      s = s.replace(/(?:でしたね|でしたよ|でした|ですね|ですよ|です|ますね|ましたね|ました|ね|よ|よね|かな)$/, '');
       s = s.replace(/(?:とか|などを|など|という|といった|のある|の風景|の景色|の絵|について)$/, '');
-      s = s.replace(/(?:と思う|と思います|と感じる|と感じます)$/, '');
+      s = s.replace(/(?:と思う|と思います|と感じる|と感じます|してます|しています|してない|していません)$/, '');
 
       // 端部の助詞・不要記号の除去
       s = s.replace(/^[をにがはでもへからとやで]/, '').replace(/[をにがはでもへからとやで]$/, '');
       s = s.trim();
 
-      if (s.length >= 1 && s.length <= 16) {
-        if (!ignorePhrases.includes(s) && !/^[\d\s\-_.,]+$/.test(s) && !/(?:描いて|書いて|キャンバス|お話し|お話|いかが|どう|の絵)/.test(s)) {
+      if (s.length >= 2 && s.length <= 16) {
+        if (
+          !ignorePhrases.includes(s) &&
+          !isCasualNonSceneUtterance(s) &&
+          !/^[\d\s\-_.,]+$/.test(s) &&
+          !/(?:描いて|書いて|描きたい|書きたい|キャンバス|お話し|お話|いかが|どう|の絵|聞き取り|さくらさん|元気|ブラブラ)/.test(s)
+        ) {
           results.add(s);
         }
       }
@@ -4714,7 +4787,12 @@ ${artStyle.svgStyleRules}
       if (phraseMatches) {
         phraseMatches.forEach(p => {
           let item = p.replace(/^[をにがはでもへからとやで]/, '').replace(/[をにがはでもへからとやで]$/, '').trim();
-          if (item.length >= 3 && item.length <= 15 && !ignorePhrases.includes(item)) {
+          if (
+            item.length >= 3 &&
+            item.length <= 15 &&
+            !ignorePhrases.includes(item) &&
+            !/(?:の絵|のお話|の聞き取り|の調子)/.test(item)
+          ) {
             results.add(item);
           }
         });
@@ -4726,7 +4804,7 @@ ${artStyle.svgStyleRules}
     if (subjectMatches) {
       subjectMatches.forEach(sm => {
         const subj = sm.replace(/が(?:ある|あった|咲い|見え|実っ|通っ|遊んで|泳いで|鳴っ|来て|建っ)$/, '').trim();
-        if (subj.length >= 1 && subj.length <= 12 && !ignorePhrases.includes(subj)) {
+        if (subj.length >= 2 && subj.length <= 12 && !ignorePhrases.includes(subj) && !isCasualNonSceneUtterance(subj)) {
           results.add(subj);
         }
       });
@@ -4744,39 +4822,19 @@ ${artStyle.svgStyleRules}
   }
 
   /**
-   * 発話テキストが絵の情景（場所・風景・季節・思い出の事物）に関する話題かどうかを判定
+   * 発話テキストから話題（① 話題）や場所（② 場所・舞台）の短いフレーズを整形する
    */
-  function isSceneTopicText(text) {
-    if (!text || typeof text !== 'string') return false;
-    const clean = text.replace(/[「」『』]/g, '').trim();
-    if (clean.length < 2) return false;
-
-    // 1. 絵・描画・風景・情景・昔の思い出の明示的な言及
-    if (/(絵|描い|書い|キャンバス|水彩|写真|風景|景色|情景|思い出|懐かしい|昔の|あの頃|旅行|旅先|行っ|故郷|実家)/.test(clean)) {
-      return true;
+  function cleanStepAnswerText(rawText) {
+    if (!rawText || typeof rawText !== 'string') return '';
+    let s = rawText.replace(/[「」『』"'。！!？\?]/g, '').trim();
+    s = s.replace(/^(?:あの|その|ええと|えーと|うーん|じゃあ|それでは|そうですね|はい|うん|ええ|なんか|ちょっと)[、,\s]*/, '');
+    s = s.replace(/(?:の絵を描きたいです|の絵を書きたいです|の絵を描いてみたいです|の絵を書いてみたいです|の絵を描きたい|の絵を書きたい|の絵を描いて|の絵を書いて|を描きたいです|を書きたいです|を描いてみたいです|を書いてみたいです|を描きたい|を書きたい|の絵をお願いします|の絵です|の思い出です|についてです)$/, '');
+    s = s.replace(/(?:でやりました|で行われました|に行きました|に通っていました|に通っていた頃です|にあった|にあります|のことです|だったと思います|だと思います|でしたね|でしたよ|でした|ですね|ですよ|です|ますね|ました)$/, '');
+    s = s.replace(/^[をにがはでもへからとやで]/, '').replace(/[をにがはでもへからとやで]$/, '').trim();
+    if (/^(?:絵|ちょっと絵|思い出の絵|思い出|何か|特にない|まだ|わかりません)$/.test(s)) {
+      return '';
     }
-
-    // 2. 場所・舞台（施設・自然・地名など）
-    if (/(園庭|校庭|校門|正門|門|花壇|庭園|中庭|庭先|庭|縁側|軒先|座敷|和室|部屋|リビング|カフェ|喫茶店|教室|校舎|学校|体育館|海岸|砂浜|公園|商店街|田んぼ|畑|果樹園|駅|ホーム|港|神社|お寺|アルプス|山|川|海|湖|道|坂)/.test(clean)) {
-      return true;
-    }
-
-    // 3. 季節・天候・自然現象
-    if (/(春|夏|秋|冬|日差し|青空|快晴|夕暮れ|夕焼け|夕日|星空|雲海|雪|残雪|新緑|紅葉|朝|夕方|夜)/.test(clean)) {
-      return true;
-    }
-
-    // 4. 動植物・事物・乗り物
-    if (/(バラ|桜|コスモス|ひまわり|花|木|木々|庭木|柵|垣根|ベンチ|ブランコ|電車|汽車|船|リンゴ|柿|鳥|犬|猫)/.test(clean)) {
-      return true;
-    }
-
-    // 5. AI側からの情景質問（「どんな場所でしたか」「どんな様子でしたか」等）
-    if (/(どんな場所|どんな風景|どんな様子|どんなお庭|どんな建物|何か咲いて|何か置いて|誰と行かれた|どのあたり)/.test(clean)) {
-      return true;
-    }
-
-    return false;
+    return s;
   }
 
   function updateSceneCollectorFromText(text, speaker = 'user') {
@@ -4794,17 +4852,40 @@ ${artStyle.svgStyleRules}
       return;
     }
 
-    // 1. AIの発話検知
+    // =========================================================================
+    // 1. AI（さくらさん）の発話検知（※AIの発話は絶対に下のユーザー抽出処理へ落とさない）
+    // =========================================================================
     if (speaker === 'ai') {
-      // (0) さくらさんの「絵画のための聞き取りをしますね」発話を検知して聞き取り開始
+      // (0) さくらさんの「それでは絵画のための聞き取りをしますね」発話を検知して聞き取り開始
       const isStartListeningPhrase = /(絵画のための聞き取りをしますね|絵画のための聞き取りを始め|絵のための聞き取りを|聞き取りをしますね|聞き取りをはじめますね|聞き取りを始めますね)/.test(clean);
       if (isStartListeningPhrase) {
-        startListeningSession(false);
+        if (sc.status === 'idle' || sc.status === 'drawn') {
+          startListeningSession(false);
+        }
         return;
       }
 
-      // (1) 絵を描き始めた段階：発話を検知して直ちに聞き取りを中止し drawing へ
-      const isDrawingStart = /(描いてみますね|描きますね|描いてみます！|描きます！|少々お待ちください|少しお待ちください|少しの間お待ちください|いま一生懸命描)/.test(clean);
+      // まだ聞き取りが始まっていない（日常のおしゃべり中）は、AIの発話で勝手に描画や確認へ遷移させない
+      if (sc.status === 'idle') {
+        return;
+      }
+
+      const hasCollectedScene = Boolean(sc.topic || sc.place || sc.details.size > 0);
+      const isQuestionTurn = /(?:でしょうか|ますか|ましょうか|ですか|かな|教えて|聞かせて|？|\?)/.test(clean);
+
+      // (1) 聞き取り中の場合、さくらさんの質問内容に合わせてアクティブステップ（①→②→③）を同期
+      if (sc.status === 'collecting') {
+        if (/(?:どんな思い出の絵|テーマや話題|何の絵を描|どんなテーマ)/.test(clean) && !sc.topic) {
+          sc.activeStep = 'topic';
+        } else if (/(?:どこでの思い出|どんな場所|どんな舞台|どこにある|どちらの|場所はどこ)/.test(clean)) {
+          sc.activeStep = 'place';
+        } else if (/(?:どんなものがあり|季節やお天気|周りに見えた|どんな様子|どんな雰囲気|何が見え|何が咲い|どんな色)/.test(clean)) {
+          sc.activeStep = 'details';
+        }
+      }
+
+      // (2) 絵を描き始めた段階：既に情景が集まっていて、質問文ではない実行宣言の時のみ drawing へ
+      const isDrawingStart = hasCollectedScene && !isQuestionTurn && /(今からキャンバスに描いて|キャンバスに描いてみますね|それでは描いてみますね|さっそく描いてみますね|いま一生懸命描)/.test(clean);
       if (isDrawingStart) {
         sc.status = 'drawing';
         setAvatarState('drawing');
@@ -4813,150 +4894,182 @@ ${artStyle.svgStyleRules}
         return;
       }
 
-      // (2) 描画確認の呼びかけ（「描いてみましょうか？」等）
-      const isConfirming = /(キャンバスに描いてみましょうか|描いてみましょうか|絵にしてみましょうか|描きましょうか|絵を描いてみましょうか|キャンバスに映してみましょうか|キャンバスに描いてみますか)/.test(clean);
+      // (3) 描画確認の呼びかけ：既に情景が集まっている状態での確認質問のみ confirming へ
+      const isConfirming = hasCollectedScene && /(キャンバスに描いてみましょうか|その情景を.*描いてみましょうか|絵にしてみましょうか|キャンバスに映してみましょうか|キャンバスに描いてみますか)/.test(clean);
       if (isConfirming) {
         sc.isAwaitingConfirmation = true;
         sc.status = 'confirming';
         renderSceneCollectorUI();
         return;
       }
+
+      renderSceneCollectorUI();
+      return;
     }
 
+    // =========================================================================
     // 2. ユーザーの音声発話の検知
-    if (speaker === 'user') {
-      // (0) 音声による取り消し・クリア指示の優先検知（「これ取り消して」「〇〇じゃなくて」「間違えました」等）
-      const handledVoiceClear = detectAndExecuteVoiceClear(clean);
-      if (handledVoiceClear) {
+    // =========================================================================
+    if (speaker !== 'user') return;
+
+    // 同一発話の重複処理防止（Web Speech API と Gemini input_transcription の二重発火ガード）
+    const nowTs = Date.now();
+    if (state.lastProcessedUserText === clean && (nowTs - (state.lastProcessedUserTime || 0) < 2500)) {
+      return;
+    }
+    state.lastProcessedUserText = clean;
+    state.lastProcessedUserTime = nowTs;
+
+    // (0) 音声による取り消し・クリア指示の優先検知（「これ取り消して」「〇〇じゃなくて」「間違えました」等）
+    const handledVoiceClear = detectAndExecuteVoiceClear(clean);
+    if (handledVoiceClear) {
+      return;
+    }
+
+    // 画風スタイルの切り替え指示を音声から自動検知
+    if (/(リアル|写実|写真みたい|写真風|本物みたい)/.test(clean)) {
+      setArtStyle('realistic');
+      showCanvasUpdateToast('画風を「📷 リアルな情景（写実）」に変更しました');
+    } else if (/(油絵|油彩|油絵風)/.test(clean)) {
+      setArtStyle('oil_painting');
+      showCanvasUpdateToast('画風を「🖌️ 重厚な油絵」に変更しました');
+    } else if (/(水彩|水彩画|水彩風)/.test(clean)) {
+      setArtStyle('watercolor');
+      showCanvasUpdateToast('画風を「🎨 優しい水彩画」に変更しました');
+    } else if (/(色鉛筆|鉛筆画|スケッチ|手描き風)/.test(clean)) {
+      setArtStyle('colored_pencil');
+      showCanvasUpdateToast('画風を「✏️ 色鉛筆スケッチ」に変更しました');
+    }
+
+    const modIntent = detectModificationIntent(clean);
+    if (modIntent) {
+      handleUserModificationDetected(modIntent);
+      return;
+    }
+
+    // ユーザーからの明示的描画リクエスト・合意返答の検知（※情景が1つ以上収集されている場合のみ）
+    const hasAnyCollectedScene = Boolean(sc.topic || sc.place || sc.details.size > 0);
+    const isExplicitDrawCommand = hasAnyCollectedScene && /(今すぐ.*描いて|今の話題を絵にして|キャンバスに描いてください|キャンバスに出して|この絵を描いてください)/.test(clean);
+    const isApprovalForPrompt = hasAnyCollectedScene && sc.isAwaitingConfirmation && /^(はい|うん|ええ|お願いします|お願い|描いて|書いて|そうして|ぜひ)/.test(clean.trim());
+
+    if (isExplicitDrawCommand || isApprovalForPrompt) {
+      const now = Date.now();
+      if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
+        logDiag(`描画中またはクールダウン中のため、重複トリガーをスキップ: 「${clean}」`);
         return;
       }
+      logDiag(`ユーザーの描画合意・指示を検知: 「${clean}」`);
+      sc.isAwaitingConfirmation = false;
+      sc.status = 'drawing';
+      setAvatarState('drawing');
+      renderSceneCollectorUI();
+      executeConfirmedDrawing();
+      return;
+    }
 
-      // 画風スタイルの切り替え指示を音声から自動検知
-      if (/(リアル|写実|写真みたい|写真風|本物みたい)/.test(clean)) {
-        setArtStyle('realistic');
-        showCanvasUpdateToast('画風を「📷 リアルな情景（写実）」に変更しました');
-      } else if (/(油絵|油彩|油絵風)/.test(clean)) {
-        setArtStyle('oil_painting');
-        showCanvasUpdateToast('画風を「🖌️ 重厚な油絵」に変更しました');
-      } else if (/(水彩|水彩画|水彩風)/.test(clean)) {
-        setArtStyle('watercolor');
-        showCanvasUpdateToast('画風を「🎨 優しい水彩画」に変更しました');
-      } else if (/(色鉛筆|鉛筆画|スケッチ|手描き風)/.test(clean)) {
-        setArtStyle('colored_pencil');
-        showCanvasUpdateToast('画風を「✏️ 色鉛筆スケッチ」に変更しました');
-      }
-
-      const modIntent = detectModificationIntent(clean);
-      if (modIntent) {
-        handleUserModificationDetected(modIntent);
-        return;
-      }
+    // 日常の挨拶・雑談（「元気でしたよ」「家でブラブラしてます」「いい天気ですね」等）は一切取り込まない
+    if (isCasualNonSceneUtterance(clean)) {
+      return;
     }
 
     // =========================================================================
-    // 【ユーザー要件2】会話の内容が絵の情景の話になってから聞き取りを開始する！
+    // 【重要】日常のおしゃべり中（idle / drawn）は、明示的な「絵を描きたい / 聞き取り開始」
+    // の意図がない限り、絶対に勝手に聞き取りモード（collecting）へ遷移しない！
     // =========================================================================
-    if (sc.status === 'idle') {
-      if (!isSceneTopicText(clean)) {
-        // まだ挨拶や日常のおしゃべりの段階なので、情景の聞き取りは開始しない
+    if (sc.status === 'idle' || sc.status === 'drawn') {
+      const hasExplicitDrawOrListenIntent = /(?:絵を描き|絵を書き|絵にして|キャンバスに描|の絵を描|の絵を書|描いてみたい|書いてみたい|描きたい|書きたい|描いてほしい|書いてほしい|絵画の聞き取り|聞き取りをお願い|聞き取りをして|聞き取りを始め)/.test(clean);
+      if (!hasExplicitDrawOrListenIntent) {
         return;
       }
-      // 絵の情景の話題を検知！聞き取りを開始
+
+      // 明示的に「絵を描きたい」等と言われたので聞き取りモードへ遷移
       sc.status = 'collecting';
-      logDiag(`📝 会話から絵の情景の話題を検知（「${clean.slice(0, 20)}...」）。思い出の情景の聞き取りを開始しました。`);
-    }
+      sc.activeStep = 'topic';
+      logDiag(`📝 ユーザーの絵画・聞き取り希望を検知（「${clean}」）。聞き取りモードを開始しました。`);
 
-    // 絵が完成した後（drawn）に、次の新しい情景の話が始まった場合の再開判定
-    if (sc.status === 'drawn') {
-      if (isSceneTopicText(clean) && !/(できました|描けました|完成しました|いかがですか)/.test(clean)) {
-        sc.status = 'collecting';
-        logDiag(`📝 新しい思い出の情景の話題を検知。情景の聞き取りを再開しました。`);
-      } else {
+      // 「ちょっと絵を描いてみたいですね」のようにまだ具体的な対象が含まれていない場合は、
+      // ステップ①（話題）を空欄のまま待機して終了する
+      const potentialTopic = cleanStepAnswerText(clean);
+      if (!potentialTopic) {
+        renderSceneCollectorUI();
         return;
       }
     }
 
     let changed = false;
 
-    // 動的ディテールの抽出・蓄積
-    const dynamicDetails = extractDynamicDetailsFromSpeech(clean);
-    if (dynamicDetails.length > 0) {
-      dynamicDetails.forEach(item => {
-        if (!sc.details.has(item)) {
-          sc.details.add(item);
-          changed = true;
-          logDiag(`情景ディテールを動的抽出: 「${item}」`);
-        }
-      });
-    }
-
-    // A. 話題（トピック）の決定
-    let detectedNewTopic = '';
-    const topicPhraseMatch = clean.match(/(?:(.+?)(?:の絵|について|のお話|の情景|を描きたい|を書きたい|を描こう|を書こう))/);
-    if (topicPhraseMatch && topicPhraseMatch[1]) {
-      const cand = topicPhraseMatch[1].replace(/^(あの|その|ええと|えーと|じゃあ|それでは|次は|今度は|絵を)\s*/, '').trim();
-      if (cand.length >= 2 && cand.length <= 15) {
-        detectedNewTopic = cand;
-      }
-    }
-    if (!detectedNewTopic && !sc.topic && dynamicDetails.length > 0) {
-      detectedNewTopic = dynamicDetails[0];
-    }
-    if (detectedNewTopic) {
-      if (!sc.topic || (!sc.topic.includes(detectedNewTopic) && !detectedNewTopic.includes(sc.topic))) {
-        logDiag(`新しい話題を検知: 「${detectedNewTopic}」（前回の話題: ${sc.topic || 'なし'}）`);
-        sc.topic = detectedNewTopic;
-        changed = true;
-        if (!sc.place) {
-          sc.activeStep = 'place'; // 次のステップ「場所・舞台」へ自動誘導
-        }
-      }
-    }
-
-    // B. 場所・舞台の動的抽出
-    const placeMatch = clean.match(/(?:[^\s、。!\?]{2,10}(?:園庭|校庭|校門|正門|の門|花壇|庭園|中庭|庭先|縁側|軒先|座敷|和室|お部屋|リビング|カフェ|喫茶店|教室|校舎|学校|体育館|海岸|砂浜|公園|商店街|田んぼ|畑|果樹園|駅|ホーム|港|神社|お寺|故郷|実家|アルプス|山|川|海))/);
-    if (placeMatch) {
-      sc.place = placeMatch[0];
-      if (!sc.topic) {
-        sc.topic = `${placeMatch[0]}の風景`;
-      }
-      changed = true;
-      sc.activeStep = 'details'; // 次のステップ「情景ディテール」へ自動誘導
-    }
-
-    // C. 季節・天候・時間帯の動的抽出
-    const seasonMatch = clean.match(/(?:春の温かい日差し|春の光|秋晴れの澄んだ青空|澄み切った秋の空|秋の空|秋晴れ|晴れ渡った青空|青空|快晴|秋晴れ|夕暮れ|夕焼け|夕日|星空|雲海|雪景色|雪渓|残雪|新緑|紅葉|春|夏|秋|冬|朝|昼|夕方|夜)/);
+    // 季節・天候・時間帯の抽出（どのステップでも補足情報として記録）
+    const seasonMatch = clean.match(/(?:春の温かい日差し|春の光|秋晴れの澄んだ青空|澄み切った秋の空|秋の空|秋晴れ|晴れ渡った青空|青空|快晴|夕暮れ|夕焼け|夕日|星空|雲海|雪景色|雪渓|残雪|新緑|紅葉|春|夏|秋|冬)/);
     if (seasonMatch) {
       sc.seasonWeather = seasonMatch[0];
       changed = true;
     }
 
-    // 3. ユーザーからの明示的描画リクエスト・合意返答の検知
-    if (speaker === 'user') {
-      const isExplicitDrawCommand = /(絵を描いてください|絵を書いてください|絵に描いてください|絵に書いてください|今の話題を絵にして|キャンバスに描いて|キャンバスに出して|この絵を描いて)/.test(clean);
-      const isApprovalForPrompt = sc.isAwaitingConfirmation && /^(はい、?(絵を|絵に)?(描い|書い)てください|(描い|書い)てください|お願いします|お願い|描いて|書いて|そうして)$/.test(clean.trim());
+    // 場所・舞台キーワードの検出
+    const placeMatch = clean.match(/(?:[^\s、。!\?]{1,10}(?:園庭|校庭|校門|正門|花壇|庭園|中庭|庭先|縁側|軒先|座敷|和室|お部屋|リビング|カフェ|喫茶店|教室|校舎|小学校|中学校|高校|学校|体育館|海岸|砂浜|公園|商店街|田んぼ|畑|果樹園|駅|ホーム|港|神社|お寺|故郷|実家|アルプス|山|川|海|湖))/);
 
-      if (isExplicitDrawCommand || isApprovalForPrompt) {
-        const now = Date.now();
-        if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
-          logDiag(`描画中またはクールダウン中のため、重複トリガーをスキップ: 「${clean}」`);
-          return;
+    // =========================================================================
+    // ステップ別（① 話題 → ② 場所・舞台 → ③ 情景ディテール）のクリーンな振り分け
+    // =========================================================================
+    if (sc.activeStep === 'topic' || !sc.topic) {
+      // ステップ①：話題の聞き取り
+      let topicCandidate = '';
+      const topicPhraseMatch = clean.match(/(?:(.+?)(?:の絵|について|のお話|の情景|を描きたい|を書きたい|を描いてみたい|を書いてみたい|を描こう|を書こう))/);
+      if (topicPhraseMatch && topicPhraseMatch[1]) {
+        topicCandidate = cleanStepAnswerText(topicPhraseMatch[1]);
+      } else {
+        topicCandidate = cleanStepAnswerText(clean);
+      }
+
+      if (topicCandidate && topicCandidate.length >= 2 && topicCandidate.length <= 20) {
+        sc.topic = topicCandidate;
+        changed = true;
+        logDiag(`① 話題を記録: 「${sc.topic}」`);
+
+        // もし同じ発話内に明確な場所も含まれていて、話題と別表現なら場所もセット
+        if (placeMatch && placeMatch[0] !== sc.topic) {
+          sc.place = placeMatch[0];
+          sc.activeStep = 'details';
+          logDiag(`② 場所・舞台も同時に記録: 「${sc.place}」 → 次は③情景ディテールへ`);
+        } else {
+          sc.activeStep = 'place';
         }
-        logDiag(`ユーザーの描画合意・指示を検知: 「${clean}」`);
-        sc.isAwaitingConfirmation = false;
-        sc.status = 'drawing';
-        setAvatarState('drawing');
-        renderSceneCollectorUI();
-        executeConfirmedDrawing();
-        return;
+      }
+    } else if (sc.activeStep === 'place') {
+      // ステップ②：場所・舞台の聞き取り
+      let placeCandidate = placeMatch ? placeMatch[0] : cleanStepAnswerText(clean);
+      if (placeCandidate && placeCandidate.length >= 2 && placeCandidate.length <= 20) {
+        sc.place = placeCandidate;
+        changed = true;
+        sc.activeStep = 'details';
+        logDiag(`② 場所・舞台を記録: 「${sc.place}」 → 次は③情景ディテールへ`);
+      }
+    } else {
+      // ステップ③：情景ディテールの聞き取り
+      if (!sc.place && placeMatch) {
+        sc.place = placeMatch[0];
+        changed = true;
+      }
+
+      const dynamicDetails = extractDynamicDetailsFromSpeech(clean);
+      if (dynamicDetails.length > 0) {
+        dynamicDetails.forEach(item => {
+          // 既に話題や場所に登録されている同一語句はディテールに重複登録しない
+          if (item === sc.topic || item === sc.place) return;
+          if (!sc.details.has(item)) {
+            sc.details.add(item);
+            changed = true;
+            logDiag(`③ 情景ディテールを記録: 「${item}」`);
+          }
+        });
       }
     }
 
-    // ディテールが十分に揃ったら ready（描画準備完了）へ
-    if (sc.details.size >= 2 && sc.status === 'collecting') {
+    // ①話題・②場所・③ディテール（1件以上）が揃うか、ディテールが2件以上集まったら ready へ
+    if (sc.status === 'collecting' && ((sc.topic && sc.place && sc.details.size >= 1) || sc.details.size >= 2)) {
       sc.status = 'ready';
       changed = true;
-      logDiag('情景ディテールが2件以上収集され、描画準備完了（いつでも描けます）になりました。');
+      logDiag('情景情報が揃い、描画準備完了（いつでも描けます）になりました。');
     }
 
     if (changed || sc.status === 'collecting') {
