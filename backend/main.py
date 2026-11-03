@@ -245,14 +245,21 @@ if FRONTEND_DIR.exists():
     app.mount("/app", StaticFiles(directory="frontend"), name="frontend")
 
 
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
 @app.get("/styles.css")
 async def serve_styles_css():
-    return FileResponse(FRONTEND_DIR / "styles.css", media_type="text/css")
+    return FileResponse(FRONTEND_DIR / "styles.css", media_type="text/css", headers=NO_CACHE_HEADERS)
 
 
 @app.get("/app.js")
 async def serve_app_js():
-    return FileResponse(FRONTEND_DIR / "app.js", media_type="application/javascript")
+    return FileResponse(FRONTEND_DIR / "app.js", media_type="application/javascript", headers=NO_CACHE_HEADERS)
 
 
 @app.get("/Omoide_Canvas_User_Manual.pdf")
@@ -276,7 +283,7 @@ async def root_index():
     """ルートアクセス時はフロントエンドの index.html を返す"""
     index_file = FRONTEND_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        return FileResponse(index_file, headers=NO_CACHE_HEADERS)
     return JSONResponse({
         "message": "おもいでキャンバス (omoide-canvas) サーバー稼働中",
         "docs_url": "/docs",

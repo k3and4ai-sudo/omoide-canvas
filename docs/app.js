@@ -121,9 +121,9 @@
     audioContextIn: null,
     audioContextOut: null,
     outputGainNode: null,           // AI音声スピーカー再生用マスターGainNode（音量調整・音割れ防止）
-    speakerVolume: 0.75,            // スピーカー音量（デフォルト75%・スマホでの爆音防止）
+    speakerVolume: 0.60,            // スピーカー音量（デフォルト60%・スマホでの爆音防止）
     isMuted: false,                 // ミュート中フラグ
-    preMuteVolume: 0.75,            // ミュート直前の音量
+    preMuteVolume: 0.60,            // ミュート直前の音量
     analyserNode: null,
     micStream: null,
     cameraStream: null,
@@ -798,7 +798,7 @@
 
     if (dom.speakerVolumeSlider) {
       dom.speakerVolumeSlider.value = Math.round(state.speakerVolume * 100);
-      dom.speakerVolumeSlider.addEventListener('input', (e) => {
+      const onSliderChange = (e) => {
         const val = parseInt(e.target.value, 10);
         state.speakerVolume = val / 100;
         if (val === 0) {
@@ -809,10 +809,13 @@
         }
         updateSpeakerVolumeUI();
         applySpeakerGain();
+        logDiag(`🔊 音量を ${Math.round(state.speakerVolume * 100)}% に設定しました`);
         try {
           localStorage.setItem(STORAGE_KEY_SPEAKER_VOL, state.speakerVolume);
         } catch (e) {}
-      });
+      };
+      dom.speakerVolumeSlider.addEventListener('input', onSliderChange);
+      dom.speakerVolumeSlider.addEventListener('change', onSliderChange);
     }
 
     if (dom.btnVolumeMute) {
@@ -820,18 +823,20 @@
         if (state.isMuted || state.speakerVolume === 0) {
           // ミュート解除
           state.isMuted = false;
-          state.speakerVolume = state.preMuteVolume > 0 ? state.preMuteVolume : 0.75;
+          state.speakerVolume = state.preMuteVolume > 0 ? state.preMuteVolume : 0.60;
           if (dom.speakerVolumeSlider) {
             dom.speakerVolumeSlider.value = Math.round(state.speakerVolume * 100);
           }
+          logDiag(`🔊 音量ミュートを解除しました (${Math.round(state.speakerVolume * 100)}%)`);
         } else {
           // ミュート
-          state.preMuteVolume = state.speakerVolume;
+          state.preMuteVolume = state.speakerVolume > 0 ? state.speakerVolume : 0.60;
           state.isMuted = true;
           state.speakerVolume = 0;
           if (dom.speakerVolumeSlider) {
             dom.speakerVolumeSlider.value = 0;
           }
+          logDiag('🔇 音量をミュートしました');
         }
         updateSpeakerVolumeUI();
         applySpeakerGain();
@@ -3813,8 +3818,13 @@ ${artStyle.svgStyleRules}
     const int16Array = new Int16Array(arrayBuffer);
     const float32Array = new Float32Array(int16Array.length);
 
+    // 物理PCMサンプルの直接音量スケーリング（スマホOSやブラウザのオーディオルーティング・GainNode制限を100%回避）
+    const effectiveVolume = state.isMuted
+      ? 0.0
+      : (typeof state.speakerVolume === 'number' ? Math.max(0, Math.min(1, state.speakerVolume)) : 0.60);
+
     for (let i = 0; i < int16Array.length; i++) {
-      float32Array[i] = int16Array[i] / 32768.0;
+      float32Array[i] = (int16Array[i] / 32768.0) * effectiveVolume;
     }
 
     const audioBuffer = ctx.createBuffer(1, float32Array.length, SAMPLE_RATE_OUT);
@@ -3822,19 +3832,7 @@ ${artStyle.svgStyleRules}
 
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
-
-    // 出力用GainNodeを介して再生（音量調整・スマホでの爆音＆音割れ防止）
-    if (!state.outputGainNode) {
-      state.outputGainNode = ctx.createGain();
-      const targetGain = state.isMuted ? 0 : state.speakerVolume;
-      try {
-        state.outputGainNode.gain.setValueAtTime(targetGain, ctx.currentTime);
-      } catch (e) {
-        state.outputGainNode.gain.value = targetGain;
-      }
-      state.outputGainNode.connect(ctx.destination);
-    }
-    source.connect(state.outputGainNode);
+    source.connect(ctx.destination);
 
     const currentTime = ctx.currentTime;
     if (state.nextPlaybackTime < currentTime) {

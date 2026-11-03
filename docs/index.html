@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261030_09">
+  <link rel="stylesheet" href="styles.css?v=20261103_02">
 </head>
 <body>
 
@@ -20,7 +20,7 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="スマホ音量スライダー・GainNode制御対応版">v20261103_01</span>
+      <span class="app-version-badge" title="PCM物理振幅直接スケーリング＆キャッシュ無効化対応版">v20261103_02</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
@@ -123,11 +123,11 @@
       <div class="speaker-volume-card" id="speakerVolumeCard">
         <div class="volume-header">
           <span class="volume-label">🔊 さくらさんの声の大きさ</span>
-          <span class="volume-value" id="speakerVolumeValue">75%</span>
+          <span class="volume-value" id="speakerVolumeValue">60%</span>
         </div>
         <div class="volume-control-row">
           <button type="button" id="btnVolumeMute" class="btn-volume-mute" title="ミュート切替" aria-label="音量ミュート切替">🔊</button>
-          <input type="range" id="speakerVolumeSlider" class="volume-slider" min="0" max="100" value="75" step="5" aria-label="さくらさんの声の大きさ調整">
+          <input type="range" id="speakerVolumeSlider" class="volume-slider" min="0" max="100" value="60" step="5" aria-label="さくらさんの声の大きさ調整">
         </div>
       </div>
 
@@ -648,6 +648,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261030_09"></script>
+  <script src="app.js?v=20261103_02"></script>
 </body>
 </html>
