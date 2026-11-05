@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261103_04">
+  <link rel="stylesheet" href="styles.css?v=20261105_01">
 </head>
 <body>
 
@@ -20,7 +20,7 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="開始直後の誤描画防止＆3ステップ順次情景聞き取り厳格化版">v20261103_04</span>
+      <span class="app-version-badge" title="Gemini Live切断・1011エラー防止＆エコー耐性・復旧強化版">v20261105_01</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
@@ -224,7 +224,7 @@
           </div>
         </div>
 
-        <!-- 思い出情景メモ・収集インジケーター（3ステップ聞き取り ＆ 項目別クリア） -->
+        <!-- 思い出情景メモ・収集インジケーター（6ステップ細分化聞き取り・複数同時埋め・スキップ・確認＆再聞き取り対応） -->
         <div class="scene-collector-panel" id="sceneCollectorPanel">
           <div class="collector-header">
             <div class="collector-status-pill" id="collectorStatusPill">
@@ -232,23 +232,24 @@
               <span class="collector-status-label" id="collectorStatusLabel">日常のおしゃべり中</span>
             </div>
             <div class="collector-header-actions">
-              <button type="button" class="btn-start-listening" id="btnStartListening" title="さくらさんと一緒に絵画のための聞き取りを開始します">
+              <button type="button" class="btn-start-listening" id="btnStartListening" title="さくらさんと一緒に絵画のための6ステップ聞き取りを開始します">
                 🎙️ 聞き取り開始
               </button>
-              <div class="collector-counter" id="collectorCounter">情景ディテール: <strong id="collectorDetailCount">0</strong> 件</div>
+              <div class="collector-counter" id="collectorCounter">進捗: <strong id="collectorStepProgress">0/6</strong> 項目 (様子 <strong id="collectorDetailCount">0</strong> 件)</div>
             </div>
           </div>
 
           <div class="collector-cards-grid" id="collectorCardsGrid">
-            <!-- ステップ1: タイトル・話題 -->
-            <div class="collector-card active-focus" id="cardTopic" data-step="topic">
+            <!-- ステップ1: 話題・テーマ -->
+            <div class="collector-card" id="cardTopic" data-step="topic">
               <div class="card-header-row">
                 <div class="card-title-group">
                   <span class="card-icon">🏷️</span>
-                  <span class="card-title">① 話題</span>
+                  <span class="card-title">① 話題・テーマ</span>
                 </div>
                 <div class="card-btn-group">
-                  <button type="button" class="btn-card-focus active" id="btnFocusTopic" title="この項目を聞き取る">🎙️ 聞く</button>
+                  <button type="button" class="btn-card-focus" id="btnFocusTopic" title="この項目を聞き取る">🎙️ 聞く</button>
+                  <button type="button" class="btn-card-skip" id="btnSkipTopic" title="この項目をスキップして次へ">⏭️</button>
                   <button type="button" class="btn-card-clear" id="btnClearTopic" title="話題を取り消し・クリア">🗑️</button>
                 </div>
               </div>
@@ -264,50 +265,108 @@
                 </div>
                 <div class="card-btn-group">
                   <button type="button" class="btn-card-focus" id="btnFocusPlace" title="この項目を聞き取る">🎙️ 聞く</button>
+                  <button type="button" class="btn-card-skip" id="btnSkipPlace" title="この項目をスキップして次へ">⏭️</button>
                   <button type="button" class="btn-card-clear" id="btnClearPlace" title="場所を取り消し・クリア">🗑️</button>
                 </div>
               </div>
               <span class="card-val" id="valPlace">未特定</span>
             </div>
 
-            <!-- ステップ3: 情景ディテール -->
+            <!-- ステップ3: 天候・明暗 -->
+            <div class="collector-card" id="cardWeather" data-step="weather">
+              <div class="card-header-row">
+                <div class="card-title-group">
+                  <span class="card-icon">🌤️</span>
+                  <span class="card-title">③ 天候・明暗</span>
+                </div>
+                <div class="card-btn-group">
+                  <button type="button" class="btn-card-focus" id="btnFocusWeather" title="この項目を聞き取る">🎙️ 聞く</button>
+                  <button type="button" class="btn-card-skip" id="btnSkipWeather" title="この項目をスキップして次へ">⏭️</button>
+                  <button type="button" class="btn-card-clear" id="btnClearWeather" title="天候・明暗を取り消し・クリア">🗑️</button>
+                </div>
+              </div>
+              <span class="card-val" id="valWeather">未特定</span>
+            </div>
+
+            <!-- ステップ4: 登場人物 -->
+            <div class="collector-card" id="cardPeople" data-step="people">
+              <div class="card-header-row">
+                <div class="card-title-group">
+                  <span class="card-icon">👥</span>
+                  <span class="card-title">④ 登場人物</span>
+                </div>
+                <div class="card-btn-group">
+                  <button type="button" class="btn-card-focus" id="btnFocusPeople" title="この項目を聞き取る">🎙️ 聞く</button>
+                  <button type="button" class="btn-card-skip" id="btnSkipPeople" title="この項目をスキップして次へ">⏭️</button>
+                  <button type="button" class="btn-card-clear" id="btnClearPeople" title="登場人物を取り消し・クリア">🗑️</button>
+                </div>
+              </div>
+              <span class="card-val" id="valPeople">未特定</span>
+            </div>
+
+            <!-- ステップ5: 見えたもの・様子 -->
             <div class="collector-card collector-card-details" id="cardDetails" data-step="details">
               <div class="card-header-row">
                 <div class="card-title-group">
                   <span class="card-icon">🎨</span>
-                  <span class="card-title">③ 情景ディテール</span>
+                  <span class="card-title">⑤ 見えたもの・様子</span>
                 </div>
                 <div class="card-btn-group">
                   <button type="button" class="btn-card-focus" id="btnFocusDetails" title="この項目を聞き取る">🎙️ 聞く</button>
-                  <button type="button" class="btn-card-clear" id="btnClearDetails" title="ディテールを全消去">🗑️</button>
+                  <button type="button" class="btn-card-skip" id="btnSkipDetails" title="この項目をスキップして次へ">⏭️</button>
+                  <button type="button" class="btn-card-clear" id="btnClearDetails" title="見えたもの・様子を全消去">🗑️</button>
                 </div>
               </div>
               <div class="card-tags-list" id="valDetailsList">
                 <span class="tag-placeholder">聞き取りが始まるとここにメモされます</span>
               </div>
             </div>
+
+            <!-- ステップ6: 気分・雰囲気 -->
+            <div class="collector-card" id="cardMood" data-step="mood">
+              <div class="card-header-row">
+                <div class="card-title-group">
+                  <span class="card-icon">💖</span>
+                  <span class="card-title">⑥ 気分・雰囲気</span>
+                </div>
+                <div class="card-btn-group">
+                  <button type="button" class="btn-card-focus" id="btnFocusMood" title="この項目を聞き取る">🎙️ 聞く</button>
+                  <button type="button" class="btn-card-skip" id="btnSkipMood" title="この項目をスキップして次へ">⏭️</button>
+                  <button type="button" class="btn-card-clear" id="btnClearMood" title="気分・雰囲気を取り消し・クリア">🗑️</button>
+                </div>
+              </div>
+              <span class="card-val" id="valMood">未特定</span>
+            </div>
           </div>
 
-          <!-- 描き直し・修正アクション（絵が描かれた後にいつでも最新情景で描き直せる） -->
+          <!-- 描画完了後の保存確認・通常会話移行 ＆ 描き直しアクションバー -->
           <div class="collector-refine-bar hidden" id="collectorRefineBar">
-            <span class="refine-hint" id="refineHintText">💡 「夕焼けにして」「お花を置いて」と声で修正するか、ボタンを押して描き直せます</span>
-            <button type="button" class="btn-refine-now" id="btnRefineNow" title="集まった情景や修正指示を反映して再描画します">
-              🎨 この内容で描き直す
-            </button>
+            <span class="refine-hint" id="refineHintText">💡 絵が完成しました！「この雰囲気でよい」とお話しいただくか、保存して通常会話に戻れます</span>
+            <div class="refine-bar-actions" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <button type="button" class="btn-confirm-draw" id="btnSaveAndFinish" title="絵を保存して絵画モードを終了し、通常のおしゃべりに戻ります">
+                💾 保存して通常会話へ戻る
+              </button>
+              <button type="button" class="btn-more-talk" id="btnFinishWithoutSave" title="保存せずに絵画モードを終了し、通常のおしゃべりに戻ります">
+                💬 保存せず通常会話へ
+              </button>
+              <button type="button" class="btn-refine-now" id="btnRefineNow" title="集まった情景や修正指示を反映して再描画します">
+                🎨 修正・描き直す
+              </button>
+            </div>
           </div>
 
-          <!-- 確認・描画アクションバナー（AIが描画を確認した時や情景がまとまった時に出現） -->
+          <!-- 一通りの聞き取り完了後の内容確認・再聞き取り・描画アクションバナー -->
           <div class="collector-action-banner hidden" id="collectorActionBanner">
             <div class="banner-message">
               <span class="banner-sparkle">✨</span>
-              <span class="banner-text" id="collectorActionText">情景がまとまりました！キャンバスに描いてみましょうか？</span>
+              <span class="banner-text" id="collectorActionText">一通りの聞き取りが終わりました！この内容でキャンバスに描いてよろしいですか？</span>
             </div>
             <div class="banner-buttons">
               <button type="button" class="btn-confirm-draw" id="btnConfirmDraw">
-                🎨 はい、描いてください
+                🎨 はい、この内容で描く
               </button>
               <button type="button" class="btn-more-talk" id="btnMoreTalk">
-                🗣️ もう少しお話しする
+                🔄 修正・再度聞き取りする
               </button>
             </div>
           </div>
@@ -648,6 +707,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261103_04"></script>
+  <script src="app.js?v=20261105_01"></script>
 </body>
 </html>

@@ -37,6 +37,10 @@
   -webkit-font-smoothing: antialiased;
 }
 
+.hidden {
+  display: none !important;
+}
+
 body {
   font-family: 'Zen Maru Gothic', 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif;
   background-color: var(--bg-warm);
@@ -82,12 +86,12 @@ body {
 }
 
 .app-version-badge {
-  font-size: 11px;
+  font-size: calc(11px + 2pt);
   font-weight: 700;
   color: #8c6e39;
   background: #fdf5e6;
   border: 1px solid #ebd8b7;
-  padding: 2px 7px;
+  padding: 3px 9px;
   border-radius: var(--radius-full);
   letter-spacing: 0.03em;
   white-space: nowrap;
@@ -1039,29 +1043,80 @@ body {
 
 .collector-cards-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.6fr;
-  gap: 10px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
   align-items: stretch;
+}
+
+@media (max-width: 900px) {
+  .collector-cards-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 .collector-card {
   background: #ffffff;
   border: 1.5px solid #e6ded3;
   border-radius: 9px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   transition: all 0.2s ease;
   position: relative;
 }
 
+.collector-card.is-filled:not(.active-focus) {
+  border-color: #79a572;
+  background: #fafdf9;
+}
+
+.collector-card.is-skipped:not(.active-focus) {
+  border-style: dashed;
+  border-color: #d6cfc2;
+  background: #f9f7f3;
+  opacity: 0.85;
+}
+
+.collector-card.is-skipped .card-val {
+  color: #8c8273;
+  font-style: italic;
+  font-weight: 500;
+}
+
+@keyframes activeListeningCardBlink {
+  0%, 100% {
+    border-color: #d97706;
+    background: linear-gradient(135deg, #fffdf6 0%, #ffefcc 100%);
+    box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.35), 0 3px 10px rgba(217, 119, 6, 0.18);
+  }
+  50% {
+    border-color: #fde68a;
+    background: #ffffff;
+    box-shadow: 0 0 0 1px rgba(217, 119, 6, 0.06), 0 1px 2px rgba(0, 0, 0, 0.03);
+  }
+}
+
+@keyframes activeListeningBadgeBlink {
+  0%, 100% {
+    opacity: 1;
+    background: #d97706;
+    box-shadow: 0 0 8px rgba(217, 119, 6, 0.55);
+  }
+  50% {
+    opacity: 0.35;
+    background: #f59e0b;
+    box-shadow: none;
+  }
+}
+
 .collector-card.active-focus {
-  border: 2px solid var(--accent);
+  border: 2px solid #d97706;
   background: linear-gradient(135deg, #fffdf8 0%, #fff8eb 100%);
-  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.16), 0 2px 6px rgba(0,0,0,0.05);
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.25), 0 2px 6px rgba(0,0,0,0.05);
+  animation: activeListeningCardBlink 1.1s ease-in-out infinite;
 }
 
 .card-header-row {
@@ -1124,6 +1179,25 @@ body {
   background: var(--accent);
   color: #ffffff;
   border-color: var(--accent);
+  animation: activeListeningBadgeBlink 1.1s ease-in-out infinite;
+}
+
+.btn-card-skip {
+  padding: 2px 5px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid #d5cbba;
+  background: #faf6ee;
+  color: #665c4e;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.3;
+}
+
+.btn-card-skip:hover {
+  background: #efe5d4;
+  border-color: #b8a386;
+  color: #3f3627;
 }
 
 .btn-card-clear {
@@ -1145,7 +1219,7 @@ body {
 }
 
 .collector-card .card-val {
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--text-main);
   white-space: nowrap;
@@ -1156,7 +1230,7 @@ body {
 }
 
 .collector-card-details {
-  grid-column: 3;
+  min-width: 0;
 }
 
 .card-tags-list {

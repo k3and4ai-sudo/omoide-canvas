@@ -8,11 +8,13 @@ Gemini Live API 双方向セッション管理モジュール (backend/live_sess
 """
 
 import os
+import re
 import time
 import json
 import base64
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Optional, List
 from fastapi import WebSocket
 
@@ -83,8 +85,68 @@ class LiveSessionManager:
         self.echo_guard_until: float = time.time() + 2.5  # セッション開始時〜最初の挨拶完了まで保護
         self.ai_playback_until: float = 0.0              # AI返答音声の推定再生完了時刻
         self.echo_dropped_packets: int = 0               # エコーガードにより遮断したマイクパケット数
+        self.last_ai_output_time: float = 0.0            # Geminiが最後に返答音声/字幕を出力した時刻
+        self.last_gemini_input_time: float = 0.0         # Geminiが最後にinput_transcriptionを出力した時刻
+        self.user_transcript_seq: int = 0                # user_transcript受信シーケンス番号（無応答時フォールバック用）
+        self.input_trans_seq: int = 0                    # Gemini input_transcription シーケンス番号
+        self.collector_status: str = "idle"              # フロントエンドの6ステップ収集状態 ('idle'|'collecting'|'confirming'|'ready'|'drawing'|'drawn')
+        self.collector_active_step: str = "topic"        # 現在聞き取り中のステップ
+        self.collector_completed_count: int = 0          # 6ステップのうち完了（入力済またはスキップ済）した数
+        self.collector_summary: str = ""                 # 6ステップの要約文字列
+        self.ai_asked_confirmation: bool = False         # AIが「一通りお話を伺いました〜よろしいでしょうか？」と最終確認を尋ねたか
+        self.user_confirmed_drawing: bool = False        # 最終確認に対してご本人が「はい・描いてください」と承認したか
+        self.is_generating_media: bool = False           # 現在バックエンドで画像生成が進行中か
         self.last_draw_time: float = 0.0                # 連続描画防止・クォータ保護用タイムスタンプ
         self.MIN_DRAW_INTERVAL_SEC: float = 120.0       # 描画間隔の最小時間（2分 = 120秒）
+
+    def _check_user_utterance_for_draw_approval(self, user_text: str) -> None:
+        """
+        6ステップ聞き取り完了後の最終確認（confirming / ready）に対して、
+        ご本人が明確に「はい」「このままでいいです」「描いてください」と承認されたかを判定する。
+        ※聞き取り確認の前にフライングで描画が始まるのを防ぐため、このフラグが True になるまで generate_memory_visual を許可しない。
+        """
+        if not user_text:
+            return
+        clean = re.sub(r"\s+", "", user_text.strip())
+        if len(clean) < 2:
+            return
+        # すでに描画完了（drawn）または描画中（drawing）の場合は新規描画承認にしない
+        if self.collector_status in ("drawing", "drawn") or self.is_generating_media:
+            return
+
+        modify_or_reject_words = (
+            "修正", "直して", "変えて", "変更", "やり直し", "もう一度", "もう一回",
+            "聞き取り", "聞いて", "違う", "ちがう", "まだ", "いいえ", "いや", "待って"
+        )
+        if any(mw in clean for mw in modify_or_reject_words):
+            return
+
+        # 明示的な即時描画指示（「このまま絵を描いてください」「今すぐ描いて」等）
+        explicit_draw_cmds = (
+            "今すぐ描いて", "今すぐ書いて", "このまま絵を描いて", "このまま絵を書いて",
+            "このまま描いて", "このまま書いて", "絵を描いてください", "絵を書いてください",
+            "キャンバスに描いて", "キャンバスに書いて", "この内容で描いて", "この内容で書いて"
+        )
+        if any(cmd in clean for cmd in explicit_draw_cmds) and (
+            self.collector_status in ("confirming", "ready")
+            or self.ai_asked_confirmation
+            or self.collector_completed_count >= 5
+        ):
+            self.user_confirmed_drawing = True
+            logger.info(f"User explicitly approved drawing command: '{clean}'")
+            return
+
+        # AIが最終確認（「一通りお話を伺いました〜よろしいでしょうか？」）を尋ねた後の肯定返答
+        if self.collector_status in ("confirming", "ready") or self.ai_asked_confirmation:
+            approval_words = (
+                "はい", "うん", "ええ", "いいよ", "いいですよ", "いいです", "良いです", "よいです",
+                "これでいい", "これで良い", "このまま", "大丈夫", "問題ない", "問題ありません",
+                "間違いありません", "お願い", "描いて", "書いて", "そうして", "ぜひ", "よろしく",
+                "OK", "オッケー"
+            )
+            if any(aw in clean for aw in approval_words):
+                self.user_confirmed_drawing = True
+                logger.info(f"User confirmed 6-step summary for drawing: '{clean}'")
 
     async def run(self):
         """セッションの開始・メインループ管理（ユーザー自身のセッションAPIキーを使用）"""
@@ -211,14 +273,22 @@ class LiveSessionManager:
                         p_name = partner.name if (partner and partner.name) else "さくら"
                         topic_for_resume = (self.last_art or self.recent_topic or (self.discussed_topics[-1] if self.discussed_topics else "")).strip()
 
-                        if self.is_resume and topic_for_resume:
-                            initial_greeting_prompt = (
-                                f"対話セッションが再開されました。あなたの名前は「{p_name}」です。"
-                                f"直前まで{nickname}と「{topic_for_resume}」について楽しくお話ししていました。"
-                                f"{nickname}に向かって、「{nickname}、先ほどの{topic_for_resume}のお話の続きをしましょうか！」や"
-                                f"「{topic_for_resume}の続きを聞かせてくださいね」のように、"
-                                f"初対面の挨拶（こんにちは、今日もお元気でしたか等）は完全に省略して、直前のお話の続きを自然に促す温かい第一声を声に出して話しかけてください。"
-                            )
+                        if self.is_resume and (topic_for_resume or self.collector_status != "idle"):
+                            ctx_desc = f"「{topic_for_resume}」" if topic_for_resume else "先ほど"
+                            if self.collector_status in ("collecting", "confirming", "ready"):
+                                initial_greeting_prompt = (
+                                    f"対話セッションが自動復旧しました。あなたの名前は「{p_name}」です。"
+                                    f"直前まで{nickname}と絵を描くための聞き取り（話題：{ctx_desc}、ステップ：{self.collector_active_step}）を行っていました。"
+                                    f"{nickname}に向かって、「{nickname}、先ほどの{ctx_desc}のお話の続きを伺ってもよろしいですか？」のように、"
+                                    f"初対面の挨拶（こんにちは、今日もお元気でしたか等）は絶対に言わず、直前の思い出聞き取りの続きを自然に促す温かい声かけをしてください。"
+                                )
+                            else:
+                                initial_greeting_prompt = (
+                                    f"対話セッションが再開されました。あなたの名前は「{p_name}」です。"
+                                    f"直前まで{nickname}と{ctx_desc}について楽しくお話ししていました。"
+                                    f"{nickname}に向かって、「{nickname}、先ほどの{ctx_desc}のお話の続きをしましょうか！」のように、"
+                                    f"初対面の挨拶（こんにちは、今日もお元気でしたか等）は完全に省略して、直前のお話の続きを自然に促す温かい第一声を声に出して話しかけてください。"
+                                )
                         else:
                             initial_greeting_prompt = (
                                 f"対話セッションが開始されました。あなたの名前は「{p_name}」です。"
@@ -246,6 +316,25 @@ class LiveSessionManager:
 
                         for task in pending:
                             task.cancel()
+
+                        # タスク終了時のエラーログ
+                        for task in done:
+                            if not task.cancelled() and task.exception():
+                                logger.warning(f"Relay task raised exception: {task.exception()}")
+
+                        # クライアントとのWebSocketが生きていてリレーループを抜けた場合はGeminiの異常切断なので再接続準備
+                        if self.is_active:
+                            reconnect_attempts += 1
+                            self.is_resume = True
+                            if self.discussed_topics:
+                                self.recent_topic = self.discussed_topics[-1]
+                            if reconnect_attempts < max_reconnects:
+                                logger.info(f"Reconnecting to Gemini Live API in 1.0s... ({reconnect_attempts}/{max_reconnects})")
+                                await asyncio.sleep(1.0)
+                            else:
+                                logger.error(f"Exceeded max reconnect attempts ({max_reconnects}). Terminating session.")
+                                await self.websocket.send_json({"type": "error", "message": "Gemini Live APIとの接続が連続して切断されました。"})
+                                break
 
                 except Exception as e:
                     logger.warning(f"Live session connection warning (attempt {reconnect_attempts + 1}): {e}")
@@ -319,61 +408,312 @@ class LiveSessionManager:
                         self.ai_playback_until = 0.0
                         logger.debug("Received ai_speech_ended: echo guard released immediately.")
 
+                    elif msg_type == "collector_sync":
+                        # フロントエンドの6ステップ聞き取り状態・進捗をリアルタイム同期
+                        new_status = data.get("status", self.collector_status)
+                        # すでに描画完了（drawn）または描画中（drawing）の時に、古い confirming 状態への巻き戻りを防ぐ
+                        if self.collector_status == "drawn" and new_status == "confirming":
+                            pass
+                        elif self.is_generating_media and new_status in ("collecting", "confirming", "ready"):
+                            pass
+                        else:
+                            self.collector_status = new_status
+                        self.collector_active_step = data.get("active_step", self.collector_active_step)
+                        self.collector_completed_count = int(data.get("completed_count", self.collector_completed_count))
+                        self.collector_summary = (data.get("summary") or "").strip()
+                        if data.get("draw_confirmed") is True:
+                            self.user_confirmed_drawing = True
+                            self.ai_asked_confirmation = True
+                        elif new_status in ("idle", "collecting"):
+                            self.user_confirmed_drawing = False
+                            self.ai_asked_confirmation = False
+
                     elif msg_type == "eos":
-                        # クライアント側VADが発話終了を検知した瞬間、Geminiへ即座に音声ストリーム区切りを通知して爆速返答させる
+                        # 文字起こし完了に基づく発話区切り通知
+                        if self.current_user_turn_text.strip():
+                            full_user_utt = re.sub(r'(?<=[\u3040-\u30ff\u4e00-\u9faf])\s+(?=[\u3040-\u30ff\u4e00-\u9faf])', '', self.current_user_turn_text.strip())
+                            self._check_user_utterance_for_draw_approval(full_user_utt)
+                            noise_words = [
+                                "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
+                                "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
+                                "さくらさんは", "お天気は", "いい天気", "悪くない", "何もしてない", "ブラブラ",
+                                "絵を描いてみたい", "絵を描きたい", "絵を書きたい", "描いてみたい", "聞き取り"
+                            ]
+                            if not any(w in full_user_utt for w in noise_words) and len(full_user_utt) >= 2:
+                                self.discussed_topics.append(full_user_utt)
+                            await self.websocket.send_json({
+                                "type": "transcript",
+                                "role": "user",
+                                "text": full_user_utt,
+                                "turn_complete": True
+                            })
+                            self.current_user_turn_text = ""
                         try:
                             await session.send_realtime_input(audio_stream_end=True)
                         except Exception as eos_err:
                             logger.debug(f"audio_stream_end notice: {eos_err}")
 
                     elif msg_type == "start_listening":
-                        # 画面上で「🎙️ 聞き取り開始」が押された時、さくらさんに3ステップ聞き取りの第一声を促す
+                        # 画面上で「🎙️ 聞き取り開始」が押された時、さくらさんに6ステップ聞き取りの第一声を促す
                         logger.info("User triggered start_listening button.")
-                        self.echo_guard_until = time.time() + 2.5
+                        self.collector_status = "collecting"
+                        self.collector_active_step = "topic"
+                        self.ai_asked_confirmation = False
+                        self.user_confirmed_drawing = False
                         try:
                             await session.send_client_content(
                                 turns=[types.Content(role="user", parts=[types.Part.from_text(
-                                    text="画面の「🎙️ 聞き取り開始」ボタンが押されました。「それでは絵画のための聞き取りをしますね。まず、どんな思い出の絵を描きましょうか？テーマや話題を教えていただけますか？」と優しく声に出して尋ね、ステップ①（話題）の聞き取りを開始してください。"
+                                    text="画面の「🎙️ 聞き取り開始」ボタンが押されました。「それでは絵画のための聞き取りをしますね。まず、どんな思い出の絵を描きましょうか？テーマや話題を教えていただけますか？」と優しく声に出して尋ね、ステップ①（話題・テーマ）の聞き取りを開始してください。※この時点では絶対に generate_memory_visual ツールを呼び出さないでください。"
                                 )])],
                                 turn_complete=True
                             )
                         except Exception as sl_err:
                             logger.warning(f"Failed to send start_listening prompt: {sl_err}")
 
+                    elif msg_type == "re_listen":
+                        # 一通りの聞き取り完了後、またはカード選択により再度聞き取り・修正を行う
+                        target_step = data.get("target_step", "")
+                        summary_str = (data.get("summary") or "").strip()
+                        self.collector_status = "collecting"
+                        self.ai_asked_confirmation = False
+                        self.user_confirmed_drawing = False
+                        if target_step:
+                            self.collector_active_step = target_step
+                        step_prompts = {
+                            "topic": "ステップ①【話題・テーマ】について、「どんな思い出のテーマに修正・変更しましょうか？」と優しく声に出して尋ねてください。",
+                            "place": "ステップ②【場所・舞台】について、「どんな場所や舞台だったか、もう一度教えていただけますか？」と優しく声に出して尋ねてください。",
+                            "weather": "ステップ③【天候・明暗】について、「その時の季節やお天気、時間帯や明るさはどうだったか、教えていただけますか？」と優しく声に出して尋ねてください。",
+                            "people": "ステップ④【登場人物】について、「そこにはどなたがいらっしゃったか、教えていただけますか？」と優しく声に出して尋ねてください。",
+                            "details": "ステップ⑤【見えたもの・様子】について、「周りに見えたものやその時の様子について、追加や修正があれば教えていただけますか？」と優しく声に出して尋ねてください。",
+                            "mood": "ステップ⑥【気分・雰囲気】について、「その時はどんなお気持ちや雰囲気だったか、教えていただけますか？」と優しく声に出して尋ねてください。",
+                        }
+                        if target_step in step_prompts:
+                            rl_prompt = f"ご本人が項目の再聞き取り・修正を希望されました（現在のまとめ：{summary_str or '聞き取り中'}）。{step_prompts[target_step]} ※今はまだ再聞き取り中ですので generate_memory_visual ツールは呼ばないでください。"
+                        else:
+                            rl_prompt = (
+                                f"ご本人が聞き取り内容の修正・再聞き取りを希望されました（現在のまとめ：{summary_str or 'なし'}）。"
+                                f"「かしこまりました！もう一度聞き取りを行いますね。話題・場所・お天気・登場人物・見えた様子・雰囲気のうち、どの項目を修正・追加しましょうか？」と優しく声に出して尋ねてください。※今はまだ再聞き取り中ですので generate_memory_visual ツールは呼ばないでください。"
+                            )
+                        logger.info(f"User triggered re_listen (target_step={target_step})")
+                        try:
+                            await session.send_client_content(
+                                turns=[types.Content(role="user", parts=[types.Part.from_text(text=rl_prompt)])],
+                                turn_complete=True
+                            )
+                        except Exception as rl_err:
+                            logger.warning(f"Failed to send re_listen prompt: {rl_err}")
+
+                    elif msg_type == "prompt_followup":
+                        # 会話が3秒以上途切れた際、直前の会話から関連する質問をするか、次の思い出聞き取り項目・最終確認の質問を促す
+                        active_step = data.get("active_step", "topic")
+                        status = data.get("status", "collecting")
+                        reason = data.get("reason", "listening_next_step")
+                        # 描画中または描画完了後は3秒無音フォローアップで聞き取り確認を繰り返させない！
+                        if status in ("drawing", "drawn") or self.collector_status in ("drawing", "drawn") or self.is_generating_media:
+                            logger.debug(f"Skipping prompt_followup because status is {status}/{self.collector_status}.")
+                            continue
+
+                        self.collector_status = status
+                        self.collector_active_step = active_step
+                        topic = (data.get("topic") or "").strip()
+                        place = (data.get("place") or "").strip()
+                        weather = (data.get("weather") or "").strip()
+                        people = (data.get("people") or "").strip()
+                        details = data.get("details") or []
+                        mood = (data.get("mood") or "").strip()
+                        summary = (data.get("summary") or "").strip()
+                        if summary:
+                            self.collector_summary = summary
+                        last_user_text = (data.get("last_user_text") or "").strip() or (self.discussed_topics[-1] if self.discussed_topics else "")
+                        last_ai_text = (data.get("last_ai_text") or "").strip()
+                        raw_name = (self.profile.call_name or "お父さん").strip()
+                        nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+
+                        # お父さんの発話にまだAIが返答していない場合のみ「直前の発話への共感」を指示し、
+                        # すでにAIが一度発話済み（ai_no_question / listening_next_step 等）の場合は過去の挨拶を繰り返させない！
+                        if reason == "after_user_speech" and last_user_text:
+                            empathy_prefix = f"直前に{nickname}が「{last_user_text}」と話されました。まずその言葉に短く温かく共感して答えた上で、"
+                        else:
+                            empathy_prefix = (
+                                f"（※直前のやり取り「{last_ai_text[-40:] if last_ai_text else ''}」の続きです。"
+                                f"すでに挨拶や直前の発話への相槌は済んでいますので、「私も元気です」「元気だったんですね」等の挨拶や過去の相槌は絶対に繰り返さず、そのまま続けて）"
+                            )
+
+                        if status == "idle":
+                            if reason == "after_user_speech" and last_user_text:
+                                followup_prompt = (
+                                    f"{empathy_prefix}そのお話に関連する優しい質問を1つだけ声に出して問いかけて会話を続けてください。"
+                                    f"※今は日常会話中ですので generate_memory_visual ツールは絶対に呼ばないでください。"
+                                )
+                            else:
+                                followup_prompt = (
+                                    f"{empathy_prefix}{nickname}に「ところで、何か懐かしい思い出の絵をキャンバスに描いてみませんか？」または日常の優しい質問を1つだけ声に出して問いかけてください。"
+                                    f"※generate_memory_visual ツールは絶対に呼ばないでください。"
+                                )
+                        elif status in ("confirming", "ready") or active_step == "confirm":
+                            self.ai_asked_confirmation = True
+                            summary_desc = summary or f"話題：{topic or 'おまかせ'}、場所：{place or 'おまかせ'}、天候：{weather or 'おまかせ'}、登場人物：{people or 'おまかせ'}、様子：{'・'.join(details) if details else 'おまかせ'}、雰囲気：{mood or 'おまかせ'}"
+                            followup_prompt = (
+                                f"6ステップの聞き取りが一通り完了しました（聞き取った内容：{summary_desc}）。"
+                                f"{empathy_prefix}{nickname}に向かって、「一通りお話を伺いました！{summary_desc}、という内容でよろしいでしょうか？もし修正したいところやもう一度お話ししたい項目があれば教えてくださいね。この内容で絵を描いてもよろしいでしょうか？」と優しく声に出して確認してください。"
+                                f"※【厳守】ご本人が「はい・お願いします」と返答されるまでは、絶対に generate_memory_visual ツールを呼ばないでください。"
+                            )
+                        elif active_step == "topic":
+                            followup_prompt = (
+                                f"現在は絵画のための6ステップ聞き取り・ステップ①【話題・テーマ】の段階です。"
+                                f"{empathy_prefix}「それでは絵画のための聞き取りをしますね。まずステップ①として、どんな思い出の絵を描きましょうか？例えば昔の運動会やご旅行、故郷の風景など、テーマや話題を教えていただけますか？」と1つだけ優しく声に出して質問してください。"
+                                f"※【厳守】今はステップ①の聞き取り中ですので、前の挨拶に戻ったり generate_memory_visual ツールを呼び出したりしてはいけません。"
+                            )
+                        elif active_step == "place":
+                            followup_prompt = (
+                                f"思い出聞き取り中（①話題：「{topic}」）です。"
+                                f"{empathy_prefix}現在確認中のステップ②【場所・舞台】として「その{topic or '思い出'}は、どんな場所や舞台でしたか？」と1つだけテンポよく声に出して質問してください。※まだ聞き取り途中ですので挨拶に戻ったり generate_memory_visual ツールを呼んではいけません。"
+                            )
+                        elif active_step == "weather":
+                            followup_prompt = (
+                                f"思い出聞き取り中（①話題：「{topic}」、②場所：「{place or 'スキップ'}」）です。"
+                                f"{empathy_prefix}現在確認中のステップ③【天候・明暗】として「その時の季節やお天気、時間帯や明るさはどうでしたか？例えば秋晴れの明るいお昼や、夕暮れ時など教えていただけますか？」と1つだけテンポよく声に出して質問してください。※まだ聞き取り途中ですので generate_memory_visual ツールは絶対に呼ばないでください。"
+                            )
+                        elif active_step == "people":
+                            followup_prompt = (
+                                f"思い出聞き取り中（①話題：「{topic}」、②場所：「{place or 'スキップ'}」、③天候：「{weather or 'スキップ'}」）です。"
+                                f"{empathy_prefix}現在確認中のステップ④【登場人物】として「そこにはどなたがいらっしゃいましたか？お友達やご家族、それとも風景だけでしたか？」と1つだけテンポよく声に出して質問してください。※まだ聞き取り途中ですので generate_memory_visual ツールは絶対に呼ばないでください。"
+                            )
+                        elif active_step == "details":
+                            followup_prompt = (
+                                f"思い出聞き取り中（①話題：「{topic}」、②場所：「{place or 'スキップ'}」）です。"
+                                f"{empathy_prefix}現在確認中のステップ⑤【見えたもの・様子】として「その時、周りにはどんなものが見えましたか？どんな様子だったか教えていただけますか？」と1つだけテンポよく声に出して質問してください。※まだ聞き取り途中ですので generate_memory_visual ツールは絶対に呼ばないでください。"
+                            )
+                        else:  # mood
+                            followup_prompt = (
+                                f"思い出聞き取り中（①話題：「{topic}」、⑤様子：「{'、'.join(details) if details else 'スキップ'}」）です。"
+                                f"{empathy_prefix}最後の項目であるステップ⑥【気分・雰囲気】として「その時はどんなお気持ちや雰囲気でしたか？例えば賑やかで楽しかった、穏やかで懐かしかったなど教えていただけますか？」と1つだけテンポよく声に出して質問してください。※まだ聞き取り途中ですので generate_memory_visual ツールは絶対に呼ばないでください。"
+                            )
+
+                        logger.info(f"Triggering 3s silence follow-up (reason={reason}, step={active_step}, status={status}, last_user='{last_user_text}')")
+                        try:
+                            await session.send_client_content(
+                                turns=[types.Content(role="user", parts=[types.Part.from_text(text=followup_prompt)])],
+                                turn_complete=True
+                            )
+                        except Exception as fu_err:
+                            logger.warning(f"Failed to send prompt_followup: {fu_err}")
+
                     elif msg_type == "user_transcript":
-                        # ブラウザ音声認識で確定した字幕テキスト（話題記録・情景抽出・日報用 ＆ 音声不感帯フォールバック）
+                        # ブラウザ音声認識（Web Speech API）または文字起こし確定テキスト
                         user_text = data.get("text", "").strip()
+                        incoming_status = data.get("collector_status")
+                        if incoming_status:
+                            if not (self.collector_status == "drawn" and incoming_status == "confirming"):
+                                self.collector_status = incoming_status
+
+                        # AI発話中または再生直後のエコーガード期間中に届いたテキストのフィルタリング
+                        now_ts = time.time()
+                        if now_ts < self.echo_guard_until:
+                            # AIが直前に喋ったフレーズ（または挨拶単語）が含まれる短いテキストはエコーと判定して破棄
+                            last_ai = self.current_ai_turn_text or ""
+                            echo_candidates = ["ありがとうございます", "ありがとう", "こんにちは", "こんばんは", "お元気でしたか", "お父さん", "さくら"]
+                            if any(ec in user_text for ec in echo_candidates) or (last_ai and any(w in last_ai for w in user_text.split() if len(w) >= 2)):
+                                logger.info(f"[EchoGuard] Dropped echo user_transcript: '{user_text}' during AI speech playback guard.")
+                                continue
+
                         if user_text:
                             logger.info(f"User transcript received: {user_text}")
-                            # 挨拶・相槌・体調伺い以外の実質的な話題のみ履歴に追加
+                            self._check_user_utterance_for_draw_approval(user_text)
                             noise_words = [
                                 "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
                                 "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
-                                "さくらさんは", "お天気は", "いい天気", "悪くない", "何もしてない", "ブラブラ"
+                                "さくらさんは", "お天気は", "いい天気", "悪くない", "何もしてない", "ブラブラ",
+                                "絵を描いてみたい", "絵を描きたい", "絵を書きたい", "描いてみたい", "聞き取り"
                             ]
                             if not any(w in user_text for w in noise_words) and len(user_text) >= 2:
                                 self.discussed_topics.append(user_text)
 
-                            # ユーザーが話したことが確定した時はエコーガードを即座に解除して確実にGeminiに届ける
-                            self.echo_guard_until = 0.0
-                            try:
-                                logger.info(f"Relaying user transcript as realtime input to Gemini: {user_text}")
-                                await session.send_realtime_input(text=user_text)
-                            except Exception as txt_err:
-                                logger.warning(f"Failed to relay realtime text input to Gemini: {txt_err}")
+                            self.user_transcript_seq += 1
+                            # ※重要: リアルタイム音声ストリーム送信中に勝手に audio_stream_end や client_content を
+                            #   送りつけると Gemini Live API が 1011 Internal Error でクラッシュするため送らない！
+                            #   Gemini Live の内蔵VADが自然に発話区切りを判定し返答します。
+                            #   沈黙時のフォローアップはフロントエンドからの prompt_followup（3秒タイマー）が担当。
+
+                    elif msg_type == "ask_save_confirmation":
+                        # 描画完了後にお父さんが「この雰囲気でよい」「これでいいです」と肯定された時、絵を保存するかどうかを確認する
+                        raw_name = (self.profile.call_name or "お父さん").strip()
+                        nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+                        self.collector_status = "drawn"
+                        self.user_confirmed_drawing = False
+                        self.user_transcript_seq += 1
+                        self.last_ai_output_time = time.time()
+                        save_prompt = (
+                            f"{nickname}が現在の絵について「この雰囲気でよい（これでいいです）」と満足されました！"
+                            f"※【絶対厳守】描き直し（refine_memory_visual）や新規描画（generate_memory_visual）は絶対に呼ばないでください。"
+                            f"{nickname}に向かって、「気に入っていただけて嬉しいです！この絵を保存しますか？保存する場合は保存してから絵画モードを終了し、また普通のおしゃべりに戻りますね」と優しく声に出して確認してください。"
+                        )
+                        logger.info("User approved drawn image; prompting save confirmation.")
+                        try:
+                            await session.send_client_content(
+                                turns=[types.Content(role="user", parts=[types.Part.from_text(text=save_prompt)])],
+                                turn_complete=True
+                            )
+                        except Exception as sc_err:
+                            logger.warning(f"Failed to send ask_save_confirmation prompt: {sc_err}")
+
+                    elif msg_type == "finish_drawing_mode":
+                        # 絵の保存確認が完了（保存して終了、または保存せず終了）し、絵画モードを終了して通常会話（idle）へ移行
+                        saved = bool(data.get("saved", True))
+                        topic_done = (data.get("topic") or "").strip() or "思い出の絵"
+                        raw_name = (self.profile.call_name or "お父さん").strip()
+                        nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+                        self.collector_status = "idle"
+                        self.collector_active_step = "topic"
+                        self.collector_completed_count = 0
+                        self.collector_summary = ""
+                        self.ai_asked_confirmation = False
+                        self.user_confirmed_drawing = False
+                        self.user_transcript_seq += 1
+                        self.last_ai_output_time = time.time()
+                        if saved:
+                            finish_prompt = (
+                                f"「{topic_done}」の絵を保存し、絵画モードを終了して通常会話モードに移行しました。"
+                                f"{nickname}に向かって、「絵を保存しましたよ！これで絵画モードを終了して、また普通のおしゃべりに戻りますね。先ほどのお話の続きや、他に楽しまれていたことなど、またゆっくりお話ししましょう！」と温かく伝え、日常の穏やかな質問を1つだけ声に出して問いかけてください。"
+                                f"※これ以降は通常会話モードですので generate_memory_visual や refine_memory_visual は呼ばないでください。"
+                            )
+                        else:
+                            finish_prompt = (
+                                f"絵は保存せずに絵画モードを終了し、通常会話モードに移行しました。"
+                                f"{nickname}に向かって、「かしこまりました！これで絵画モードを終了して、また普通のおしゃべりに戻りますね。{nickname}、次はどんなお話をしましょうか？」と温かく声に出して問いかけてください。"
+                                f"※これ以降は通常会話モードですので generate_memory_visual や refine_memory_visual は呼ばないでください。"
+                            )
+                        logger.info(f"Drawing mode finished (saved={saved}); returning to normal conversation.")
+                        try:
+                            await session.send_client_content(
+                                turns=[types.Content(role="user", parts=[types.Part.from_text(text=finish_prompt)])],
+                                turn_complete=True
+                            )
+                        except Exception as fd_err:
+                            logger.warning(f"Failed to send finish_drawing_mode prompt: {fd_err}")
 
                     elif msg_type == "request_confirmed_draw":
-                        # ユーザーが画面上で「🎨 今の話題を絵にする」または「🎨 はい、描いてください」を押した時のみ描画を実行
+                        # ユーザーが6ステップ最終確認に対して「はい・このまま描いてください」と合意、または「🎨 今の話題を絵にする」を押した時のみ描画を実行
                         draw_topic = data.get("topic") or (self.discussed_topics[-1] if self.discussed_topics else "思い出の情景")
-                        logger.info(f"User explicitly requested drawing for topic: {draw_topic}")
+                        summary_arg = (data.get("summary") or "").strip()
+                        art_style_arg = data.get("art_style") or "watercolor"
+                        if summary_arg:
+                            self.collector_summary = summary_arg
+                        self.user_confirmed_drawing = True
+                        if self.is_generating_media or self.collector_status == "drawn" or (self.last_draw_time > 0 and (time.time() - self.last_draw_time) < 15.0):
+                            logger.info(f"Skipping duplicate request_confirmed_draw for '{draw_topic}' (already generating or just drawn).")
+                            continue
+                        self.collector_status = "drawing"
+                        logger.info(f"User explicitly confirmed drawing for topic: {draw_topic}")
                         await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
                         asyncio.create_task(
                             self._handle_media_generation(session, None, {
                                 "scene_type": "past_memory",
                                 "japanese_title": draw_topic[:18],
-                                "visual_elements": f"【ユーザーが語った情景（最優先）】: {draw_topic}",
+                                "visual_elements": self.collector_summary or f"【ユーザーが語った情景（最優先）】: {draw_topic}",
                                 "media_format": "image",
-                                "ambient_sound": "autumn_insects"
+                                "ambient_sound": "autumn_insects",
+                                "art_style": art_style_arg
                             })
                         )
 
@@ -397,6 +737,52 @@ class LiveSessionManager:
             except Exception as e:
                 logger.warning(f"Error in client to Gemini relay: {e}")
                 break
+
+    async def _ensure_gemini_replies_to_user_transcript(
+        self,
+        session,
+        user_text: str,
+        seq: int,
+        transcript_time: float
+    ):
+        """（廃止: 音声ストリームとの競合・1011エラー防止のためGemini VADに一任）"""
+        pass
+
+    async def _ensure_gemini_input_turn_completed(
+        self,
+        session,
+        seq: int,
+        input_time: float
+    ):
+        """
+        Gemini側の input_transcription（文字起こし）が0.9秒間更新されなくなったら、
+        お父さんの発話完了（無音移行）と判定してフロントエンドへ turn_complete=True を送り、
+        Geminiの返答がまだ始まっていなければ audio_stream_end を送って返答を促す。
+        """
+        try:
+            await asyncio.sleep(0.9)
+            if not self.is_active or seq != self.input_trans_seq:
+                return
+            if self.current_user_turn_text.strip():
+                full_user_utt = re.sub(r'(?<=[\u3040-\u30ff\u4e00-\u9faf])\s+(?=[\u3040-\u30ff\u4e00-\u9faf])', '', self.current_user_turn_text.strip())
+                self._check_user_utterance_for_draw_approval(full_user_utt)
+                noise_words = [
+                    "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
+                    "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
+                    "さくらさんは", "お天気は", "いい天気", "悪くない", "何もしてない", "ブラブラ",
+                    "絵を描いてみたい", "絵を描きたい", "絵を書きたい", "描いてみたい", "聞き取り"
+                ]
+                if not any(w in full_user_utt for w in noise_words) and len(full_user_utt) >= 2:
+                    self.discussed_topics.append(full_user_utt)
+                await self.websocket.send_json({
+                    "type": "transcript",
+                    "role": "user",
+                    "text": full_user_utt,
+                    "turn_complete": True
+                })
+                self.current_user_turn_text = ""
+        except Exception as err:
+            logger.debug(f"Input transcription completion check skipped: {err}")
 
     async def _relay_gemini_to_client(self, session):
         """Gemini Live からの返答音声・ツール呼び出しをハンドリングしてブラウザへ配信"""
@@ -427,15 +813,17 @@ class LiveSessionManager:
                                 # 1. 合成音声データ (PCM 24kHz Mono: 1秒あたり48,000バイト)
                                 if part.inline_data is not None:
                                     now = time.time()
+                                    self.last_ai_output_time = now
                                     chunk_len = len(part.inline_data.data)
                                     chunk_sec = chunk_len / 48000.0
                                     self.ai_playback_until = max(self.ai_playback_until, now) + chunk_sec
-                                    # スピーカーからの出音完了直後の微小余韻ガード（0.2秒）
-                                    self.echo_guard_until = self.ai_playback_until + 0.2
+                                    # スピーカーからの出音完了直後の余韻ガード（0.6秒）
+                                    self.echo_guard_until = self.ai_playback_until + 0.6
                                     await self.websocket.send_bytes(part.inline_data.data)
 
                                 # 文字起こしテキスト (字幕) ※内部思考テキスト（**...）は除外
                                 if part.text and not part.text.strip().startswith("**"):
+                                    self.last_ai_output_time = time.time()
                                     await self.websocket.send_json({
                                         "type": "transcript",
                                         "role": "model",
@@ -445,21 +833,31 @@ class LiveSessionManager:
                         # Gemini 側での音声入力文字起こし（スマホでWeb Speech APIが使えない場合でも字幕を表示）
                         input_trans = getattr(server_content, "input_transcription", None)
                         if input_trans and getattr(input_trans, "text", None):
-                            user_txt = input_trans.text.strip()
+                            user_txt = re.sub(r'(?<=[\u3040-\u30ff\u4e00-\u9faf])\s+(?=[\u3040-\u30ff\u4e00-\u9faf])', '', input_trans.text.strip())
                             if user_txt:
-                                self.current_user_turn_text += user_txt
+                                now_in = time.time()
+                                self.last_gemini_input_time = now_in
+                                self.current_user_turn_text = re.sub(r'(?<=[\u3040-\u30ff\u4e00-\u9faf])\s+(?=[\u3040-\u30ff\u4e00-\u9faf])', '', self.current_user_turn_text + user_txt)
+                                self._check_user_utterance_for_draw_approval(self.current_user_turn_text)
                                 logger.info(f"Gemini input_transcription: {user_txt}")
                                 await self.websocket.send_json({
                                     "type": "transcript",
                                     "role": "user",
                                     "text": self.current_user_turn_text
                                 })
+                                self.input_trans_seq += 1
+                                cur_in_seq = self.input_trans_seq
+                                asyncio.create_task(
+                                    self._ensure_gemini_input_turn_completed(session, cur_in_seq, now_in)
+                                )
 
                         # Gemini 側の返答音声文字起こし
                         output_trans = getattr(server_content, "output_transcription", None)
                         if output_trans and getattr(output_trans, "text", None):
+                            self.last_ai_output_time = time.time()
                             if self.current_user_turn_text.strip():
-                                full_user_utt = self.current_user_turn_text.strip()
+                                full_user_utt = re.sub(r'(?<=[\u3040-\u30ff\u4e00-\u9faf])\s+(?=[\u3040-\u30ff\u4e00-\u9faf])', '', self.current_user_turn_text.strip())
+                                self._check_user_utterance_for_draw_approval(full_user_utt)
                                 noise_words = [
                                     "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
                                     "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
@@ -489,7 +887,8 @@ class LiveSessionManager:
 
                         if getattr(server_content, "turn_complete", False):
                             if self.current_user_turn_text.strip():
-                                full_user_utt = self.current_user_turn_text.strip()
+                                full_user_utt = re.sub(r'(?<=[\u3040-\u30ff\u4e00-\u9faf])\s+(?=[\u3040-\u30ff\u4e00-\u9faf])', '', self.current_user_turn_text.strip())
+                                self._check_user_utterance_for_draw_approval(full_user_utt)
                                 noise_words = [
                                     "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
                                     "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
@@ -507,8 +906,29 @@ class LiveSessionManager:
 
                             completed_ai_turn = self.current_ai_turn_text.strip()
                             self.current_ai_turn_text = ""
-                            self.echo_guard_until = 0.0  # AI発話完了で直ちにマイクガード解除
+                            # ※重要: Geminiのネットワーク送信完了(turn_complete)時点ではまだブラウザのスピーカーから
+                            #   音声が再生中であるため、ここで self.echo_guard_until = 0.0 にしてはいけない！
+                            #   （ai_playback_until またはブラウザからの ai_speech_ended で正確に解除される）
                             if completed_ai_turn:
+                                if self.collector_status == "idle" and any(
+                                    kw in completed_ai_turn for kw in (
+                                        "聞き取りをします", "聞き取りをはじめ", "聞き取りを始め",
+                                        "思い出の絵をキャンバスに描いてみませんか", "思い出の絵を描いてみませんか",
+                                        "思い出の絵を描いてみましょう", "どんな思い出の絵を描", "どんな風景を思い浮かべますか"
+                                    )
+                                ):
+                                    self.collector_status = "collecting"
+                                    self.collector_active_step = "topic"
+                                    self.ai_asked_confirmation = False
+                                    self.user_confirmed_drawing = False
+                                elif self.collector_status not in ("drawing", "drawn") and not self.is_generating_media and any(
+                                    kw in completed_ai_turn for kw in (
+                                        "一通りお話を伺いました", "内容でよろしいでしょうか",
+                                        "描いてみましょうか", "描いてもよろしいでしょうか", "このまま絵を描"
+                                    )
+                                ):
+                                    self.ai_asked_confirmation = True
+                                    self.collector_status = "confirming"
                                 await self.websocket.send_json({
                                     "type": "transcript",
                                     "role": "model",
@@ -520,29 +940,36 @@ class LiveSessionManager:
                                 "state": "listening"
                             })
 
-                            # 【セーフティネット】AIが明確に「今から描いてみますね」と描画実行を宣言したのに
-                            # ツール呼び出し（tool_call）が行われなかった場合のみ、バックエンドが描画タスクを起動！
-                            # ※「描いてみましょうか？」「どんな思い出を描きたいですか？」「お話を伺いますね」等の質問・提案や、
-                            #   聞き取り十分な話題（2件以上）がない開始直後には絶対に発火させない！
-                            if not self.tool_called_in_turn and completed_ai_turn and len(self.discussed_topics) >= 2:
+                            # 【セーフティネット】6ステップ聞き取り完了後、ご本人が最終確認に対して「はい・描いてください」と承認済み（user_confirmed_drawing==True）で、
+                            # AIが明確に「今から描いてみますね」と描画実行を宣言したのに tool_call が行われなかった場合のみ描画を起動！
+                            # ※聞き取り確認前（user_confirmed_drawing==False）や描画済み（drawn）には絶対に発火させない！
+                            if (
+                                not self.tool_called_in_turn
+                                and completed_ai_turn
+                                and self.user_confirmed_drawing
+                                and not self.is_generating_media
+                                and self.collector_status in ("confirming", "ready")
+                                and len(self.discussed_topics) >= 1
+                            ):
                                 draw_exec_words = [
                                     "今からキャンバスに描いてみます", "今から描いてみます", "キャンバスに描きますね",
                                     "描いてみますね", "絵にしてみますね", "いま一生懸命描"
                                 ]
                                 non_draw_questions = [
-                                    "描いてみましょうか", "描きましょうか", "どんな思い出", "どんな絵",
-                                    "どんな場所", "どんな様子", "お話を伺います", "聞き取りをします",
-                                    "聞き取りを始め", "教えていただけますか", "いかがですか"
+                                    "描いてみましょうか", "描きましょうか", "描いてもよろしいでしょうか",
+                                    "どんな思い出", "どんな絵", "どんな場所", "どんな様子",
+                                    "お話を伺います", "聞き取りをします", "聞き取りを始め",
+                                    "教えていただけますか", "いかがですか", "よろしいでしょうか"
                                 ]
                                 if any(w in completed_ai_turn for w in draw_exec_words) and not any(q in completed_ai_turn for q in non_draw_questions):
-                                    logger.info(f"AI expressed explicit drawing execution in speech without tool_call: '{completed_ai_turn}'. Activating fallback media generation.")
+                                    logger.info(f"AI expressed explicit drawing execution in speech after user confirmation: '{completed_ai_turn}'. Activating fallback media generation.")
                                     topic = self.discussed_topics[-1] if self.discussed_topics else "思い出の風景"
                                     await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
                                     asyncio.create_task(
                                         self._handle_media_generation(session, None, {
                                             "scene_type": "past_memory",
                                             "japanese_title": topic[:18],
-                                            "visual_elements": f"【AIとご本人が語り合った情景】: {completed_ai_turn}（話題: {topic}）",
+                                            "visual_elements": self.collector_summary or f"【AIとご本人が語り合った情景】: {completed_ai_turn}（話題: {topic}）",
                                             "media_format": "image",
                                             "ambient_sound": "autumn_insects"
                                         })
@@ -564,9 +991,35 @@ class LiveSessionManager:
                                 raw_name = (self.profile.call_name or "お父さん").strip()
                                 nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
 
-                                # 【ガード】開始直後の挨拶段階（ご本人から具体的な話題がまだ1つも出ていない状態）での勝手なツール呼び出しを完全ブロック
-                                if func_name == "generate_memory_visual" and len(self.discussed_topics) == 0:
-                                    logger.warning(f"Blocked premature generate_memory_visual call before any user topic was discussed (args={args}).")
+                                raw_title_arg = (args.get("japanese_title") or args.get("title") or "").strip()
+                                generic_titles = {
+                                    "お父さんの思い出の絵", "お母さんの思い出の絵", "思い出の絵", "思い出の風景",
+                                    "懐かしい風景", "懐かしい思い出", "思い出", "風景", "絵"
+                                }
+
+                                # 【厳格ガード2（最優先）】描画完了後（drawn）にお父さんが「この雰囲気でよい」「これでいいです」「このままでいいです」と満足・肯定された際に
+                                # Geminiが誤って refine_memory_visual や generate_memory_visual を呼んでしまう暴走を100%完全ブロック！
+                                user_fb_arg = (args.get("user_feedback") or "").strip()
+                                recent_user_utt = (self.discussed_topics[-1] if self.discussed_topics else "").strip()
+                                combined_fb = f"{user_fb_arg} {recent_user_utt}"
+                                approval_words = (
+                                    "このまま", "これでいい", "これで良い", "この雰囲気", "こんな感じ",
+                                    "いいです", "良いです", "よいです", "いいよ", "良いよ", "バッチリ",
+                                    "大丈夫", "問題ない", "変えなくていい", "修正なし", "直さなくていい",
+                                    "気に入", "保存", "終了", "はい", "うん"
+                                )
+                                explicit_mod_words = (
+                                    "直して", "変えて", "変更", "修正", "描き直", "書き直",
+                                    "追加", "足して", "入れて", "置いて", "消して", "なくして",
+                                    "もっと", "違う", "ちがう"
+                                )
+                                if (func_name == "refine_memory_visual" or self.collector_status == "drawn") and (
+                                    any(aw in combined_fb for aw in approval_words)
+                                    and not any(mw in combined_fb for mw in explicit_mod_words)
+                                ):
+                                    logger.warning(
+                                        f"Blocked unwanted {func_name} on user approval ('{user_fb_arg}' / '{recent_user_utt}'). Prompting save confirmation instead."
+                                    )
                                     try:
                                         await session.send_tool_response(
                                             function_responses=[
@@ -574,12 +1027,54 @@ class LiveSessionManager:
                                                     id=call_id,
                                                     name=func_name,
                                                     response={
-                                                        "status": "rejected_need_listening_first",
+                                                        "status": "approved_no_redraw_needed",
                                                         "message": (
-                                                            f"まだ{nickname}から具体的な思い出の話題や場所・情景をお伺いしていないため、まだ絵を描き始めることはできません。"
-                                                            f"開始直後に勝手に絵を描かず、まずは日常のおしゃべりをするか、"
-                                                            f"「それでは絵画のための聞き取りをしますね。どんな思い出の絵を描きましょうか？」と尋ねてステップ①（話題）から順番に聞き取ってください。"
+                                                            f"{nickname}は「現在の絵でよい（満足）」と回答されました。再描画・描き直しは一切不要ですのでキャンセルしました。"
+                                                            f"絶対に「今から描きますね」「いま一生懸命描き直していますね」とは言わず、"
+                                                            f"「気に入っていただけて嬉しいです！この絵を保存しますか？保存する場合は保存してから絵画モードを終了し、また普通のおしゃべりに戻りますね」と声に出して保存の確認をしてください。"
                                                         )
+                                                    }
+                                                )
+                                            ]
+                                        )
+                                    except Exception as resp_err:
+                                        logger.warning(f"Error sending approval tool rejection response: {resp_err}")
+                                    continue
+
+                                # 【厳格ガード1】6ステップの聞き取り完了 ＆ ご本人からの最終確認の承認（user_confirmed_drawing == True）が得られる前の
+                                # フライング描画（generate_memory_visual）を100%完全ブロック！
+                                if func_name == "generate_memory_visual" and (
+                                    not self.user_confirmed_drawing
+                                    or self.collector_status in ("idle", "collecting", "drawn")
+                                    or len(self.discussed_topics) == 0
+                                    or (raw_title_arg in generic_titles and not self.collector_summary)
+                                ):
+                                    logger.warning(
+                                        f"Blocked premature generate_memory_visual call before user confirmation "
+                                        f"(collector_status={self.collector_status}, user_confirmed={self.user_confirmed_drawing}, topics={len(self.discussed_topics)}, title='{raw_title_arg}')."
+                                    )
+                                    if self.collector_status in ("confirming", "ready") or self.ai_asked_confirmation:
+                                        reject_msg = (
+                                            f"まだ6ステップの聞き取り内容に対する{nickname}からの「はい（この内容で描いてください）」という確認のお返事をいただいていないため、描画はキャンセルされました。"
+                                            f"絶対に「今からキャンバスに描いてみますね」「少し待っていてくださいね」等とは言わず、"
+                                            f"もし既に「一通りお話を伺いました〜よろしいでしょうか？」と確認を尋ねた直後であれば、何も言わずに静かに{nickname}のお返事を待ってください。"
+                                            f"まだ確認を尋ねていなければ、聞き取った内容をまとめて「この内容で絵を描いてもよろしいでしょうか？」とだけ確認してください。"
+                                        )
+                                    else:
+                                        reject_msg = (
+                                            f"まだ6ステップ（①話題〜⑥気分・雰囲気）の聞き取りと最終確認が完了していないため、今は絵を描くことはできません（描画はキャンセルされました）。"
+                                            f"絶対に「今からキャンバスに描いてみますね」「少し待っていてくださいね」等とは言わず、"
+                                            f"もし既に質問を発話済みであればそのまま何も言わずに{nickname}の返答を静かに待ってください。"
+                                        )
+                                    try:
+                                        await session.send_tool_response(
+                                            function_responses=[
+                                                types.FunctionResponse(
+                                                    id=call_id,
+                                                    name=func_name,
+                                                    response={
+                                                        "status": "cancelled_awaiting_confirmation",
+                                                        "message": reject_msg
                                                     }
                                                 )
                                             ]
@@ -589,8 +1084,37 @@ class LiveSessionManager:
                                     continue
 
                                 title = args.get("japanese_title") or args.get("title") or (self.discussed_topics[-1] if self.discussed_topics else "思い出の風景")
-                                elements = args.get("visual_elements") or args.get("scene_description") or args.get("description", "")
+                                raw_elements = args.get("visual_elements") or args.get("scene_description") or args.get("description", "")
+                                # 【話していない事物の混入防止】フロントエンドで実際に聞き取った6ステップ要約（collector_summary）がある場合は、
+                                # AIが勝手に「万国旗が飾られている様子」等を創作した raw_elements ではなく、ご本人が話した collector_summary を最優先する！
+                                if func_name == "generate_memory_visual" and self.collector_summary:
+                                    elements = self.collector_summary
+                                    args["visual_elements"] = elements
+                                else:
+                                    elements = raw_elements
                                 logger.info(f"AI tool call: {func_name} for '{title}' (elements: '{elements}'). Generating visual artifact...")
+
+                                # 連続描画クールダウン中の重複呼び出し、またはすでに生成実行中の場合は「今から描きますね」を二度言わせない
+                                if (self.is_generating_media or (self.last_draw_time > 0 and (time.time() - self.last_draw_time) < self.MIN_DRAW_INTERVAL_SEC)) and func_name == "generate_memory_visual":
+                                    logger.info(f"Skipping duplicate generate_memory_visual tool response during active generation/cooldown for '{title}'.")
+                                    try:
+                                        await session.send_tool_response(
+                                            function_responses=[
+                                                types.FunctionResponse(
+                                                    id=call_id,
+                                                    name=func_name,
+                                                    response={
+                                                        "status": "already_drawing",
+                                                        "message": "すでに描画処理を実行中です。重複して「今から描いてみますね」と繰り返さず、そのまま静かに完成をお待ちください。"
+                                                    }
+                                                )
+                                            ]
+                                        )
+                                    except Exception:
+                                        pass
+                                    continue
+
+                                self.collector_status = "drawing"
 
                                 # 1. Gemini側へ直ちにツール応答を返送（「現在描画進行中」であることを伝え、描き上がる前に「描きました」と嘘をつかせない）
                                 if func_name == "refine_memory_visual":
@@ -659,10 +1183,14 @@ class LiveSessionManager:
         ※Gemini Live の音声・字幕ストリームを絶対にブロックしない（asyncio.to_thread使用）
         ※連続描画防止: 前回の描画から2分間（120秒）はスキップしてクォータを保護
         """
+        if self.is_generating_media:
+            logger.info("Media generation already in progress; skipping duplicate _handle_media_generation call.")
+            return
+        self.is_generating_media = True
         try:
             scene_type = SceneType(args.get("scene_type", "past_memory"))
             title = args.get("japanese_title") or args.get("title") or (self.discussed_topics[-1] if self.discussed_topics else "思い出の風景")
-            elements = args.get("visual_elements") or args.get("scene_description") or args.get("description", "")
+            elements = self.collector_summary or args.get("visual_elements") or args.get("scene_description") or args.get("description", "")
             media_format = MediaFormat(args.get("media_format", "image"))
             ambient_sound = AmbientSoundType(args.get("ambient_sound", "none"))
 
@@ -717,10 +1245,13 @@ class LiveSessionManager:
                 )
             self.generated_memories.append(artifact)
             self.discussed_topics.append(title)
+            self.collector_status = "drawn"
+            self.user_confirmed_drawing = False
+            self.ai_asked_confirmation = False
 
             # クライアントへ新メディア表示通知（聞き取った情景ディテールを必ず同梱）
             is_blank = getattr(artifact, "is_fallback", False) and not artifact.media_url
-            visual_desc = getattr(artifact, "visual_description", elements) or elements
+            visual_desc = self.collector_summary or getattr(artifact, "visual_description", elements) or elements
             await self.websocket.send_json({
                 "type": "new_media",
                 "memory_id": artifact.memory_id,
@@ -737,7 +1268,11 @@ class LiveSessionManager:
             try:
                 raw_name = (self.profile.call_name or "お父さん").strip()
                 nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
-                done_notice = f"【描画完了通知】「{artifact.title}」の絵が完成し、{nickname}の画面に表示されました！{nickname}に向かって、「{nickname}、画面に絵が浮かびましたよ！こんな雰囲気でしたか？」と温かく声をかけてください。"
+                done_notice = (
+                    f"【描画完了通知】「{artifact.title}」の絵が完成し、{nickname}の画面に表示されました！"
+                    f"{nickname}に向かって、「{nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？」とだけ温かく声をかけてください。"
+                    f"※「一通りお話を伺いました」等の聞き取り確認は絶対に繰り返さないでください。また、ご本人が「この雰囲気でよい」「これでいいです」と答えられた場合は、絶対に refine_memory_visual（描き直し）を呼ばず、絵を保存するかどうかを確認してください。"
+                )
                 await session.send_client_content(
                     turns=[types.Content(role="user", parts=[types.Part.from_text(text=done_notice)])],
                     turn_complete=True
@@ -751,6 +1286,8 @@ class LiveSessionManager:
                 "type": "avatar_state",
                 "state": "idle"
             })
+        finally:
+            self.is_generating_media = False
 
     async def _handle_media_refinement(self, session, call_id: str, args: dict):
         """共同描画・修正処理"""
@@ -772,8 +1309,9 @@ class LiveSessionManager:
             )
             if new_artifact:
                 self.generated_memories.append(new_artifact)
+                self.collector_status = "drawn"
                 is_blank = getattr(new_artifact, "is_fallback", False) and not new_artifact.media_url
-                visual_desc = getattr(new_artifact, "visual_description", elements) or elements
+                visual_desc = self.collector_summary or getattr(new_artifact, "visual_description", elements) or elements
                 await self.websocket.send_json({
                     "type": "new_media",
                     "memory_id": new_artifact.memory_id,
@@ -790,7 +1328,11 @@ class LiveSessionManager:
                 try:
                     raw_name = (self.profile.call_name or "お父さん").strip()
                     nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
-                    done_notice = f"【描画完了通知】「{new_artifact.title}」の描き直しが完了し、{nickname}の画面に表示されました！{nickname}に向かって、「{nickname}、描き直した絵が画面に出ましたよ！こんな雰囲気でしたか？」と温かく声をかけてください。"
+                    done_notice = (
+                        f"【描画完了通知】「{new_artifact.title}」の描き直しが完了し、{nickname}の画面に表示されました！"
+                        f"{nickname}に向かって、「{nickname}、描き直した絵が画面に出ましたよ！こんな雰囲気でよろしいでしょうか？」と温かく声をかけてください。"
+                        f"※もしご本人が「この雰囲気でよい」「これでいいです」と答えられた場合は、絶対に refine_memory_visual（描き直し）を呼ばず、絵を保存するかどうかを確認してください。"
+                    )
                     await session.send_client_content(
                         turns=[types.Content(role="user", parts=[types.Part.from_text(text=done_notice)])],
                         turn_complete=True
