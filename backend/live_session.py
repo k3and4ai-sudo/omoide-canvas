@@ -114,34 +114,35 @@ class LiveSessionManager:
         self.is_generating_media: bool = False           # 現在バックエンドで画像生成が進行中か
         self.last_draw_time: float = 0.0                # 連続描画防止・クォータ保護用タイムスタンプ
         self.MIN_DRAW_INTERVAL_SEC: float = 120.0       # 描画間隔の最小時間（2分 = 120秒）
+        self.current_live_session = None                 # 現在接続中の Gemini Live セッション
 
-    def _check_user_utterance_for_draw_approval(self, user_text: str) -> None:
+    def _check_user_utterance_for_draw_approval(self, user_text: str) -> bool:
         """
         6ステップ聞き取り完了後の最終確認（confirming / ready）に対して、
-        ご本人が明確に「はい」「このままでいいです」「描いてください」と承認されたかを判定する。
-        ※聞き取り確認の前にフライングで描画が始まるのを防ぐため、このフラグが True になるまで generate_memory_visual を許可しない。
+        ご本人が明確に「はい」「その内容でいいです」「描いてください」と承認されたかを判定する。
         """
         if not user_text:
-            return
+            return False
         clean = re.sub(r"\s+", "", user_text.strip())
         if len(clean) < 2:
-            return
+            return False
         # すでに描画完了（drawn）または描画中（drawing）の場合は新規描画承認にしない
         if self.collector_status in ("drawing", "drawn") or self.is_generating_media:
-            return
+            return False
 
         modify_or_reject_words = (
             "修正", "直して", "変えて", "変更", "やり直し", "もう一度", "もう一回",
             "聞き取り", "聞いて", "違う", "ちがう", "まだ", "いいえ", "いや", "待って"
         )
         if any(mw in clean for mw in modify_or_reject_words):
-            return
+            return False
 
         # 明示的な即時描画指示（「このまま絵を描いてください」「今すぐ描いて」等）
         explicit_draw_cmds = (
             "今すぐ描いて", "今すぐ書いて", "このまま絵を描いて", "このまま絵を書いて",
             "このまま描いて", "このまま書いて", "絵を描いてください", "絵を書いてください",
-            "キャンバスに描いて", "キャンバスに書いて", "この内容で描いて", "この内容で書いて"
+            "キャンバスに描いて", "キャンバスに書いて", "この内容で描いて", "この内容で書いて",
+            "その内容で描いて", "その内容で書いて", "それで描いて", "それで書いて"
         )
         if any(cmd in clean for cmd in explicit_draw_cmds) and (
             self.collector_status in ("confirming", "ready")
@@ -150,7 +151,7 @@ class LiveSessionManager:
         ):
             self.user_confirmed_drawing = True
             logger.info(f"User explicitly approved drawing command: '{clean}'")
-            return
+            return True
 
         # AIが最終確認（「一通りお話を伺いました〜よろしいでしょうか？」）を尋ねた後の肯定返答
         if self.collector_status in ("confirming", "ready") or self.ai_asked_confirmation:
@@ -158,11 +159,70 @@ class LiveSessionManager:
                 "はい", "うん", "ええ", "いいよ", "いいですよ", "いいです", "良いです", "よいです",
                 "これでいい", "これで良い", "このまま", "大丈夫", "問題ない", "問題ありません",
                 "間違いありません", "お願い", "描いて", "書いて", "そうして", "ぜひ", "よろしく",
-                "OK", "オッケー"
+                "OK", "オッケー", "その内容でいい", "その内容でよい", "その内容で良い", "その内容でお願い",
+                "その内容で", "そのままでいい", "そのままでよい", "そのままで良い", "それでいい",
+                "それでよい", "それで良い", "それでお願い", "結構です", "そうしてください",
+                "そうして下さい", "そうしてほしい", "描いてみて", "書いてみて"
             )
             if any(aw in clean for aw in approval_words):
                 self.user_confirmed_drawing = True
                 logger.info(f"User confirmed 6-step summary for drawing: '{clean}'")
+                return True
+
+        return False
+
+    async def _trigger_drawing_if_confirmed(self, session, reason: str = ""):
+        """
+        ご本人からの最終確認の承認を検知した際、Geminiのツール呼び出し待ちに依存せず、
+        即座かつ確実にバックエンド側でメディア生成タスクを起動するセーフティネット。
+        """
+        if not self.user_confirmed_drawing or self.is_generating_media or self.collector_status in ("drawing", "drawn"):
+            return
+        if not session:
+            session = self.current_live_session
+        if not session:
+            return
+
+        logger.info(f"🚀 Activating guaranteed drawing pipeline triggered by user approval (reason='{reason}').")
+        self.collector_status = "drawing"
+        self.is_generating_media = True
+        self.user_confirmed_drawing = False
+
+        # フロントエンドを描画中状態に遷移
+        try:
+            await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
+        except Exception:
+            pass
+
+        # さくらさんに「今からキャンバスに描いてみますね！少し待っていてくださいね」と一言だけ発話させる
+        try:
+            raw_name = (self.profile.call_name or "お父さん").strip()
+            nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+            draw_notice = (
+                f"{nickname}から「この内容で描いてください」とお返事をいただきました。"
+                f"{nickname}に向かって、「かしこまりました！今からキャンバスに描いてみますね。少しだけ待っていてくださいね」と優しく1文で伝えてください。"
+                f"※まだ絵は完成していません。「描きましたよ」や「どうですか？」と先走って嘘をつくのは厳禁です。"
+                f"※【最重要】この発話の後は、絵が完成するまで静かに待機してください。"
+            )
+            self.echo_guard_until = time.time() + 4.5
+            await session.send_client_content(
+                turns=[types.Content(role="user", parts=[types.Part.from_text(text=draw_notice)])],
+                turn_complete=True
+            )
+        except Exception as notice_err:
+            logger.warning(f"Error sending drawing speech prompt to Gemini: {notice_err}")
+
+        # バックグラウンドで画像生成を実行
+        topic = self.discussed_topics[-1] if self.discussed_topics else "思い出の風景"
+        asyncio.create_task(
+            self._handle_media_generation(session, None, {
+                "scene_type": "past_memory",
+                "japanese_title": topic[:18],
+                "visual_elements": self.collector_summary or f"【ユーザーが語った情景（最優先）】: {topic}",
+                "media_format": "image",
+                "ambient_sound": "autumn_insects"
+            })
+        )
 
     async def run(self):
         """セッションの開始・メインループ管理（ユーザー自身のセッションAPIキーを使用）"""
@@ -272,6 +332,7 @@ class LiveSessionManager:
                 try:
                     logger.info(f"Connecting to Gemini Live API ({DEFAULT_LIVE_MODEL}, voice={selected_voice}, noise_mode={noise_mode}, attempt={reconnect_attempts + 1})...")
                     async with client.aio.live.connect(model=DEFAULT_LIVE_MODEL, config=config) as session:
+                        self.current_live_session = session
                         logger.info("Connected to Gemini Live API successfully!")
                         reconnect_attempts = 0
                         await self.websocket.send_json({
@@ -392,12 +453,12 @@ class LiveSessionManager:
             try:
                 message = await self.websocket.receive()
                 if "bytes" in message and message["bytes"]:
-                    # AI発話中（スピーカー出音・部屋の残響期間）はマイクPCMをGeminiに絶対に送らない！
-                    # （スピーカー音をマイクが拾ってAIが自己中断・バージインしてしまうエコー干渉を100%完全遮断）
-                    if time.time() < self.echo_guard_until:
+                    # AI発話中（スピーカー出音・残響期間）またはメディア描画中（is_generating_media / drawing）は
+                    # マイクPCMをGeminiに絶対に送らない！（エコー干渉および描画中の誤割り込み・勝手な対話再開を100%完全遮断）
+                    if time.time() < self.echo_guard_until or self.is_generating_media or self.collector_status == "drawing":
                         self.echo_dropped_packets += 1
                         if self.echo_dropped_packets % 50 == 1:
-                            logger.info(f"[EchoGuard] Shielded mic input ({self.echo_dropped_packets} chunks dropped, {self.echo_guard_until - time.time():.1f}s remaining)")
+                            logger.info(f"[EchoGuard/DrawingGuard] Shielded mic input ({self.echo_dropped_packets} chunks dropped, generating={self.is_generating_media}, status={self.collector_status})")
                         continue
                     # Raw PCM 16kHz 音声ストリーム
                     pcm_data = message["bytes"]
@@ -456,7 +517,7 @@ class LiveSessionManager:
                         # 文字起こし完了に基づく発話区切り通知
                         if self.current_user_turn_text.strip():
                             full_user_utt = re.sub(r'(?<=[\u3040-\u30ff\u4e00-\u9faf])\s+(?=[\u3040-\u30ff\u4e00-\u9faf])', '', self.current_user_turn_text.strip())
-                            self._check_user_utterance_for_draw_approval(full_user_utt)
+                            is_approved = self._check_user_utterance_for_draw_approval(full_user_utt)
                             noise_words = [
                                 "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
                                 "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
@@ -472,10 +533,13 @@ class LiveSessionManager:
                                 "turn_complete": True
                             })
                             self.current_user_turn_text = ""
-                        try:
-                            await session.send_realtime_input(audio_stream_end=True)
-                        except Exception as eos_err:
-                            logger.debug(f"audio_stream_end notice: {eos_err}")
+                            if is_approved:
+                                await self._trigger_drawing_if_confirmed(session, reason=f"eos: {full_user_utt}")
+                        if not self.is_generating_media and self.collector_status != "drawing":
+                            try:
+                                await session.send_realtime_input(audio_stream_end=True)
+                            except Exception as eos_err:
+                                logger.debug(f"audio_stream_end notice: {eos_err}")
 
                     elif msg_type == "start_listening":
                         # 画面上で「🎙️ 聞き取り開始」が押された時、さくらさんに6ステップ聞き取りの第一声を促す
@@ -566,13 +630,13 @@ class LiveSessionManager:
                         if status == "idle":
                             if reason == "after_user_speech" and last_user_text:
                                 followup_prompt = (
-                                    f"{empathy_prefix}そのお話に関連する優しい質問を1つだけ声に出して問いかけて会話を続けてください。"
-                                    f"※今は日常会話中ですので generate_memory_visual ツールは絶対に呼ばないでください。"
+                                    f"{empathy_prefix}そのお話に関連する優しい質問や共感を1つだけ声に出して問いかけて会話を続けてください。"
+                                    f"※通常会話中ですので絵画への誘導や generate_memory_visual ツールは絶対に呼ばないでください。"
                                 )
                             else:
                                 followup_prompt = (
-                                    f"{empathy_prefix}{nickname}に「ところで、何か懐かしい思い出の絵をキャンバスに描いてみませんか？」または日常の優しい質問を1つだけ声に出して問いかけてください。"
-                                    f"※generate_memory_visual ツールは絶対に呼ばないでください。"
+                                    f"{empathy_prefix}{nickname}に日常の穏やかな質問（季節、最近の出来事、趣味など）や、先ほどのお話に関する感想を1つだけ優しく声に出して問いかけてください。"
+                                    f"※【最重要】絵画への積極的な誘導（「絵を描いてみませんか？」等）や generate_memory_visual ツールは絶対に呼ばないでください。"
                                 )
                         elif status in ("confirming", "ready") or active_step == "confirm":
                             self.ai_asked_confirmation = True
@@ -645,7 +709,7 @@ class LiveSessionManager:
 
                         if user_text:
                             logger.info(f"User transcript received: {user_text}")
-                            self._check_user_utterance_for_draw_approval(user_text)
+                            is_approved = self._check_user_utterance_for_draw_approval(user_text)
                             noise_words = [
                                 "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
                                 "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
@@ -656,6 +720,8 @@ class LiveSessionManager:
                                 self.discussed_topics.append(user_text)
 
                             self.user_transcript_seq += 1
+                            if is_approved:
+                                await self._trigger_drawing_if_confirmed(session, reason=f"user_transcript: {user_text}")
                             # ※重要: リアルタイム音声ストリーム送信中に勝手に audio_stream_end や client_content を
                             #   送りつけると Gemini Live API が 1011 Internal Error でクラッシュするため送らない！
                             #   Gemini Live の内蔵VADが自然に発話区切りを判定し返答します。
@@ -740,8 +806,29 @@ class LiveSessionManager:
                             logger.info(f"Skipping duplicate request_confirmed_draw for '{draw_topic}' (already generating or just drawn).")
                             continue
                         self.collector_status = "drawing"
+                        self.is_generating_media = True
+                        self.user_confirmed_drawing = False
                         logger.info(f"User explicitly confirmed drawing for topic: {draw_topic}")
                         await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
+
+                        # さくらさんに「今からキャンバスに描いてみますね！少し待っていてくださいね」と一言だけ発話させる
+                        try:
+                            raw_name = (self.profile.call_name or "お父さん").strip()
+                            nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+                            draw_notice = (
+                                f"{nickname}から「この内容で描いてください」とお返事をいただきました。"
+                                f"{nickname}に向かって、「かしこまりました！今からキャンバスに描いてみますね。少しだけ待っていてくださいね」と優しく1文で伝えてください。"
+                                f"※まだ絵は完成していません。「描きましたよ」や「どうですか？」と先走って嘘をつくのは厳禁です。"
+                                f"※【最重要】この発話の後は、絵が完成するまで静かに待機してください。"
+                            )
+                            self.echo_guard_until = time.time() + 4.5
+                            await session.send_client_content(
+                                turns=[types.Content(role="user", parts=[types.Part.from_text(text=draw_notice)])],
+                                turn_complete=True
+                            )
+                        except Exception as notice_err:
+                            logger.warning(f"Error sending drawing speech prompt to Gemini: {notice_err}")
+
                         asyncio.create_task(
                             self._handle_media_generation(session, None, {
                                 "scene_type": "past_memory",
@@ -893,7 +980,7 @@ class LiveSessionManager:
                             self.last_ai_output_time = time.time()
                             if self.current_user_turn_text.strip():
                                 full_user_utt = re.sub(r'(?<=[\u3040-\u30ff\u4e00-\u9faf])\s+(?=[\u3040-\u30ff\u4e00-\u9faf])', '', self.current_user_turn_text.strip())
-                                self._check_user_utterance_for_draw_approval(full_user_utt)
+                                is_app = self._check_user_utterance_for_draw_approval(full_user_utt)
                                 noise_words = [
                                     "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
                                     "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
@@ -908,6 +995,8 @@ class LiveSessionManager:
                                     "turn_complete": True
                                 })
                                 self.current_user_turn_text = ""
+                                if is_app:
+                                    await self._trigger_drawing_if_confirmed(session, reason=f"output_trans_user: {full_user_utt}")
                                 # ※毎ターンの勝手な自動描画は行わない（会話ストリームの継続とクォータを保護）
 
                             ai_txt = output_trans.text.strip()
@@ -924,7 +1013,7 @@ class LiveSessionManager:
                         if getattr(server_content, "turn_complete", False):
                             if self.current_user_turn_text.strip():
                                 full_user_utt = re.sub(r'(?<=[\u3040-\u30ff\u4e00-\u9faf])\s+(?=[\u3040-\u30ff\u4e00-\u9faf])', '', self.current_user_turn_text.strip())
-                                self._check_user_utterance_for_draw_approval(full_user_utt)
+                                is_app = self._check_user_utterance_for_draw_approval(full_user_utt)
                                 noise_words = [
                                     "聞こえてますか", "聞こえますか", "もしもし", "あーあー", "テスト",
                                     "こんにちは", "こんばんは", "おはよう", "元気でした", "元気です",
@@ -939,6 +1028,8 @@ class LiveSessionManager:
                                     "turn_complete": True
                                 })
                                 self.current_user_turn_text = ""
+                                if is_app:
+                                    await self._trigger_drawing_if_confirmed(session, reason=f"output_trans_user: {full_user_utt}")
 
                             completed_ai_turn = self.current_ai_turn_text.strip()
                             self.current_ai_turn_text = ""

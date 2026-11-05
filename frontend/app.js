@@ -1651,6 +1651,14 @@ ${levelRules}
       return;
     }
 
+    const sc = state.sceneCollector;
+    // 描画中（drawing / isDrawingMedia）または描画完了（drawn）の時は無音監視を完全停止！
+    // （描画中にさくらさんが新しい会話を始めたり、再度絵画モードに誘導してしまうのを100%完全防止）
+    if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') {
+      state.currentSilenceSec = 0;
+      return;
+    }
+
     const now = Date.now();
     // 最後に文字起こしが行われた時刻、またはAIが話し終えた時刻の新しい方を基準として無音タイマーをカウント
     const lastTranscriptTime = state.lastUserSpeechActivityTime || state.sessionStartTime || now;
@@ -1725,6 +1733,12 @@ ${levelRules}
   }
 
   function triggerSilenceFollowUp(reason) {
+    const sc = state.sceneCollector;
+    // 描画中または描画完了直後は無音フォローアップによる割り込み・再誘導を100%防止
+    if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') {
+      return;
+    }
+
     const now = Date.now();
     state.lastFollowUpTriggerTime = now;
     state.hasUnansweredUserTurn = false;
@@ -2689,6 +2703,12 @@ ${levelRules}
                   speakTextWithWebSpeech(followUp);
                 }
               }, 1200);
+              return;
+            }
+
+            // 描画中（isDrawingMedia）はマイク認識テキストを送信しない（描画中の独り言や環境音による割り込み・会話再開を防止）
+            if (state.isDrawingMedia) {
+              logDiag(`🎨 描画中のため認識テキスト送信をスキップ: 「${textToSend}」`);
               return;
             }
 
@@ -4092,8 +4112,8 @@ ${artStyle.svgStyleRules}
             state.hasUnansweredUserTurn = false;
             state.hasCompletedInitialGreeting = true;
             state.wasAiInterrupted = false;
-            // 「絵画のための聞き取りをしますね」の開始合図だけはストリーミング中でも即座に反応させる
-            if (/(絵画のための聞き取りをしますね|絵画のための聞き取りを始め|絵のための聞き取りを|聞き取りをしますね|聞き取りをはじめ)/.test(data.text) && state.sceneCollector.status === 'idle') {
+            // 「絵画のための聞き取りをしますね」の開始合図だけはストリーミング中でも即座に反応させる（描画中は絶対に発火させない）
+            if (!state.isDrawingMedia && /(絵画のための聞き取りをしますね|絵画のための聞き取りを始め|絵のための聞き取りを|聞き取りをしますね|聞き取りをはじめ)/.test(data.text) && state.sceneCollector.status === 'idle') {
               startListeningSession(false);
             }
             if (data.turn_complete !== false) {
@@ -5994,9 +6014,9 @@ ${artStyle.svgStyleRules}
     const hasAnyCollectedScene = COLLECTOR_STEPS.some(s => hasStepValue(s));
     const completedStepCount = COLLECTOR_STEPS.filter(s => hasStepValue(s) || sc.stepStates[s] === 'skipped').length;
     const isExplicitDrawCommand = hasAnyCollectedScene && (sc.status === 'confirming' || sc.status === 'ready' || sc.aiHasAskedConfirmation || completedStepCount >= 5) &&
-      /(?:今すぐ.*[描書]いて|今の話題を絵にして|キャンバスに[描書]いて|キャンバスに出して|この絵を[描書]いて|このまま.*[描書]いて|絵を[描書]いてください|このままお願いします)/.test(clean);
+      /(?:今すぐ.*[描書]いて|今の話題を絵にして|キャンバスに[描書]いて|キャンバスに出して|この絵を[描書]いて|このまま.*[描書]いて|絵を[描書]いてください|このままお願いします|その内容で.*[描書]いて|それで.*[描書]いて)/.test(clean);
     const isApprovalForPrompt = hasAnyCollectedScene && (sc.aiHasAskedConfirmation || sc.isAwaitingConfirmation || sc.status === 'confirming' || sc.status === 'ready') &&
-      /^(?:はい|うん|ええ|OK|オッケー|いいよ|いいですよ|いいです|良いです|よいです|これでいいです|これで良いです|このままでいいです|このままで良いです|大丈夫|間違いありません|問題ありません|お願いします|お願い|描いて|書いて|描いてください|書いてください|このまま.*|そうして|ぜひ|よろしく)/.test(clean.trim());
+      /^(?:はい|うん|ええ|OK|オッケー|いいよ|いいですよ|いいです|良いです|よいです|これでいい.*|これで良い.*|このままでいい.*|このままで良い.*|その内容でいい.*|その内容で良い.*|その内容で.*|それでいい.*|それで良い.*|それでお願い.*|大丈夫.*|間違いありません|問題ありません|お願いします|お願い|描いて.*|書いて.*|そうして.*|ぜひ.*|よろしく.*|結構です)/.test(clean.trim());
 
     if (isExplicitDrawCommand || isApprovalForPrompt) {
       const now = Date.now();
