@@ -469,7 +469,7 @@ def generate_memory_visual_artifact_sync(
                             contents=svg_prompt,
                             config=types.GenerateContentConfig(
                                 temperature=0.3,
-                                max_output_tokens=6000
+                                max_output_tokens=3500
                             )
                         )
                         if svg_res and svg_res.text:

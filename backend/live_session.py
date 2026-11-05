@@ -291,7 +291,15 @@ class LiveSessionManager:
 
                         if self.is_resume and (topic_for_resume or self.collector_status != "idle"):
                             ctx_desc = f"「{topic_for_resume}」" if topic_for_resume else "先ほど"
-                            if self.collector_status in ("collecting", "confirming", "ready"):
+                            if self.collector_status == "drawn" or len(self.generated_memories) > 0:
+                                last_art_title = self.generated_memories[-1].title if self.generated_memories else (topic_for_resume or "思い出の絵")
+                                initial_greeting_prompt = (
+                                    f"対話セッションが自動復旧しました。あなたの名前は「{p_name}」です。"
+                                    f"直前に「{last_art_title}」の絵が完成し、すでに{nickname}の画面に表示されています！"
+                                    f"{nickname}に向かって、「{nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？」と温かく声に出して問いかけてください。"
+                                    f"※「どんな思い出がありましたか？」等の過去の聞き取り質問は絶対に繰り返さないでください。"
+                                )
+                            elif self.collector_status in ("collecting", "confirming", "ready"):
                                 initial_greeting_prompt = (
                                     f"対話セッションが自動復旧しました。あなたの名前は「{p_name}」です。"
                                     f"直前まで{nickname}と絵を描くための聞き取り（話題：{ctx_desc}、ステップ：{self.collector_active_step}）を行っていました。"
@@ -1299,12 +1307,16 @@ class LiveSessionManager:
                     f"{nickname}に向かって、「{nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？」とだけ温かく声をかけてください。"
                     f"※「一通りお話を伺いました」等の聞き取り確認は絶対に繰り返さないでください。また、ご本人が「この雰囲気でよい」「これでいいです」と答えられた場合は、絶対に refine_memory_visual（描き直し）を呼ばず、絵を保存するかどうかを確認してください。"
                 )
+                # 音声PCMパケットとの内部競合による1011切断を完全に防ぐため、エコーガードをかけてから安全に完了通知を送信
+                self.echo_guard_until = time.time() + 4.5
+                await asyncio.sleep(0.15)
+                logger.info(f"Sending visual completion voice prompt to Gemini Live for '{artifact.title}'...")
                 await session.send_client_content(
                     turns=[types.Content(role="user", parts=[types.Part.from_text(text=done_notice)])],
                     turn_complete=True
                 )
             except Exception as notice_err:
-                logger.debug(f"Done notice error: {notice_err}")
+                logger.warning(f"Done notice error: {notice_err}")
 
         except Exception as e:
             logger.error(f"Error handling media generation: {e}", exc_info=True)
