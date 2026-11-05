@@ -49,6 +49,22 @@ def get_pacific_reset_time_jst() -> str:
     except Exception:
         return "16:00"
 
+def correct_japanese_homophones(text: str) -> str:
+    """音声認識で頻出する同音異義語の誤変換を文脈に応じて補正する（例: ペットの『買って』→『飼って』）"""
+    if not text:
+        return ""
+    import re
+    t = text
+    # ペット・動物の「買って」→「飼って」補正
+    t = re.sub(r'(昔|家|実家|子供の頃|子どもの頃|幼い頃|若い頃|以前|前)?\s*(買っていた|買ってました|買ってた|買っていたの|買っていたんだ|買ってたんだ)\s*(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)', r'\1飼っていた\3', t)
+    t = re.sub(r'(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買っていた|買ってました|買ってた)', r'\1を飼っていた', t)
+    t = re.sub(r'(買っていた|買ってました|買ってた)\s*(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)', r'飼っていた\2', t)
+    t = re.sub(r'(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)う', r'\1を飼う', t)
+    t = re.sub(r'(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)った', r'\1を飼った', t)
+    t = re.sub(r'(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)って', r'\1を飼って', t)
+    t = re.sub(r'(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)いたい', r'\1を飼いたい', t)
+    return t
+
 # Live API 対応モデル（デフォルト: 双方向オーディオ対応ネイティブモデル）
 DEFAULT_LIVE_MODEL = os.getenv("GEMINI_LIVE_MODEL", "gemini-2.5-flash-native-audio-preview-09-2025")
 
@@ -660,7 +676,8 @@ class LiveSessionManager:
                     elif msg_type == "finish_drawing_mode":
                         # 絵の保存確認が完了（保存して終了、または保存せず終了）し、絵画モードを終了して通常会話（idle）へ移行
                         saved = bool(data.get("saved", True))
-                        topic_done = (data.get("topic") or "").strip() or "思い出の絵"
+                        already_spoken = bool(data.get("already_spoken", False))
+                        topic_done = correct_japanese_homophones((data.get("topic") or "").strip() or "思い出の絵")
                         raw_name = (self.profile.call_name or "お父さん").strip()
                         nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
                         self.collector_status = "idle"
@@ -670,32 +687,41 @@ class LiveSessionManager:
                         self.ai_asked_confirmation = False
                         self.user_confirmed_drawing = False
                         self.user_transcript_seq += 1
+
+                        time_since_last_ai = time.time() - self.last_ai_output_time
+                        is_ai_active = self.is_ai_speaking or (time_since_last_ai < 6.0) or already_spoken
                         self.last_ai_output_time = time.time()
-                        if saved:
-                            finish_prompt = (
-                                f"「{topic_done}」の絵を保存し、絵画モードを終了して通常会話モードに移行しました。"
-                                f"{nickname}に向かって、「絵を保存しましたよ！これで絵画モードを終了して、また普通のおしゃべりに戻りますね。先ほどのお話の続きや、他に楽しまれていたことなど、またゆっくりお話ししましょう！」と温かく伝え、日常の穏やかな質問を1つだけ声に出して問いかけてください。"
-                                f"※これ以降は通常会話モードですので generate_memory_visual や refine_memory_visual は呼ばないでください。"
-                            )
+
+                        logger.info(f"Drawing mode finished (saved={saved}, is_ai_active={is_ai_active}, elapsed={time_since_last_ai:.2f}s); returning to normal conversation.")
+
+                        # AIがお父さんの「保存してください」を直接聞いてすでに喋っているか直近で喋り終えている場合は、二重発話を防ぐためプロンプト送信をスキップ
+                        if is_ai_active:
+                            logger.info("AI is already responding or finished speaking recently; skipping redundant finish_drawing_mode prompt.")
                         else:
-                            finish_prompt = (
-                                f"絵は保存せずに絵画モードを終了し、通常会話モードに移行しました。"
-                                f"{nickname}に向かって、「かしこまりました！これで絵画モードを終了して、また普通のおしゃべりに戻りますね。{nickname}、次はどんなお話をしましょうか？」と温かく声に出して問いかけてください。"
-                                f"※これ以降は通常会話モードですので generate_memory_visual や refine_memory_visual は呼ばないでください。"
-                            )
-                        logger.info(f"Drawing mode finished (saved={saved}); returning to normal conversation.")
-                        try:
-                            await session.send_client_content(
-                                turns=[types.Content(role="user", parts=[types.Part.from_text(text=finish_prompt)])],
-                                turn_complete=True
-                            )
-                        except Exception as fd_err:
-                            logger.warning(f"Failed to send finish_drawing_mode prompt: {fd_err}")
+                            if saved:
+                                finish_prompt = (
+                                    f"「{topic_done}」の絵を保存し、絵画モードを終了して通常会話モードに移行しました。"
+                                    f"{nickname}に向かって、「絵を保存しましたよ！これで絵画モードを終了して、また普通のおしゃべりに戻りますね。先ほどのお話の続きや、他に楽しまれていたことなど、またゆっくりお話ししましょう！」と温かく伝え、日常の穏やかな質問を1つだけ声に出して問いかけてください。"
+                                    f"※これ以降は通常会話モードですので generate_memory_visual や refine_memory_visual は呼ばないでください。"
+                                )
+                            else:
+                                finish_prompt = (
+                                    f"絵は保存せずに絵画モードを終了し、通常会話モードに移行しました。"
+                                    f"{nickname}に向かって、「かしこまりました！これで絵画モードを終了して、また普通のおしゃべりに戻りますね。{nickname}、次はどんなお話をしましょうか？」と温かく声に出して問いかけてください。"
+                                    f"※これ以降は通常会話モードですので generate_memory_visual や refine_memory_visual は呼ばないでください。"
+                                )
+                            try:
+                                await session.send_client_content(
+                                    turns=[types.Content(role="user", parts=[types.Part.from_text(text=finish_prompt)])],
+                                    turn_complete=True
+                                )
+                            except Exception as fd_err:
+                                logger.warning(f"Failed to send finish_drawing_mode prompt: {fd_err}")
 
                     elif msg_type == "request_confirmed_draw":
                         # ユーザーが6ステップ最終確認に対して「はい・このまま描いてください」と合意、または「🎨 今の話題を絵にする」を押した時のみ描画を実行
-                        draw_topic = data.get("topic") or (self.discussed_topics[-1] if self.discussed_topics else "思い出の情景")
-                        summary_arg = (data.get("summary") or "").strip()
+                        draw_topic = correct_japanese_homophones(data.get("topic") or (self.discussed_topics[-1] if self.discussed_topics else "思い出の情景"))
+                        summary_arg = correct_japanese_homophones((data.get("summary") or "").strip())
                         art_style_arg = data.get("art_style") or "watercolor"
                         if summary_arg:
                             self.collector_summary = summary_arg

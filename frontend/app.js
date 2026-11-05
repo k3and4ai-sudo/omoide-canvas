@@ -5014,10 +5014,18 @@ ${artStyle.svgStyleRules}
     setAvatarState('listening');
     renderSceneCollectorUI();
 
+    // 絵画モード終了直後に無音タイマー（ai_no_question）が暴発してセリフが重複するのを防ぐためクールダウン設定
+    state.lastFollowUpTriggerTime = Date.now();
+    state.followUpCountSinceLastUserSpeech = 1;
+    state.lastAiSpeechFinishedTime = Date.now();
+    state.currentSilenceSec = 0;
+
     logDiag(shouldSave
       ? `💾 「${finishedTopic}」を保存し、絵画モードを終了して通常会話に移行しました。`
       : `💬 保存せずに絵画モードを終了し、通常会話に移行しました。`
     );
+
+    const isAiAlreadyAnswering = state.isAiSpeaking || (Date.now() - (state.lastAiSpeechFinishedTime || 0) < 6000);
 
     if (state.isSimulation && !state.hasLocalBackend) {
       const msg = shouldSave
@@ -5027,20 +5035,23 @@ ${artStyle.svgStyleRules}
       speakTextWithWebSpeech(msg);
     } else if (state.socket && state.socket.readyState === WebSocket.OPEN) {
       if (state.isDirectGeminiWs) {
-        const promptText = shouldSave
-          ? `「${finishedTopic}」の絵を保存し、絵画モードを終了して通常会話に戻りました。「絵を保存しましたよ！これで絵画モードを終了して、また普通のおしゃべりに戻りますね。」と伝え、日常の優しい質問を1つだけ問いかけてください。`
-          : `絵は保存せずに絵画モードを終了し、通常会話に戻りました。「かしこまりました！それではまた普通のおしゃべりをしましょうね。」と伝え、日常の優しい質問を1つだけ問いかけてください。`;
-        state.socket.send(JSON.stringify({
-          client_content: {
-            turns: [{ role: 'user', parts: [{ text: promptText }] }],
-            turn_complete: true
-          }
-        }));
+        if (!isAiAlreadyAnswering) {
+          const promptText = shouldSave
+            ? `「${finishedTopic}」の絵を保存し、絵画モードを終了して通常会話に戻りました。「絵を保存しましたよ！これで絵画モードを終了して、また普通のおしゃべりに戻りますね。」と伝え、日常の優しい質問を1つだけ問いかけてください。`
+            : `絵は保存せずに絵画モードを終了し、通常会話に戻りました。「かしこまりました！それではまた普通のおしゃべりをしましょうね。」と伝え、日常の優しい質問を1つだけ問いかけてください。`;
+          state.socket.send(JSON.stringify({
+            client_content: {
+              turns: [{ role: 'user', parts: [{ text: promptText }] }],
+              turn_complete: true
+            }
+          }));
+        }
       } else {
         state.socket.send(JSON.stringify({
           type: 'finish_drawing_mode',
           saved: shouldSave,
-          topic: finishedTopic
+          topic: finishedTopic,
+          already_spoken: isAiAlreadyAnswering
         }));
       }
     }
@@ -5373,6 +5384,16 @@ ${artStyle.svgStyleRules}
     s = s.replace(/ドラッグを(書い|描い|引い)/g, 'トラックを描い');
     s = s.replace(/トラックを変え/g, 'トラックを描い');
     s = s.replace(/かけっこやきを/g, 'かけっこや綱引きを');
+
+    // ペット・動物の飼育に関する同音異義語補正（「買って」→「飼って」）
+    s = s.replace(/(昔|家|実家|子供の頃|子どもの頃|幼い頃|若い頃|以前|前)?\s*(買っていた|買ってました|買ってた|買っていたの|買っていたんだ|買ってたんだ)\s*(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)/g, '$1飼っていた$3');
+    s = s.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買っていた|買ってました|買ってた)/g, '$1を飼っていた');
+    s = s.replace(/(買っていた|買ってました|買ってた)\s*(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)/g, '飼っていた$2');
+    s = s.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)う/g, '$1を飼う');
+    s = s.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)った/g, '$1を飼った');
+    s = s.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)って/g, '$1を飼って');
+    s = s.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)いたい/g, '$1を飼いたい');
+
     return s.trim();
   }
 
