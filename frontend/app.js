@@ -1713,9 +1713,10 @@ ${levelRules}
       }
     }
 
-    // (2c) 6ステップ一通り完了後（confirming / ready）にAIからまだ内容確認の発話が行われていない場合：無音3.0秒で確認発話を促す
-    const aiAskedConfirmation = /(?:一通り|よろしいでしょうか|修正したい|キャンバスに描|描いてみましょうか|描きますね)/.test(lastAiText);
-    if ((sc.status === 'confirming' || sc.status === 'ready') && !aiAskedConfirmation && silenceMs >= 3000 && followUpCount === 0) {
+    // (2c) 6ステップ一通り完了後（confirming / ready）にAIからまだ内容確認の質問（よろしいでしょうか？等）が完了していない場合、
+    // または途中で音声が切れてしまった場合：無音3.0秒で直ちに簡潔な確認質問を促す
+    const aiEndedWithConfirmationQuestion = /(?:よろしいでしょうか|描いてみましょうか|描いてもいいですか|描きますか|いかがですか)[？\?]?$/.test(lastAiText);
+    if ((sc.status === 'confirming' || sc.status === 'ready') && !aiEndedWithConfirmationQuestion && silenceMs >= 3000 && followUpCount === 0) {
       state.lastAiSpeechFinishedTime = now;
       state.currentSilenceSec = 0;
       triggerSilenceFollowUp('confirm_summary');

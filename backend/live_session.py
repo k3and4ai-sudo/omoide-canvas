@@ -576,11 +576,13 @@ class LiveSessionManager:
                                 )
                         elif status in ("confirming", "ready") or active_step == "confirm":
                             self.ai_asked_confirmation = True
-                            summary_desc = summary or f"話題：{topic or 'おまかせ'}、場所：{place or 'おまかせ'}、天候：{weather or 'おまかせ'}、登場人物：{people or 'おまかせ'}、様子：{'・'.join(details) if details else 'おまかせ'}、雰囲気：{mood or 'おまかせ'}"
+                            brief_topic = (topic or place or "思い出").strip()
                             followup_prompt = (
-                                f"6ステップの聞き取りが一通り完了しました（聞き取った内容：{summary_desc}）。"
-                                f"{empathy_prefix}{nickname}に向かって、「一通りお話を伺いました！{summary_desc}、という内容でよろしいでしょうか？もし修正したいところやもう一度お話ししたい項目があれば教えてくださいね。この内容で絵を描いてもよろしいでしょうか？」と優しく声に出して確認してください。"
-                                f"※【厳守】ご本人が「はい・お願いします」と返答されるまでは、絶対に generate_memory_visual ツールを呼ばないでください。"
+                                f"6ステップの聞き取りが一通り完了しました。"
+                                f"【超重要・発話長制限】「①話題…②場所…」と項目番号を一つずつ全部読み上げる長文は絶対に禁止です（音声合成ストリームの上限に達して途中で切れてしまいます）。"
+                                f"{empathy_prefix}{nickname}に向かって、「『{brief_topic}』の素敵な思い出ですね！この内容でキャンバスに絵を描いてもよろしいでしょうか？」のように、"
+                                f"1〜2文（40文字以内）で短く温かく確認の質問を声に出して問いかけてください。"
+                                f"※【厳守】ご本人が「はい・描いて」と返答されるまでは、絶対に generate_memory_visual ツールを呼ばないでください。"
                             )
                         elif active_step == "topic":
                             followup_prompt = (
