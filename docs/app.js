@@ -210,6 +210,7 @@
     memoryVideo: document.getElementById('memoryVideo'),
     drawingOverlay: document.getElementById('drawingOverlay'),
     drawingText: document.getElementById('drawingText'),
+    drawingTimer: document.getElementById('drawingTimer'),
     drawingSubtext: document.getElementById('drawingSubtext'),
     canvasUpdateToast: document.getElementById('canvasUpdateToast'),
     canvasUpdateToastText: document.getElementById('canvasUpdateToastText'),
@@ -452,6 +453,7 @@
   }
 
   function showCanvasError(title, message, isWarning = false) {
+    stopDrawingProgress();
     if (!dom.canvasErrorBanner) return;
     if (dom.canvasErrorTitle) dom.canvasErrorTitle.textContent = title;
     if (dom.canvasErrorDesc) dom.canvasErrorDesc.textContent = message;
@@ -1374,6 +1376,15 @@ ${levelRules}
   // ============================================================================
   async function toggleSession() {
     if (state.isSessionActive) {
+      // 描画進行中に誤って終了ボタンを押して絵の生成が中断されるのを防止
+      const isCurrentlyDrawing = state.isDrawingMedia || (state.sceneCollector && state.sceneCollector.status === 'drawing');
+      if (isCurrentlyDrawing) {
+        const confirmStop = window.confirm('現在、さくらさんが思い出の絵を描いている途中です。\n今お話を終了すると絵の完成が中断されてしまいますが、終了してもよろしいですか？\n（あと数秒お待ちいただくと画面に絵が表示されます）');
+        if (!confirmStop) {
+          logDiag('描画中のためお話終了をキャンセルし、描画完了を待機します。');
+          return;
+        }
+      }
       await stopSession();
     } else {
       await startSession();
@@ -2227,6 +2238,7 @@ ${levelRules}
   }
 
   function stopSessionCleanup() {
+    stopDrawingProgress();
     state.isSessionActive = false;
     state.isConnected = false;
     stopSilenceWatchdog();
@@ -4299,23 +4311,78 @@ ${artStyle.svgStyleRules}
   }
 
   // ============================================================================
+  // 描画進行中ステータス ＆ リアルタイム秒数タイマー制御
+  // ============================================================================
+  let drawingTimerInterval = null;
+  let drawingStartTime = 0;
+
+  function startDrawingProgress(topic = '') {
+    state.isDrawingMedia = true;
+    drawingStartTime = Date.now();
+    if (drawingTimerInterval) {
+      clearInterval(drawingTimerInterval);
+    }
+
+    dom.drawingOverlay?.classList.remove('hidden');
+    if (dom.drawingText) {
+      dom.drawingText.textContent = topic ? `「${topic}」を描いています...` : '絵の具をといて、情景を描いています...';
+    }
+    updateDrawingTimerDisplay();
+
+    drawingTimerInterval = setInterval(() => {
+      updateDrawingTimerDisplay();
+    }, 1000);
+
+    const pName = state.currentProfile?.partner?.name || 'さくら';
+    if (dom.partnerStatusText) {
+      dom.partnerStatusText.textContent = `${pName}：絵を描いています...（少々お待ちください）`;
+    }
+    if (dom.btnSessionToggle && state.isSessionActive) {
+      dom.btnSessionToggle.innerHTML = '<span class="btn-icon">🎨</span><span class="btn-text">絵を描いています...</span>';
+      dom.btnSessionToggle.classList.add('drawing-mode');
+    }
+  }
+
+  function updateDrawingTimerDisplay() {
+    const elapsedSec = Math.floor((Date.now() - drawingStartTime) / 1000);
+    if (dom.drawingTimer) {
+      let phaseText = 'AIが情景を構成中...';
+      if (elapsedSec >= 4 && elapsedSec < 10) {
+        phaseText = '水彩のグラデーションを描いています...';
+      } else if (elapsedSec >= 10 && elapsedSec < 20) {
+        phaseText = '細部を丁寧に仕上げています...';
+      } else if (elapsedSec >= 20) {
+        phaseText = 'もう少しで完成します...';
+      }
+      dom.drawingTimer.textContent = `⏱️ 経過時間: ${elapsedSec}秒（${phaseText}）`;
+    }
+  }
+
+  function stopDrawingProgress() {
+    state.isDrawingMedia = false;
+    if (drawingTimerInterval) {
+      clearInterval(drawingTimerInterval);
+      drawingTimerInterval = null;
+    }
+    dom.drawingOverlay?.classList.add('hidden');
+    if (dom.btnSessionToggle && state.isSessionActive) {
+      dom.btnSessionToggle.innerHTML = '<span class="btn-icon">⏹️</span><span class="btn-text">お話を終了する</span>';
+      dom.btnSessionToggle.classList.remove('drawing-mode');
+    }
+  }
+
+  // ============================================================================
   // アバター表情切り替え（不要なDOM再描画・ちらつき防止付き）
   // ============================================================================
   function setAvatarState(avatarState) {
-    // 描画処理が進行中の間は、描画完了時（明示的な終了呼び出し）以外の状態変化を完全にブロック！
-    // （描画中に相槌音声やテキスト受信によってアバターがガタガタ動くのを100%防止）
-    if (state.isDrawingMedia && avatarState !== 'drawing' && avatarState !== 'idle' && avatarState !== 'force_reset') {
-      return;
-    }
-
     if (avatarState === 'drawing') {
-      state.isDrawingMedia = true;
+      startDrawingProgress(state.sceneCollector?.topic || '');
       if (state.sceneCollector && state.sceneCollector.status !== 'drawing') {
         state.sceneCollector.status = 'drawing';
         renderSceneCollectorUI();
       }
     } else if (avatarState === 'force_reset') {
-      state.isDrawingMedia = false;
+      stopDrawingProgress();
       avatarState = state.isSessionActive ? 'listening' : 'idle';
     }
 
@@ -4326,28 +4393,37 @@ ${artStyle.svgStyleRules}
 
     const pName = state.currentProfile?.partner?.name || 'パートナー';
     let nextLabel = '';
+    const isCurrentlyDrawing = state.isDrawingMedia || (state.sceneCollector && state.sceneCollector.status === 'drawing');
 
     switch (avatarState) {
       case 'idle':
         nextLabel = `${pName}：準備完了`;
-        dom.drawingOverlay?.classList.add('hidden');
+        if (!isCurrentlyDrawing) stopDrawingProgress();
         break;
       case 'listening':
-        // 情景聞き取り中と日常会話で状態メッセージを明確に分離
-        if (state.sceneCollector && state.sceneCollector.status === 'collecting') {
+        if (isCurrentlyDrawing) {
+          nextLabel = `${pName}：絵を描いています...（少々お待ちください）`;
+          dom.drawingOverlay?.classList.remove('hidden');
+        } else if (state.sceneCollector && state.sceneCollector.status === 'collecting') {
           nextLabel = `${pName}：思い出の情景を聞き取り中...`;
+          dom.drawingOverlay?.classList.add('hidden');
         } else {
           nextLabel = `${pName}：お話を聞いています...`;
+          dom.drawingOverlay?.classList.add('hidden');
         }
-        dom.drawingOverlay?.classList.add('hidden');
         break;
       case 'speaking':
-        nextLabel = `${pName}：お話し中...`;
-        dom.drawingOverlay?.classList.add('hidden');
+        if (isCurrentlyDrawing) {
+          nextLabel = `${pName}：お話し中（絵を描いています...）`;
+          dom.drawingOverlay?.classList.remove('hidden');
+        } else {
+          nextLabel = `${pName}：お話し中...`;
+          dom.drawingOverlay?.classList.add('hidden');
+        }
         break;
       case 'drawing':
-        nextLabel = `${pName}：絵を描いています...（聞き取り中止中）`;
-        dom.drawingOverlay?.classList.remove('hidden');
+        nextLabel = `${pName}：絵を描いています...（少々お待ちください）`;
+        startDrawingProgress(state.sceneCollector?.topic || '');
         break;
     }
 
@@ -4371,8 +4447,7 @@ ${artStyle.svgStyleRules}
   }
 
   function displayGeneratedMedia(mediaData) {
-    state.isDrawingMedia = false;
-    dom.drawingOverlay.classList.add('hidden');
+    stopDrawingProgress();
 
     const title = mediaData.title || '思い出の情景';
     dom.captionTitle.textContent = title;

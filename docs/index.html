@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261105_03">
+  <link rel="stylesheet" href="styles.css?v=20261105_04">
 </head>
 <body>
 
@@ -20,7 +20,7 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="描画完了時切断防止＆再接続時絵画確認復旧版">v20261105_03</span>
+      <span class="app-version-badge" title="描画中リアルタイムステータス表示＆誤終了防止版">v20261105_04</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
@@ -204,11 +204,13 @@
             <button type="button" class="btn-dismiss-error" id="btnDismissError" title="閉じる">✕</button>
           </div>
 
-          <!-- 描画中ローディング演出（水彩がにじむエフェクト ＆ 進行ステップ表示） -->
+          <!-- 描画中ローディング演出（水彩がにじむエフェクト ＆ 進行ステップ表示 ＆ リアルタイム秒数タイマー） -->
           <div id="drawingOverlay" class="drawing-overlay hidden">
             <div class="watercolor-spinner"></div>
+            <div class="drawing-status-badge">🎨 正常に描画進行中</div>
             <p class="drawing-text" id="drawingText">絵の具をといて、情景を描いています...</p>
-            <p class="drawing-subtext" id="drawingSubtext">AI画像生成エンジンに接続中...</p>
+            <p class="drawing-timer" id="drawingTimer">⏱️ 経過時間: 0秒（AIが情景を構成中...）</p>
+            <p class="drawing-subtext" id="drawingSubtext">※お話を終了せず、このまま10〜15秒ほどお待ちください</p>
           </div>
         </div>
 
@@ -707,6 +709,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261105_03"></script>
+  <script src="app.js?v=20261105_04"></script>
 </body>
 </html>

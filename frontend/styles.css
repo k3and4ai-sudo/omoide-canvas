@@ -746,6 +746,20 @@ body {
   100% { transform: rotate(360deg); }
 }
 
+.drawing-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #e8f5e9;
+  color: #2e7d32;
+  border: 1px solid #a5d6a7;
+  padding: 4px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
 .drawing-text {
   font-family: 'Kiwi Maru', serif;
   font-size: 18px;
@@ -753,12 +767,31 @@ body {
   font-weight: 500;
 }
 
+.drawing-timer {
+  font-size: 14px;
+  color: #1976d2;
+  background: #e3f2fd;
+  border: 1px solid #bbdefb;
+  padding: 4px 14px;
+  border-radius: 12px;
+  margin-top: 10px;
+  font-weight: 700;
+  font-family: 'Noto Sans JP', sans-serif;
+  letter-spacing: 0.5px;
+}
+
 .drawing-subtext {
   font-size: 13px;
   color: var(--text-muted);
-  margin-top: 6px;
+  margin-top: 8px;
   font-family: 'Noto Sans JP', sans-serif;
   animation: pulseCollector 1.5s infinite;
+}
+
+.btn-primary-large.drawing-mode {
+  background: linear-gradient(135deg, #78909c, #546e7a) !important;
+  color: #ffffff !important;
+  cursor: wait;
 }
 
 /* 描画エラー通知バナー */
