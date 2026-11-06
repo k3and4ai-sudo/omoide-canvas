@@ -1716,12 +1716,6 @@ ${levelRules}
     }
 
     // 2. 文字起こしがまったくない無音状態が3.0秒以上続いた場合
-    const sc = state.sceneCollector;
-    // 描画中（drawing）または描画完了後（drawn）は無音フォローアップで聞き取り確認等を繰り返させない
-    if (sc.status === 'drawing' || sc.status === 'drawn') {
-      return;
-    }
-
     const lastAiText = (state.lastAiUtteranceText || '').trim();
     const aiEndedWithQuestion = /(?:でしょうか|ますか|ましょうか|ですか|かな|教えて|聞かせて|？|\?)/.test(lastAiText);
     const followUpCount = state.followUpCountSinceLastUserSpeech || 0;
@@ -1777,7 +1771,6 @@ ${levelRules}
     state.wasAiInterrupted = false;
     state.followUpCountSinceLastUserSpeech = (state.followUpCountSinceLastUserSpeech || 0) + 1;
 
-    const sc = state.sceneCollector;
     const lastUserText = (state.lastUserUtteranceText || '').trim();
     const lastAiText = (state.lastAiUtteranceText || '').trim();
     const summaryStr = buildCollectorSummaryText();
