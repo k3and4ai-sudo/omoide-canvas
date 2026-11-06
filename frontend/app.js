@@ -1722,6 +1722,14 @@ ${levelRules}
     // 2. 文字起こしがまったくない無音状態が3.0秒以上続いた場合
     const lastAiText = (state.lastAiUtteranceText || '').trim();
     const aiEndedWithQuestion = /(?:でしょうか|ますか|ましょうか|ですか|かな|教えて|聞かせて|？|\?)/.test(lastAiText);
+    // ※【超重要】聞き取り内容の確認中（confirming / ready / テキストボックス表示中）、
+    // 描画中（drawing）、描画完了後（drawn）は、ユーザー様が情景を確認・編集している最中、または絵画鑑賞中のため、
+    // 無音フォローアップタイマーによる割り込み・別の聞き取り開始を100%完全遮断する！
+    const isBannerOpen = dom.collectorActionBanner && !dom.collectorActionBanner.classList.contains('hidden');
+    if (sc.status === 'confirming' || sc.status === 'ready' || sc.status === 'drawing' || sc.status === 'drawn' || state.isDrawingMedia || isBannerOpen || sc.aiHasAskedConfirmation) {
+      return;
+    }
+
     const followUpCount = state.followUpCountSinceLastUserSpeech || 0;
 
     // (2a) AIの直前の発話が質問で終わっていない（感想のみ・途中中断など）場合：無音3.0秒で次の質問を促す
@@ -1764,8 +1772,9 @@ ${levelRules}
 
   function triggerSilenceFollowUp(reason) {
     const sc = state.sceneCollector;
-    // 描画中または描画完了直後は無音フォローアップによる割り込み・再誘導を100%防止
-    if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') {
+    // 確認中、描画中、または描画完了直後は無音フォローアップによる割り込み・別の聞き取り開始を100%防止！
+    const isBannerOpen = dom.collectorActionBanner && !dom.collectorActionBanner.classList.contains('hidden');
+    if (state.isDrawingMedia || sc.status === 'confirming' || sc.status === 'ready' || sc.status === 'drawing' || sc.status === 'drawn' || isBannerOpen || sc.aiHasAskedConfirmation) {
       return;
     }
 
@@ -4243,8 +4252,8 @@ ${artStyle.svgStyleRules}
           state.sceneCollector.status = 'confirming';
           state.sceneCollector.aiHasAskedConfirmation = true;
           if (dom.editSceneDescription) {
-            const summaryText = data.summary || buildCollectorSummaryText() || data.topic || '';
-            dom.editSceneDescription.value = summaryText;
+            const bulleted = buildCollectorBulletedSummary();
+            dom.editSceneDescription.value = bulleted;
             state.userHasManuallyEditedScene = false;
           }
           if (dom.collectorActionBanner) {
@@ -4994,6 +5003,46 @@ ${artStyle.svgStyleRules}
       parts.push(add);
     }
     return parts.join('・');
+  }
+
+  function cleanScenePhrase(text) {
+    if (!text) return '';
+    let s = text.trim()
+      .replace(/^(?:ええと|あの|その|うん|はい|で|えっと|なんか)[、\s]*/g, '')
+      .replace(/[「」]/g, '')
+      .replace(/\s+/g, ' ');
+    // 連続した単語の重複を整理
+    s = s.replace(/(.+?)\1+/g, '$1');
+    return s.trim();
+  }
+
+  function buildCollectorBulletedSummary() {
+    const sc = state.sceneCollector;
+    const lines = [];
+    if (sc.topic) {
+      lines.push(`・話題・思い出：${cleanScenePhrase(sc.topic)}`);
+    }
+    if (sc.place) {
+      lines.push(`・場所・舞台：${cleanScenePhrase(sc.place)}`);
+    }
+    if (sc.weather) {
+      lines.push(`・季節・天候：${cleanScenePhrase(sc.weather)}`);
+    }
+    if (sc.people) {
+      lines.push(`・登場人物：${cleanScenePhrase(sc.people)}`);
+    }
+    if (sc.details.size > 0) {
+      const detailsArray = Array.from(sc.details)
+        .map(d => cleanScenePhrase(d))
+        .filter(d => d.length >= 2 && !d.includes('Google') && !d.includes('テスト'));
+      if (detailsArray.length > 0) {
+        lines.push(`・見えた様子：${detailsArray.join('、')}`);
+      }
+    }
+    if (sc.mood) {
+      lines.push(`・気分・雰囲気：${cleanScenePhrase(sc.mood)}`);
+    }
+    return lines.length > 0 ? lines.join('\n') : (sc.topic ? `・思い出：${sc.topic}` : '・思い出の風景');
   }
 
   function buildCollectorSummaryText() {
@@ -6376,12 +6425,12 @@ ${artStyle.svgStyleRules}
     if (dom.collectorActionBanner) {
       if (sc.status === 'confirming' || (sc.status === 'ready' && !state.isDrawingMedia) || sc.aiHasAskedConfirmation) {
         dom.collectorActionBanner.classList.remove('hidden');
-        const summaryStr = buildCollectorSummaryText() || sc.topic || '思い出の情景';
         if (dom.collectorActionText) {
           dom.collectorActionText.textContent = `一通りお話を伺いました！この内容で絵を描いてよろしいですか？`;
         }
+        const bulleted = buildCollectorBulletedSummary();
         if (dom.editSceneDescription && (!dom.editSceneDescription.value || !state.userHasManuallyEditedScene)) {
-          dom.editSceneDescription.value = summaryStr;
+          dom.editSceneDescription.value = bulleted;
         }
       } else {
         dom.collectorActionBanner.classList.add('hidden');

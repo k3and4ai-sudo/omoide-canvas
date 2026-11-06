@@ -587,9 +587,11 @@ class LiveSessionManager:
                         active_step = data.get("active_step", "topic")
                         status = data.get("status", "collecting")
                         reason = data.get("reason", "listening_next_step")
-                        # 描画中または描画完了後は3秒無音フォローアップで聞き取り確認を繰り返させない！
-                        if status in ("drawing", "drawn") or self.collector_status in ("drawing", "drawn") or self.is_generating_media:
-                            logger.debug(f"Skipping prompt_followup because status is {status}/{self.collector_status}.")
+                        # ※【超重要】聞き取り内容の確認中（confirming / ready）、描画中（drawing）、描画完了後（drawn）は、
+                        # ユーザー様が画面のテキストボックスで確認・編集している最中、または絵画鑑賞中のため、
+                        # フォローアップによる割り込み・別の聞き取り開始を100%完全遮断する！
+                        if status in ("confirming", "ready", "drawing", "drawn") or self.collector_status in ("confirming", "ready", "drawing", "drawn") or self.is_generating_media:
+                            logger.info(f"Skipping prompt_followup during '{status}/{self.collector_status}' to let user review/draw peacefully.")
                             continue
 
                         self.collector_status = status
