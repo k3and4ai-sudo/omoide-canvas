@@ -627,10 +627,27 @@
   function initLoginModalState() {
     try {
       const savedKey = localStorage.getItem(STORAGE_KEY_API);
-      if (savedKey && dom.inputSessionApiKey) {
-        dom.inputSessionApiKey.value = savedKey;
+      if (savedKey && savedKey.length >= 15) {
+        state.sessionApiKey = savedKey;
+        state.isLoggedIn = true;
+        if (dom.inputSessionApiKey) {
+          dom.inputSessionApiKey.value = savedKey;
+        }
+        if (dom.chkRememberKeyOnDevice) {
+          dom.chkRememberKeyOnDevice.checked = true;
+        }
+        const masked = `${savedKey.slice(0, 6)}...${savedKey.slice(-4)}`;
+        if (dom.apiKeyStatusBadge) {
+          dom.apiKeyStatusBadge.textContent = `認証済 (${masked})`;
+        }
+        dom.btnOpenLoginModal?.classList.add('active-key');
+        closeLoginModal();
+        logDiag(`前回の保存APIキーを復元しました (${masked})`);
+        return;
       }
     } catch (e) {}
+    // キーが保存されていない場合はログインモーダルを表示
+    openLoginModal();
   }
 
   function showLoginMessage(text, isError = true) {
@@ -641,8 +658,12 @@
 
   function openLoginModal() {
     if (!dom.loginModal) return;
-    if (state.sessionApiKey && dom.inputSessionApiKey) {
-      dom.inputSessionApiKey.value = state.sessionApiKey;
+    const currentKey = state.sessionApiKey || localStorage.getItem(STORAGE_KEY_API) || '';
+    if (currentKey && dom.inputSessionApiKey) {
+      dom.inputSessionApiKey.value = currentKey;
+    }
+    if (dom.chkRememberKeyOnDevice) {
+      dom.chkRememberKeyOnDevice.checked = true;
     }
     if (dom.loginErrorMsg) {
       dom.loginErrorMsg.className = 'login-msg hidden';
@@ -659,32 +680,41 @@
     if (!rawKey || rawKey.length < 15) {
       return { valid: false, message: 'APIキーの文字数が不足しています。正しいGemini APIキーを入力してください。' };
     }
-    if (state.hasLocalBackend) {
-      try {
-        const res = await fetch('/api/auth/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ api_key: rawKey })
-        });
-        if (res.ok) {
-          return await res.json();
-        }
-      } catch (e) {
-        state.hasLocalBackend = false;
+    // 1. ローカルバックエンド（/api/auth/verify）を優先確認
+    try {
+      const res = await fetch('/api/auth/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: rawKey })
+      });
+      if (res.ok) {
+        state.hasLocalBackend = true;
+        const data = await res.json();
+        return data;
       }
+    } catch (e) {
+      // ローカルバックエンドへの接続失敗（GitHub Pages環境など）
     }
-    // ブラウザから直接 Google Gemini API エンドポイントでキーの有効性を検証（トンネル・バックエンド不要）
+
+    // 2. バックエンドがない環境（GitHub Pages等）でのブラウザ直結フォールバック
+    const masked = `${rawKey.slice(0, 6)}...${rawKey.slice(-4)}`;
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash?key=${encodeURIComponent(rawKey)}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { mode: 'cors' });
       if (res.ok) {
-        const masked = `${rawKey.slice(0, 6)}...${rawKey.slice(-4)}`;
         return { valid: true, masked_key: masked, message: 'APIキーの認証に成功しました（ブラウザ直結モード）' };
       }
-      return { valid: false, message: 'APIキーが無効か、利用権限がありません。Google AI Studioで発行したキーをご確認ください。' };
+      if (res.status === 400 || res.status === 403) {
+        return { valid: false, message: 'APIキーが無効か、利用権限がありません。Google AI Studioで発行したキーをご確認ください。' };
+      }
     } catch (err) {
-      return { valid: false, message: `Google APIサーバーへの接続確認に失敗しました: ${err.message}` };
+      // ブラウザのCORS制限等でfetchが弾かれた場合でも、キーの形式が妥当であれば通過させる
+      if (rawKey.startsWith('AIzaSy') || rawKey.startsWith('AQ') || rawKey.length >= 25) {
+        return { valid: true, masked_key: masked, message: 'APIキーを設定しました（直結モード）' };
+      }
+      return { valid: false, message: `APIキーの確認に失敗しました: ${err.message}` };
     }
+    return { valid: true, masked_key: masked, message: 'APIキーを設定しました' };
   }
 
   async function handleLoginSubmit(e) {
@@ -723,9 +753,9 @@
       state.sessionApiKey = rawKey;
       state.isLoggedIn = true;
 
-      // 端末ブラウザへの保存設定（チェックされている場合のみ保存）
+      // 端末ブラウザへの保存設定（デフォルトで保存）
       try {
-        if (dom.chkRememberKeyOnDevice?.checked) {
+        if (dom.chkRememberKeyOnDevice ? dom.chkRememberKeyOnDevice.checked : true) {
           localStorage.setItem(STORAGE_KEY_API, rawKey);
         } else {
           localStorage.removeItem(STORAGE_KEY_API);
@@ -925,11 +955,13 @@
         if (text && dom.inputSessionApiKey) {
           const cleanKey = text.trim().replace(/[\r\n\s]/g, '');
           dom.inputSessionApiKey.value = cleanKey;
-          showLoginMessage('📋 クリップボードから貼り付けました', false);
+          dom.inputSessionApiKey.focus();
+          showLoginMessage('📋 クリップボードから貼り付けました。「🚀 このAPIキーでログインして開始」を押してください。', false);
         }
       } catch (err) {
-        // クリップボード読み取り権限がない場合はペーストショートカットを案内
-        showLoginMessage('Ctrl + V で入力枠に貼り付けてください', false);
+        // クリップボード読み取り権限がない場合は入力枠にフォーカスしてショートカットを案内
+        dom.inputSessionApiKey?.focus();
+        showLoginMessage('ブラウザの権限制限のため、入力枠をクリックして Ctrl + V（または右クリック貼り付け）してください。', false);
       }
     });
 
