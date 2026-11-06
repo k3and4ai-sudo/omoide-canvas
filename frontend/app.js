@@ -6117,21 +6117,30 @@ ${artStyle.svgStyleRules}
     }
 
     // ユーザーからの明示的描画リクエスト・最終確認への合意返答の検知
-    // ※必ず聞き取り確認（confirming / aiHasAskedConfirmation）の後にご本人が合意した時のみ描画を開始する！
+    // ※【厳格化ルール】必ず一通りの聞き取りが完了し、最終確認（confirming）に入って画面に確認テキストボックスが表示された後にのみ実行する！
+    // ※通常の会話中の「うん、〇〇があって」「はい、〇〇でした」という相槌では絶対に描画を開始しない！
     const hasAnyCollectedScene = COLLECTOR_STEPS.some(s => hasStepValue(s));
-    const completedStepCount = COLLECTOR_STEPS.filter(s => hasStepValue(s) || sc.stepStates[s] === 'skipped').length;
-    const isExplicitDrawCommand = hasAnyCollectedScene && (sc.status === 'confirming' || sc.status === 'ready' || sc.aiHasAskedConfirmation || completedStepCount >= 5) &&
-      /(?:今すぐ.*[描書]いて|今の話題を絵にして|キャンバスに[描書]いて|キャンバスに出して|この絵を[描書]いて|このまま.*[描書]いて|絵を[描書]いてください|このままお願いします|その内容で.*[描書]いて|それで.*[描書]いて)/.test(clean);
-    const isApprovalForPrompt = hasAnyCollectedScene && (sc.aiHasAskedConfirmation || sc.isAwaitingConfirmation || sc.status === 'confirming' || sc.status === 'ready') &&
-      /^(?:はい|うん|ええ|OK|オッケー|いいよ|いいですよ|いいです|良いです|よいです|これでいい.*|これで良い.*|このままでいい.*|このままで良い.*|その内容でいい.*|その内容で良い.*|その内容で.*|それでいい.*|それで良い.*|それでお願い.*|大丈夫.*|間違いありません|問題ありません|お願いします|お願い|描いて.*|書いて.*|そうして.*|ぜひ.*|よろしく.*|結構です)/.test(clean.trim());
+    const isBannerOpen = dom.collectorActionBanner && !dom.collectorActionBanner.classList.contains('hidden');
+    
+    // 最終確認状態（テキストボックス表示中）でのみ合意を受け付ける
+    const isConfirmingPhase = sc.status === 'confirming' && (isBannerOpen || sc.aiHasAskedConfirmation);
 
-    if (isExplicitDrawCommand || isApprovalForPrompt) {
+    // 明示的な描画命令（「この内容で描いて」「これで描いてください」等）
+    const isExplicitDrawCommand = hasAnyCollectedScene &&
+      /(?:この内容で.*[描書]いて|その内容で.*[描書]いて|それで.*[描書]いて|このまま.*[描書]いてください|キャンバスに[描書]いてください)/.test(clean);
+
+    // 最終確認フェーズにおける明確な合意言葉（単独の「お願いします」「いいですよ」など）
+    const isDefiniteAgreementInConfirm = isConfirmingPhase &&
+      /(?:お願いします|いいですよ|いいです|良いです|これでいい|この内容でいい|その内容でいい|そうしてください)/.test(clean) &&
+      !/(?:ない|ません|違う|ちがう|待って|まって|まだ)/.test(clean);
+
+    if (isExplicitDrawCommand || isDefiniteAgreementInConfirm) {
       const now = Date.now();
       if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
         logDiag(`描画中またはクールダウン中のため、重複トリガーをスキップ: 「${clean}」`);
         return;
       }
-      logDiag(`ユーザーの聞き取り確認合意・描画指示を検知: 「${clean}」`);
+      logDiag(`ユーザーの最終確認合意・描画指示を正式検知: 「${clean}」`);
       sc.drawConfirmedByUser = true;
       sc.isAwaitingConfirmation = false;
       sc.status = 'drawing';

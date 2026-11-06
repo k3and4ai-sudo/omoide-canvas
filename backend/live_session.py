@@ -137,40 +137,29 @@ class LiveSessionManager:
         if any(mw in clean for mw in modify_or_reject_words):
             return False
 
-        # 明示的な即時描画指示（「このまま絵を描いてください」「今すぐ描いて」等）
-        explicit_draw_cmds = (
-            "今すぐ描いて", "今すぐ書いて", "このまま絵を描いて", "このまま絵を書いて",
-            "このまま描いて", "このまま書いて", "絵を描いてください", "絵を書いてください",
-            "キャンバスに描いて", "キャンバスに書いて", "この内容で描いて", "この内容で書いて",
-            "その内容で描いて", "その内容で書いて", "それで描いて", "それで書いて"
+        # 【最重要・厳格化ルール】
+        # 最終確認（一通りの聞き取りが完了し、画面に確認テキストボックスが表示された状態）の前には、
+        # いかなる音声発話でも描画を開始しない！会話途中のフライング誤爆を100%防止する。
+        if self.collector_status != "confirming":
+            return False
+
+        # 最終確認フェーズにおける明確な合意言葉
+        definite_approvals = (
+            "この内容で描いて", "この内容で書いて", "その内容で描いて", "その内容で書いて",
+            "それで描いて", "それで書いて", "この内容でいい", "この内容でよい", "この内容で良い",
+            "これでいい", "これで良い", "お願いします", "お願い", "いいですよ", "そうしてください"
         )
-        if any(cmd in clean for cmd in explicit_draw_cmds):
+        if any(da in clean for da in definite_approvals):
             self.user_confirmed_drawing = True
-            logger.info(f"User explicitly approved drawing command: '{clean}'")
+            logger.info(f"User confirmed 6-step summary for drawing with definite phrase: '{clean}'")
             return True
 
-        # AIが「一通りお話を伺いました...この内容でよろしいですか？」と最終確認した後の承認判定
-        # ※誤爆防止: 通常の会話中の「うん、〇〇があって」「はい、〇〇でした」という相槌では絶対に描画を開始しない！
-        is_confirming_state = self.collector_status == "confirming" and self.ai_asked_confirmation
-        if is_confirming_state:
-            # 明確な合意フレーズ
-            definite_approvals = (
-                "お願いします", "いいですよ", "いいです", "良いです", "よいです",
-                "これでいい", "これで良い", "このままでいい", "その内容でいい", "その内容でよい",
-                "それでいい", "それでよい", "描いてください", "書いてください", "そうしてください"
-            )
-            if any(da in clean for da in definite_approvals):
-                self.user_confirmed_drawing = True
-                logger.info(f"User confirmed 6-step summary for drawing with definite phrase: '{clean}'")
-                return True
-
-            # 単独の「はい」「うん」「ええ」「いいよ」（前後に長い会話が続いていない、単独の返答のみ）
-            short_approvals = ("はい", "うん", "ええ", "いいよ", "ok", "オッケー")
-            clean_stripped = clean.strip("。、！! ")
-            if clean_stripped in short_approvals and len(clean_stripped) <= 3:
-                self.user_confirmed_drawing = True
-                logger.info(f"User confirmed 6-step summary for drawing with short approval: '{clean}'")
-                return True
+        # 単独の返答のみ（前後に会話が続いていない、単独の「はい」「いいですよ」）
+        clean_stripped = clean.strip("。、！! ")
+        if clean_stripped in ("はい", "いいですよ", "いいよ", "ok", "オッケー") and len(clean_stripped) <= 5:
+            self.user_confirmed_drawing = True
+            logger.info(f"User confirmed 6-step summary for drawing with short approval: '{clean}'")
+            return True
 
         return False
 
