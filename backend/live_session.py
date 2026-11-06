@@ -185,7 +185,6 @@ class LiveSessionManager:
 
         logger.info(f"🚀 Activating guaranteed drawing pipeline triggered by user approval (reason='{reason}').")
         self.collector_status = "drawing"
-        self.is_generating_media = True
         self.user_confirmed_drawing = False
 
         # フロントエンドを描画中状態に遷移
@@ -212,7 +211,7 @@ class LiveSessionManager:
         except Exception as notice_err:
             logger.warning(f"Error sending drawing speech prompt to Gemini: {notice_err}")
 
-        # バックグラウンドで画像生成を実行
+        # バックグラウンドで画像生成を実行（_handle_media_generation側で排他制御）
         topic = self.discussed_topics[-1] if self.discussed_topics else "思い出の風景"
         asyncio.create_task(
             self._handle_media_generation(session, None, {
@@ -806,7 +805,6 @@ class LiveSessionManager:
                             logger.info(f"Skipping duplicate request_confirmed_draw for '{draw_topic}' (already generating or just drawn).")
                             continue
                         self.collector_status = "drawing"
-                        self.is_generating_media = True
                         self.user_confirmed_drawing = False
                         logger.info(f"User explicitly confirmed drawing for topic: {draw_topic}")
                         await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
@@ -1413,10 +1411,35 @@ class LiveSessionManager:
 
         except Exception as e:
             logger.error(f"Error handling media generation: {e}", exc_info=True)
-            await self.websocket.send_json({
-                "type": "avatar_state",
-                "state": "idle"
-            })
+            self.collector_status = "idle"
+            err_detail = str(e)
+            try:
+                # 1. 画面上にエラーメッセージを表示し、ローディングオーバーレイを解除
+                await self.websocket.send_json({
+                    "type": "canvas_error",
+                    "title": "絵の描画でエラーが発生しました",
+                    "message": f"エラー内容: {err_detail}。通常のお話に戻ります。"
+                })
+                await self.websocket.send_json({
+                    "type": "avatar_state",
+                    "state": "listening"
+                })
+
+                # 2. さくらさんからエラーの発生と通常会話復帰を声で発話
+                raw_name = (self.profile.call_name or "お父さん").strip()
+                nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+                p_name = self.profile.partner.name if (self.profile.partner and self.profile.partner.name) else "さくら"
+                err_voice_prompt = (
+                    f"絵の描画処理でエラー（{err_detail}）が発生しました。"
+                    f"{nickname}に向かって、「{nickname}、申し訳ありません。絵を描く途中でエラーが発生してしまいました。通常のおしゃべりに戻りますね」と優しく声に出して伝え、通常会話に復帰してください。"
+                )
+                self.echo_guard_until = time.time() + 4.5
+                await session.send_client_content(
+                    turns=[types.Content(role="user", parts=[types.Part.from_text(text=err_voice_prompt)])],
+                    turn_complete=True
+                )
+            except Exception as notify_err:
+                logger.warning(f"Error notifying media error to client: {notify_err}")
         finally:
             self.is_generating_media = False
 

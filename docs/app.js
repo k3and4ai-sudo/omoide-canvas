@@ -641,12 +641,11 @@
           dom.apiKeyStatusBadge.textContent = `認証済 (${masked})`;
         }
         dom.btnOpenLoginModal?.classList.add('active-key');
-        closeLoginModal();
+        showLoginMessage(`🔑 前回のAPIキー（${masked}）を復元しました。「ログインして開始」を押してください。`, false);
         logDiag(`前回の保存APIキーを復元しました (${masked})`);
-        return;
       }
     } catch (e) {}
-    // キーが保存されていない場合はログインモーダルを表示
+    // 起動時は常にログイン画面を表示（前回キーが記憶されていれば入力済みの状態）
     openLoginModal();
   }
 
@@ -4183,10 +4182,37 @@ ${artStyle.svgStyleRules}
           break;
 
         case 'avatar_state':
-          if (data.state === 'listening' && (state.isAiSpeaking || state.isDrawingMedia)) {
-            break;
+          if (data.state === 'listening') {
+            if (state.isAiSpeaking) break;
+            // 描画完了またはエラー復旧時の listening 遷移
+            state.isDrawingMedia = false;
+            if (drawingTimerInterval) {
+              clearInterval(drawingTimerInterval);
+              drawingTimerInterval = null;
+            }
+            if (dom.drawingOverlay) {
+              dom.drawingOverlay.classList.add('hidden');
+            }
           }
           setAvatarState(data.state);
+          break;
+
+        case 'canvas_error':
+          logDiag(`🎨 描画エラー通知を受信: ${data.message || data.title}`);
+          state.isDrawingMedia = false;
+          if (drawingTimerInterval) {
+            clearInterval(drawingTimerInterval);
+            drawingTimerInterval = null;
+          }
+          if (dom.drawingOverlay) {
+            dom.drawingOverlay.classList.add('hidden');
+          }
+          if (state.sceneCollector) {
+            state.sceneCollector.status = 'idle';
+            renderSceneCollectorUI();
+          }
+          showCanvasError(data.title || '描画エラー', data.message || '絵の生成中にエラーが発生しました。', true);
+          setAvatarState('listening');
           break;
 
         case 'interrupted':
