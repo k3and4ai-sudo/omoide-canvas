@@ -257,17 +257,17 @@ class LiveSessionManager:
                 return "Media generation started in background."
 
             def refine_memory_visual(
-                original_memory_id: str,
                 user_feedback: str,
-                updated_visual_elements: str
+                updated_visual_elements: str = "",
+                original_memory_id: str = ""
             ) -> str:
                 """
                 対象者からの修正希望（描き直しフィードバック）を反映して絵を再描画するツール。
                 
                 Args:
-                    original_memory_id: 直前の絵のID
-                    user_feedback: 相手が言った具体的な修正指示（例: '夕焼け空にして', '窓際に赤いバラを置いて'）
-                    updated_visual_elements: 修正指示を反映した新しい全体情景の具体的描写（具体的な事物、色彩を必ず含むこと）
+                    user_feedback: 相手が言った具体的な修正指示（例: '夕焼け空にして', '窓際に赤いバラを置いて', '大勢の生徒が歩いている様子にして'）
+                    updated_visual_elements: 修正指示を反映した新しい全体情景の具体的描写（省略可能）
+                    original_memory_id: 直前の絵のID（省略可能）
                 """
                 return "Media refinement started in background."
 
@@ -829,6 +829,46 @@ class LiveSessionManager:
                                 "media_format": "image",
                                 "ambient_sound": "autumn_insects",
                                 "art_style": art_style_arg
+                            })
+                        )
+
+                    elif msg_type == "request_refine_draw":
+                        # ユーザーが画面の「🎨 この指示で描き直す」を押した、または修正発話を検知した時に描き直しを実行
+                        feedback_arg = (data.get("feedback") or "修正・描き直し").strip()
+                        summary_arg = (data.get("summary") or "").strip()
+                        if summary_arg:
+                            self.collector_summary = summary_arg
+
+                        if self.is_generating_media:
+                            logger.info(f"Skipping duplicate request_refine_draw (already generating).")
+                            continue
+
+                        self.collector_status = "drawing"
+                        logger.info(f"User requested refine drawing: feedback='{feedback_arg}', summary='{summary_arg}'")
+                        await self.websocket.send_json({"type": "avatar_state", "state": "drawing"})
+
+                        # さくらさんに「いま一生懸命描き直していますね！少し待っていてくださいね」と一言発話させる
+                        try:
+                            raw_name = (self.profile.call_name or "お父さん").strip()
+                            nickname = raw_name if raw_name.endswith(("さん", "様", "ちゃん", "先生", "お父さん", "お母さん", "おじいちゃん", "おばあちゃん")) else f"{raw_name}さん"
+                            refine_voice_prompt = (
+                                f"{nickname}から「{feedback_arg}」という描き直し（修正）のご要望をいただきました。"
+                                f"{nickname}に向かって、「かしこまりました！いま一生懸命描き直していますね。少しだけ待っていてくださいね」と優しく1文で伝えてください。"
+                                f"※まだ絵は完成していません。「もう描き直しましたよ」や「どうですか？」と先走って嘘をつくのは厳禁です。"
+                                f"※【最重要】この発話の後は、絵が完成するまで静かに待機してください。"
+                            )
+                            self.echo_guard_until = time.time() + 4.5
+                            await session.send_client_content(
+                                turns=[types.Content(role="user", parts=[types.Part.from_text(text=refine_voice_prompt)])],
+                                turn_complete=True
+                            )
+                        except Exception as r_err:
+                            logger.warning(f"Error sending refine voice prompt to Gemini: {r_err}")
+
+                        asyncio.create_task(
+                            self._handle_media_refinement(session, None, {
+                                "user_feedback": feedback_arg,
+                                "updated_visual_elements": self.collector_summary or feedback_arg
                             })
                         )
 
@@ -1398,7 +1438,9 @@ class LiveSessionManager:
                 done_notice = (
                     f"【描画完了通知】「{artifact.title}」の絵が完成し、{nickname}の画面に表示されました！"
                     f"{nickname}に向かって、「{nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？」とだけ温かく声をかけてください。"
-                    f"※「一通りお話を伺いました」等の聞き取り確認は絶対に繰り返さないでください。また、ご本人が「この雰囲気でよい」「これでいいです」と答えられた場合は、絶対に refine_memory_visual（描き直し）を呼ばず、絵を保存するかどうかを確認してください。"
+                    f"※「一通りお話を伺いました」等の聞き取り確認は絶対に繰り返さないでください。"
+                    f"※もしご本人が「この雰囲気でよい」「これでいいです」と答えられた場合は、絶対に refine_memory_visual（描き直し）を呼ばず、絵を保存するかどうかを確認してください。"
+                    f"※もしご本人が「修正したい」「〇〇にして」「〇〇を追加して」「描き直して」など修正を希望された場合は、「すぐに描き直してみますね！」と応じて直ちに refine_memory_visual ツールを呼び出してください。"
                 )
                 # 音声PCMパケットとの内部競合による1011切断を完全に防ぐため、エコーガードをかけてから安全に完了通知を送信
                 self.echo_guard_until = time.time() + 4.5
@@ -1445,8 +1487,12 @@ class LiveSessionManager:
         finally:
             self.is_generating_media = False
 
-    async def _handle_media_refinement(self, session, call_id: str, args: dict):
-        """共同描画・修正処理"""
+    async def _handle_media_refinement(self, session, call_id: Optional[str], args: dict):
+        """共同描画・修正処理（非同期バックグラウンド実行）"""
+        if self.is_generating_media:
+            logger.info("Media generation/refinement already in progress; skipping duplicate call.")
+            return
+        self.is_generating_media = True
         try:
             original_id = args.get("original_memory_id", "")
             feedback = args.get("user_feedback", "")
@@ -1456,6 +1502,7 @@ class LiveSessionManager:
             if not original_id and self.generated_memories:
                 original_id = self.generated_memories[-1].memory_id
 
+            logger.info(f"Executing media refinement: original_id='{original_id}', feedback='{feedback}'")
             new_artifact = await refine_memory_visual_artifact(
                 original_memory_id=original_id,
                 user_feedback=feedback,
@@ -1466,6 +1513,7 @@ class LiveSessionManager:
             if new_artifact:
                 self.generated_memories.append(new_artifact)
                 self.collector_status = "drawn"
+                self.last_draw_time = time.time()
                 is_blank = getattr(new_artifact, "is_fallback", False) and not new_artifact.media_url
                 visual_desc = self.collector_summary or getattr(new_artifact, "visual_description", elements) or elements
                 await self.websocket.send_json({
@@ -1488,7 +1536,10 @@ class LiveSessionManager:
                         f"【描画完了通知】「{new_artifact.title}」の描き直しが完了し、{nickname}の画面に表示されました！"
                         f"{nickname}に向かって、「{nickname}、描き直した絵が画面に出ましたよ！こんな雰囲気でよろしいでしょうか？」と温かく声をかけてください。"
                         f"※もしご本人が「この雰囲気でよい」「これでいいです」と答えられた場合は、絶対に refine_memory_visual（描き直し）を呼ばず、絵を保存するかどうかを確認してください。"
+                        f"※もしさらに修正を希望された場合は、「すぐに描き直してみますね！」と応じて再度 refine_memory_visual ツールを呼び出してください。"
                     )
+                    self.echo_guard_until = time.time() + 4.5
+                    await asyncio.sleep(0.15)
                     await session.send_client_content(
                         turns=[types.Content(role="user", parts=[types.Part.from_text(text=done_notice)])],
                         turn_complete=True
@@ -1502,11 +1553,13 @@ class LiveSessionManager:
                     "state": "listening"
                 })
         except Exception as e:
-            logger.error(f"Error in media refinement: {e}")
+            logger.error(f"Error in media refinement: {e}", exc_info=True)
             await self.websocket.send_json({
                 "type": "avatar_state",
                 "state": "listening"
             })
+        finally:
+            self.is_generating_media = False
 
     async def _handle_emergency_alert(self, session, call_id: str, args: dict):
         """緊急通報処理"""

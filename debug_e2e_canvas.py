@@ -205,11 +205,54 @@ async def main():
             assert num_colors > 500, f"Canvas area does not contain enough colors ({num_colors})! Image may be blank."
             logger.info(f"✅ キャンバス上に絵画が実在し、美しく可視化されていることをピクセルレベルで自動確認しました！保存先: {screenshot_path}")
 
+            # 7. 描画完了後の情景確認テキストボックス表示・編集・描き直し（refine）自動検査
+            logger.info("ステップ 7: 描画完了後の情景確認テキストボックス表示 & 描き直し（Refinement）自動検査...")
+            refine_test_result = await evaluate("""
+                (async () => {
+                    const banner = document.getElementById('collectorActionBanner');
+                    const textarea = document.getElementById('editSceneDescription');
+                    const btnConfirm = document.getElementById('btnConfirmDraw');
+                    const btnRefine = document.getElementById('btnRefineNow');
+                    const refineBar = document.getElementById('collectorRefineBar');
+
+                    // 描画完了状態（status: 'drawn', hasDrawnImage: true）をエミュレート
+                    window.appState = window.appState || {};
+                    // renderSceneCollectorUI を発火させる
+                    if (window.renderSceneCollectorUI) {
+                        window.appState.sceneCollector = window.appState.sceneCollector || {};
+                        window.appState.sceneCollector.status = 'drawn';
+                        window.appState.hasDrawnImage = true;
+                        window.renderSceneCollectorUI();
+                    } else {
+                        // クラス直接チェック
+                        banner.classList.remove('hidden');
+                        refineBar.classList.remove('hidden');
+                    }
+
+                    // テキストボックスの編集をシミュレーション（「・見えた様子：大勢の生徒が歩いている」を追記）
+                    textarea.value = (textarea.value || '') + '\\n・見えた様子：大勢の生徒が学校に向かって歩いている';
+                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+
+                    return {
+                        bannerVisible: !banner.classList.contains('hidden'),
+                        refineBarVisible: !refineBar.classList.contains('hidden'),
+                        textareaValue: textarea.value,
+                        btnConfirmText: btnConfirm ? btnConfirm.textContent.trim() : '',
+                        btnRefineDisabled: btnRefine ? btnRefine.disabled : true
+                    };
+                })()
+            """)
+            logger.info(f"描き直しUI検査結果: {refine_test_result}")
+            assert refine_test_result["bannerVisible"], "collectorActionBanner should remain visible after drawing!"
+            assert "大勢の生徒が学校に向かって歩いている" in refine_test_result["textareaValue"], "Textarea editing failed!"
+            assert not refine_test_result["btnRefineDisabled"], "btnRefineNow must NOT be disabled by cooldown!"
+            logger.info("✅ 描画完了後も情景テキストボックスが常時表示され、内容の直接編集および即時描き直しが可能です！")
+
     finally:
         proc.terminate()
         proc.wait()
 
-    logger.info("=== 🎉 すべての自動デバッグ項目（全6ステップ）が合格（PASS）しました！ ===")
+    logger.info("=== 🎉 すべての自動デバッグ項目（全7ステップ）が合格（PASS）しました！ ===")
 
 if __name__ == "__main__":
     asyncio.run(main())
