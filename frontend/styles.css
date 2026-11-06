@@ -645,12 +645,14 @@ body {
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
   position: relative;
 }
 
 .media-display-area {
-  flex: 1;
+  flex: 2;
+  min-height: 380px;
   position: relative;
   background: #fdfbf7;
   display: flex;
@@ -708,6 +710,40 @@ body {
 .memory-visual.hidden {
   display: none !important;
   opacity: 0;
+}
+
+/* ベクター情景画コンテナ（SVGインライン描画用） */
+.svg-container {
+  width: 100%;
+  height: 100%;
+  min-height: 380px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #fdfbf7;
+  border-radius: 8px;
+  transition: opacity 0.5s ease-in-out, transform 0.5s ease-out;
+  opacity: 1;
+}
+
+.svg-container.refreshing {
+  opacity: 0.15;
+  transform: scale(0.985);
+}
+
+.svg-container.hidden {
+  display: none !important;
+  opacity: 0;
+}
+
+.svg-container svg {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
 }
 
 /* 描画中ローディング */

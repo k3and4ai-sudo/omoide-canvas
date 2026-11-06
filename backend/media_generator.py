@@ -7,6 +7,8 @@ import os
 import uuid
 import json
 import logging
+import re
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -355,6 +357,87 @@ def generate_fallback_image(title: str, file_path: Path, elements: str = "") -> 
     logger.info(f"Dynamic theme watercolor image generated for '{title}' at {file_path}")
 
 
+def repair_and_validate_svg(raw_svg: str) -> Optional[str]:
+    """
+    Geminiが生成したSVGの構文（未クローズタグ、viewBox、xmlns、幅・高さ）を自動修復し、
+    ブラウザの <img> およびインラインDOMで確実にレンダリングできる整形式(Well-formed) XMLを保証する。
+    """
+    if not raw_svg or "<svg" not in raw_svg:
+        return None
+
+    # <svg より前の不要な文字列・解説文をトリミング
+    start_pos = raw_svg.find("<svg")
+    svg_part = raw_svg[start_pos:]
+
+    # ルート <svg> タグの属性（viewBox, xmlns, width, height）を正規化
+    svg_tag_match = re.search(r"<svg[^>]*>", svg_part)
+    if not svg_tag_match:
+        return None
+
+    old_tag = svg_tag_match.group(0)
+    attrs = {}
+    if "viewBox=" not in old_tag:
+        attrs["viewBox"] = '"0 0 800 600"'
+    if "xmlns=" not in old_tag:
+        attrs["xmlns"] = '"http://www.w3.org/2000/svg"'
+    if "width=" not in old_tag:
+        attrs["width"] = '"800"'
+    if "height=" not in old_tag:
+        attrs["height"] = '"600"'
+
+    new_tag = old_tag[:-1]
+    for k, v in attrs.items():
+        new_tag += f" {k}={v}"
+    new_tag += ">"
+    svg_part = new_tag + svg_part[len(old_tag):]
+
+    # 一旦末尾の </svg> を除去し、開いたタグのスタックを解析して未クローズの親タグをすべて逆順に補完
+    svg_body = re.sub(r"</svg\s*>", "", svg_part, flags=re.IGNORECASE)
+
+    tag_regex = re.compile(r"<(/?)(\w+)([^>]*)>")
+    stack = []
+    # 自己完結型（単独で完結し終了タグ不要な要素）
+    self_closing_tags = {
+        "circle", "ellipse", "line", "path", "polygon", "polyline",
+        "rect", "stop", "use", "image", "feturbulence", "fedisplacementmap",
+        "fegaussianblur", "feoffset", "feblend", "fecolormatrix", "fecomposite",
+        "feflood", "femergenode"
+    }
+
+    for match in tag_regex.finditer(svg_body):
+        is_closing = bool(match.group(1))
+        tag_name = match.group(2).lower()
+        full_tag = match.group(0)
+        is_self_closing = full_tag.endswith("/>") or tag_name in self_closing_tags
+
+        if is_closing:
+            if stack and stack[-1] == tag_name:
+                stack.pop()
+            elif tag_name in stack:
+                while stack and stack[-1] != tag_name:
+                    stack.pop()
+                if stack:
+                    stack.pop()
+        elif not is_self_closing:
+            stack.append(tag_name)
+
+    closing_tags = []
+    while stack:
+        t = stack.pop()
+        if t != "svg":
+            closing_tags.append(f"</{t}>")
+
+    repaired = svg_body + "\n" + "\n".join(closing_tags) + "\n</svg>"
+
+    # xml.etree.ElementTree による整形式パース検証
+    try:
+        ET.fromstring(repaired)
+        return repaired
+    except Exception as e:
+        logger.warning(f"SVG XML parsing failed after auto-repair: {e}")
+        return None
+
+
 def sanitize_scene_elements(title: str, elements: str) -> Tuple[str, str]:
     """
     挨拶やマイクテストなどのノイズ単語を除去し、絵画にふさわしい情景タイトルと要素に整形する
@@ -458,7 +541,7 @@ def generate_memory_visual_artifact_sync(
    - 学校や教室、海、季節など、会話に出てきた情景を主役として具体的に配置してください。
 2. 背景やモチーフにはグラデーション（<linearGradient>, <radialGradient>）を効果的に使い、立体感と深みを与えてください。
 3. 人物のリアルな顔は描かず、後ろ姿や遠景、あるいは情景・静物を美しく描いてください。
-4. <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。余計な解説文やマークダウン枠（```xml 等）は一切含めないでください。"""
+4. <svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全な整形式SVGコードのみを出力してください。余計な解説文やマークダウン枠（```xml 等）は一切含めないでください。"""
 
                 candidate_svg_models = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
                 for model_candidate in candidate_svg_models:
@@ -469,36 +552,25 @@ def generate_memory_visual_artifact_sync(
                             contents=svg_prompt,
                             config=types.GenerateContentConfig(
                                 temperature=0.3,
-                                max_output_tokens=3500
+                                max_output_tokens=5000
                             )
                         )
                         if svg_res and svg_res.text:
                             raw_text = svg_res.text
-                            svg_match = re.search(r"<svg[\s\S]*?</svg>", raw_text, re.IGNORECASE)
-                            if not svg_match and "<svg" in raw_text:
-                                start_idx = raw_text.find("<svg")
-                                svg_match = re.search(r"<svg[\s\S]*", raw_text)
-                                if svg_match:
-                                    repaired_svg = svg_match.group(0) + "\n</svg>"
-                                    svg_name = f"{memory_id}.svg"
-                                    svg_path = MEDIA_DIR / svg_name
-                                    with open(svg_path, "w", encoding="utf-8") as f:
-                                        f.write(repaired_svg)
-                                    file_name = svg_name
-                                    image_generated = True
-                                    is_fallback = False
-                                    logger.info(f"SVG generation succeeded (repaired) with {model_candidate}: {svg_path}")
-                                    break
-                            elif svg_match:
+                            # 構文修復 & 整形式XMLバリデーションを実行
+                            valid_svg = repair_and_validate_svg(raw_text)
+                            if valid_svg:
                                 svg_name = f"{memory_id}.svg"
                                 svg_path = MEDIA_DIR / svg_name
                                 with open(svg_path, "w", encoding="utf-8") as f:
-                                    f.write(svg_match.group(0))
+                                    f.write(valid_svg)
                                 file_name = svg_name
                                 image_generated = True
                                 is_fallback = False
-                                logger.info(f"SVG generation succeeded with {model_candidate}: {svg_path}")
+                                logger.info(f"SVG generation & XML validation succeeded with {model_candidate}: {svg_path}")
                                 break
+                            else:
+                                logger.warning(f"SVG validation failed for {model_candidate}. Trying next model...")
                     except Exception as svg_err:
                         logger.warning(f"SVG generation with {model_candidate} failed: {svg_err}. Trying next model...")
         except Exception as client_err:

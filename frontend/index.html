@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261106_04">
+  <link rel="stylesheet" href="styles.css?v=20261106_05">
 </head>
 <body>
 
@@ -185,6 +185,9 @@
           <!-- 生成メディア画像（フェードイン表示） -->
           <img id="memoryImage" class="memory-visual hidden" alt="生成された思い出の風景" src="">
           
+          <!-- ベクター情景画（SVGインライン展開用コンテナ：ブラウザ差異なく最大解像度で確実描画） -->
+          <div id="svgContainer" class="svg-container hidden" aria-label="生成された思い出の情景画"></div>
+
           <!-- 動画メディア（シネマグラフ表示） -->
           <video id="memoryVideo" class="memory-visual hidden" autoplay loop muted playsinline></video>
 
@@ -709,6 +712,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261106_04"></script>
+  <script src="app.js?v=20261106_05"></script>
 </body>
 </html>

@@ -207,6 +207,7 @@
     mediaDisplayArea: document.getElementById('mediaDisplayArea'),
     canvasPlaceholder: document.getElementById('canvasPlaceholder'),
     memoryImage: document.getElementById('memoryImage'),
+    svgContainer: document.getElementById('svgContainer'),
     memoryVideo: document.getElementById('memoryVideo'),
     drawingOverlay: document.getElementById('drawingOverlay'),
     drawingText: document.getElementById('drawingText'),
@@ -4552,6 +4553,10 @@ ${artStyle.svgStyleRules}
       dom.canvasPlaceholder.classList.remove('hidden');
       dom.memoryImage.classList.add('hidden');
       dom.memoryImage.src = '';
+      if (dom.svgContainer) {
+        dom.svgContainer.classList.add('hidden');
+        dom.svgContainer.innerHTML = '';
+      }
       dom.memoryVideo.classList.add('hidden');
       try { dom.memoryVideo.pause(); } catch (e) {}
 
@@ -4584,12 +4589,44 @@ ${artStyle.svgStyleRules}
 
       if (mediaData.media_format === 'video') {
         dom.memoryImage.classList.add('hidden');
+        if (dom.svgContainer) dom.svgContainer.classList.add('hidden');
         dom.memoryVideo.src = mediaData.media_url;
         dom.memoryVideo.classList.remove('hidden');
         dom.memoryVideo.play();
         showCanvasUpdateToast(title);
-      } else {
+      } else if (mediaData.media_url && mediaData.media_url.toLowerCase().endsWith('.svg')) {
+        // ベクター情景画（SVG）：インライン展開によりパース差異・スケーリング崩れを完全解消
         dom.memoryVideo.classList.add('hidden');
+        fetch(mediaData.media_url + '?t=' + Date.now())
+          .then(resp => {
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            return resp.text();
+          })
+          .then(svgText => {
+            if (dom.svgContainer && svgText.includes('<svg')) {
+              dom.svgContainer.innerHTML = svgText;
+              dom.svgContainer.classList.remove('hidden');
+              dom.memoryImage.classList.add('hidden');
+              dom.memoryImage.src = '';
+            } else {
+              // インライン化できない場合はimgタグにフォールバック
+              dom.svgContainer?.classList.add('hidden');
+              dom.memoryImage.src = mediaData.media_url;
+              dom.memoryImage.classList.remove('hidden');
+            }
+            showCanvasUpdateToast(title);
+          })
+          .catch(err => {
+            console.warn('SVG inline fetch failed, fallback to img tag:', err);
+            dom.svgContainer?.classList.add('hidden');
+            dom.memoryImage.src = mediaData.media_url;
+            dom.memoryImage.classList.remove('hidden');
+            showCanvasUpdateToast(title);
+          });
+      } else {
+        // ラスター画像（PNG/WebP/JPEG）
+        dom.memoryVideo.classList.add('hidden');
+        if (dom.svgContainer) dom.svgContainer.classList.add('hidden');
         
         // 画像クロスフェード：新しい画像をプリロードしてからスムーズに更新
         const newImg = new Image();
