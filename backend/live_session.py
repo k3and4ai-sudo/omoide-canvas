@@ -144,31 +144,32 @@ class LiveSessionManager:
             "キャンバスに描いて", "キャンバスに書いて", "この内容で描いて", "この内容で書いて",
             "その内容で描いて", "その内容で書いて", "それで描いて", "それで書いて"
         )
-        if any(cmd in clean for cmd in explicit_draw_cmds) and (
-            self.collector_status in ("confirming", "ready")
-            or self.ai_asked_confirmation
-            or self.collector_completed_count >= 5
-        ):
+        if any(cmd in clean for cmd in explicit_draw_cmds):
             self.user_confirmed_drawing = True
             logger.info(f"User explicitly approved drawing command: '{clean}'")
             return True
 
-        # AIが最終確認（「一通りお話を伺いました〜よろしいですか？」）を尋ねた後の肯定返答、または「お願いします」「いいですよ」などの明確な合意
-        is_confirming_state = self.collector_status in ("confirming", "ready") or self.ai_asked_confirmation
-        explicit_agreements = ("お願いします", "いいですよ", "描いてください", "書いてください", "そうしてください")
-        if is_confirming_state or any(ea in clean for ea in explicit_agreements):
-            approval_words = (
-                "はい", "うん", "ええ", "いいよ", "いいですよ", "いいです", "良いです", "よいです",
-                "これでいい", "これで良い", "このまま", "大丈夫", "問題ない", "問題ありません",
-                "間違いありません", "お願い", "お願いします", "描いて", "書いて", "そうして", "ぜひ", "よろしく",
-                "OK", "オッケー", "その内容でいい", "その内容でよい", "その内容で良い", "その内容でお願い",
-                "その内容で", "そのままでいい", "そのままでよい", "そのままで良い", "それでいい",
-                "それでよい", "それで良い", "それでお願い", "結構です", "そうしてください",
-                "そうして下さい", "そうしてほしい", "描いてみて", "書いてみて"
+        # AIが「一通りお話を伺いました...この内容でよろしいですか？」と最終確認した後の承認判定
+        # ※誤爆防止: 通常の会話中の「うん、〇〇があって」「はい、〇〇でした」という相槌では絶対に描画を開始しない！
+        is_confirming_state = self.collector_status == "confirming" and self.ai_asked_confirmation
+        if is_confirming_state:
+            # 明確な合意フレーズ
+            definite_approvals = (
+                "お願いします", "いいですよ", "いいです", "良いです", "よいです",
+                "これでいい", "これで良い", "このままでいい", "その内容でいい", "その内容でよい",
+                "それでいい", "それでよい", "描いてください", "書いてください", "そうしてください"
             )
-            if any(aw in clean for aw in approval_words):
+            if any(da in clean for da in definite_approvals):
                 self.user_confirmed_drawing = True
-                logger.info(f"User confirmed 6-step summary for drawing: '{clean}'")
+                logger.info(f"User confirmed 6-step summary for drawing with definite phrase: '{clean}'")
+                return True
+
+            # 単独の「はい」「うん」「ええ」「いいよ」（前後に長い会話が続いていない、単独の返答のみ）
+            short_approvals = ("はい", "うん", "ええ", "いいよ", "ok", "オッケー")
+            clean_stripped = clean.strip("。、！! ")
+            if clean_stripped in short_approvals and len(clean_stripped) <= 3:
+                self.user_confirmed_drawing = True
+                logger.info(f"User confirmed 6-step summary for drawing with short approval: '{clean}'")
                 return True
 
         return False
@@ -1050,9 +1051,9 @@ class LiveSessionManager:
                                     self.user_confirmed_drawing = False
                                 elif self.collector_status not in ("drawing", "drawn") and not self.is_generating_media and any(
                                     kw in completed_ai_turn for kw in (
-                                        "一通りお話を伺いました", "一通り", "内容でよろしいでしょうか", "内容でよろしいですか",
-                                        "描いてみましょうか", "描いてもよろしいでしょうか", "描いてもよろしいですか",
-                                        "絵を描いても", "絵を描いてよろしい", "この内容で", "よろしいでしょうか", "よろしいですか"
+                                        "一通りお話を伺いました", "一通りお伺いしました", "一通り伺いました",
+                                        "この内容で絵を描いてもよろしい", "この内容で描いてよろしい",
+                                        "この内容でよろしいですか", "この内容でよろしいでしょうか"
                                     )
                                 ):
                                     self.ai_asked_confirmation = True
