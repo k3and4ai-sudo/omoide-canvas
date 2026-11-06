@@ -153,12 +153,14 @@ class LiveSessionManager:
             logger.info(f"User explicitly approved drawing command: '{clean}'")
             return True
 
-        # AIが最終確認（「一通りお話を伺いました〜よろしいでしょうか？」）を尋ねた後の肯定返答
-        if self.collector_status in ("confirming", "ready") or self.ai_asked_confirmation:
+        # AIが最終確認（「一通りお話を伺いました〜よろしいですか？」）を尋ねた後の肯定返答、または「お願いします」「いいですよ」などの明確な合意
+        is_confirming_state = self.collector_status in ("confirming", "ready") or self.ai_asked_confirmation
+        explicit_agreements = ("お願いします", "いいですよ", "描いてください", "書いてください", "そうしてください")
+        if is_confirming_state or any(ea in clean for ea in explicit_agreements):
             approval_words = (
                 "はい", "うん", "ええ", "いいよ", "いいですよ", "いいです", "良いです", "よいです",
                 "これでいい", "これで良い", "このまま", "大丈夫", "問題ない", "問題ありません",
-                "間違いありません", "お願い", "描いて", "書いて", "そうして", "ぜひ", "よろしく",
+                "間違いありません", "お願い", "お願いします", "描いて", "書いて", "そうして", "ぜひ", "よろしく",
                 "OK", "オッケー", "その内容でいい", "その内容でよい", "その内容で良い", "その内容でお願い",
                 "その内容で", "そのままでいい", "そのままでよい", "そのままで良い", "それでいい",
                 "それでよい", "それで良い", "それでお願い", "結構です", "そうしてください",
@@ -176,7 +178,7 @@ class LiveSessionManager:
         ご本人からの最終確認の承認を検知した際、Geminiのツール呼び出し待ちに依存せず、
         即座かつ確実にバックエンド側でメディア生成タスクを起動するセーフティネット。
         """
-        if not self.user_confirmed_drawing or self.is_generating_media or self.collector_status in ("drawing", "drawn"):
+        if not self.user_confirmed_drawing or self.is_generating_media:
             return
         if not session:
             session = self.current_live_session
@@ -1048,12 +1050,20 @@ class LiveSessionManager:
                                     self.user_confirmed_drawing = False
                                 elif self.collector_status not in ("drawing", "drawn") and not self.is_generating_media and any(
                                     kw in completed_ai_turn for kw in (
-                                        "一通りお話を伺いました", "内容でよろしいでしょうか",
-                                        "描いてみましょうか", "描いてもよろしいでしょうか", "このまま絵を描"
+                                        "一通りお話を伺いました", "一通り", "内容でよろしいでしょうか", "内容でよろしいですか",
+                                        "描いてみましょうか", "描いてもよろしいでしょうか", "描いてもよろしいですか",
+                                        "絵を描いても", "絵を描いてよろしい", "この内容で", "よろしいでしょうか", "よろしいですか"
                                     )
                                 ):
                                     self.ai_asked_confirmation = True
                                     self.collector_status = "confirming"
+                                    # クライアントへ情景確認通知を送信し、テキストボックスを即座に開かせる
+                                    summary_to_send = self.collector_summary or completed_ai_turn
+                                    await self.websocket.send_json({
+                                        "type": "scene_confirmation_prompt",
+                                        "summary": summary_to_send,
+                                        "topic": self.discussed_topics[-1] if self.discussed_topics else "思い出の風景"
+                                    })
                                 await self.websocket.send_json({
                                     "type": "transcript",
                                     "role": "model",

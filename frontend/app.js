@@ -273,6 +273,7 @@
     btnClearMood: document.getElementById('btnClearMood'),
     collectorActionBanner: document.getElementById('collectorActionBanner'),
     collectorActionText: document.getElementById('collectorActionText'),
+    editSceneDescription: document.getElementById('editSceneDescription'),
     btnConfirmDraw: document.getElementById('btnConfirmDraw'),
     btnMoreTalk: document.getElementById('btnMoreTalk'),
     collectorRefineBar: document.getElementById('collectorRefineBar'),
@@ -1094,6 +1095,9 @@
     });
 
     // 思い出情景メモ・合意形成・再聞き取り・描画後保存確認ボタン群
+    dom.editSceneDescription?.addEventListener('input', () => {
+      state.userHasManuallyEditedScene = true;
+    });
     dom.btnConfirmDraw?.addEventListener('click', () => {
       executeConfirmedDrawing();
     });
@@ -4234,6 +4238,21 @@ ${artStyle.svgStyleRules}
           }
           break;
 
+        case 'scene_confirmation_prompt':
+          logDiag(`サーバーより情景確認通知を受信: ${data.summary || data.topic}`);
+          state.sceneCollector.status = 'confirming';
+          state.sceneCollector.aiHasAskedConfirmation = true;
+          if (dom.editSceneDescription) {
+            const summaryText = data.summary || buildCollectorSummaryText() || data.topic || '';
+            dom.editSceneDescription.value = summaryText;
+            state.userHasManuallyEditedScene = false;
+          }
+          if (dom.collectorActionBanner) {
+            dom.collectorActionBanner.classList.remove('hidden');
+          }
+          renderSceneCollectorUI();
+          break;
+
         case 'new_media':
           displayGeneratedMedia(data);
           break;
@@ -6344,13 +6363,16 @@ ${artStyle.svgStyleRules}
       }
     }
 
-    // 一通りの聞き取り完了後の確認・再聞き取り・描画アクションバナー
+    // 一通りの聞き取り完了後の確認・テキスト編集・描画アクションバナー
     if (dom.collectorActionBanner) {
-      if (sc.status === 'confirming' || (sc.status === 'ready' && !state.isDrawingMedia)) {
+      if (sc.status === 'confirming' || (sc.status === 'ready' && !state.isDrawingMedia) || sc.aiHasAskedConfirmation) {
         dom.collectorActionBanner.classList.remove('hidden');
+        const summaryStr = buildCollectorSummaryText() || sc.topic || '思い出の情景';
         if (dom.collectorActionText) {
-          const summaryStr = buildCollectorSummaryText() || sc.topic || '思い出の情景';
-          dom.collectorActionText.textContent = `一通り聞き取り完了！【${summaryStr}】この内容でよろしいですか？（修正がある場合は「修正・再度聞き取りする」または各カードを押してください）`;
+          dom.collectorActionText.textContent = `一通りお話を伺いました！この内容で絵を描いてよろしいですか？`;
+        }
+        if (dom.editSceneDescription && (!dom.editSceneDescription.value || !state.userHasManuallyEditedScene)) {
+          dom.editSceneDescription.value = summaryStr;
         }
       } else {
         dom.collectorActionBanner.classList.add('hidden');
@@ -6439,19 +6461,26 @@ ${artStyle.svgStyleRules}
     dismissCanvasError();
 
     const sc = state.sceneCollector;
+    const manualDescription = (dom.editSceneDescription?.value || '').trim();
     const pArgs = sc.pendingArgs?.args;
-    const topic = manualTopic || sc.topic || pArgs?.japanese_title || sc.place || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '思い出の風景');
+    const topic = manualTopic || sc.topic || pArgs?.japanese_title || sc.place || (manualDescription ? manualDescription.slice(0, 18) : '') || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '思い出の風景');
 
-    // 収集された6ステップの情景情報を総合して高精細プロンプトを作成
+    // 収集された6ステップの情景情報、または画面上で直接編集されたテキストを最優先して高精細プロンプトを作成
     const detailsArray = Array.from(sc.details);
     const elementsParts = [];
-    elementsParts.push(`【① 描く情景の主題・話題（最優先）】: ${topic}`);
-    if (pArgs?.visual_elements) elementsParts.push(`【AI情景描写】: ${pArgs.visual_elements}`);
-    if (sc.place) elementsParts.push(`【② 場所・舞台】: ${sc.place}`);
-    if (sc.weather || sc.seasonWeather) elementsParts.push(`【③ 天候・明暗・季節・時間帯】: ${sc.weather || sc.seasonWeather}`);
-    if (sc.people) elementsParts.push(`【④ 登場人物・一緒にいた人】: ${sc.people}`);
-    if (detailsArray.length > 0) elementsParts.push(`【⑤ 見えたもの・様子・ディテール】: ${detailsArray.join('、')}`);
-    if (sc.mood) elementsParts.push(`【⑥ 気分・雰囲気・空気感】: ${sc.mood}`);
+    if (manualDescription) {
+      elementsParts.push(`【確定・編集された情景（最優先）】: ${manualDescription}`);
+      if (sc.place && !manualDescription.includes(sc.place)) elementsParts.push(`【場所】: ${sc.place}`);
+      if (sc.weather && !manualDescription.includes(sc.weather)) elementsParts.push(`【天候】: ${sc.weather}`);
+    } else {
+      elementsParts.push(`【① 描く情景の主題・話題（最優先）】: ${topic}`);
+      if (pArgs?.visual_elements) elementsParts.push(`【AI情景描写】: ${pArgs.visual_elements}`);
+      if (sc.place) elementsParts.push(`【② 場所・舞台】: ${sc.place}`);
+      if (sc.weather || sc.seasonWeather) elementsParts.push(`【③ 天候・明暗・季節・時間帯】: ${sc.weather || sc.seasonWeather}`);
+      if (sc.people) elementsParts.push(`【④ 登場人物・一緒にいた人】: ${sc.people}`);
+      if (detailsArray.length > 0) elementsParts.push(`【⑤ 見えたもの・様子・ディテール】: ${detailsArray.join('、')}`);
+      if (sc.mood) elementsParts.push(`【⑥ 気分・雰囲気・空気感】: ${sc.mood}`);
+    }
     const curStyle = ART_STYLES[state.currentArtStyle] || ART_STYLES.watercolor;
     elementsParts.push(`【画風スタイル（最重要）】: ${curStyle.name}（${curStyle.promptModifier}）`);
 
@@ -6471,7 +6500,7 @@ ${artStyle.svgStyleRules}
       state.socket.send(JSON.stringify({
         type: 'request_confirmed_draw',
         topic: topic,
-        summary: buildCollectorSummaryText() || combinedElements,
+        summary: manualDescription || buildCollectorSummaryText() || combinedElements,
         art_style: state.currentArtStyle || 'watercolor'
       }));
       return;

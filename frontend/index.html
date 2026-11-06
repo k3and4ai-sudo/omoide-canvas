@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261106_05">
+  <link rel="stylesheet" href="styles.css?v=20261106_06">
 </head>
 <body>
 
@@ -360,15 +360,24 @@
             </div>
           </div>
 
-          <!-- 一通りの聞き取り完了後の内容確認・再聞き取り・描画アクションバナー -->
+          <!-- 一通りの聞き取り完了後の内容確認・テキスト編集・描画アクションバナー -->
           <div class="collector-action-banner hidden" id="collectorActionBanner">
             <div class="banner-message">
               <span class="banner-sparkle">✨</span>
-              <span class="banner-text" id="collectorActionText">一通りの聞き取りが終わりました！この内容でキャンバスに描いてよろしいですか？</span>
+              <span class="banner-text" id="collectorActionText">一通りお話を伺いました！この内容で絵を描いてよろしいですか？</span>
             </div>
+            
+            <!-- 確認した内容を画面上で確認・直接編集できるテキストボックス -->
+            <div class="confirm-edit-box">
+              <label for="editSceneDescription" class="confirm-edit-label">
+                📝 描画する情景の内容（ここを直接編集・修正できます）:
+              </label>
+              <textarea id="editSceneDescription" class="confirm-edit-textarea" rows="2" placeholder="聞き取った情景がここに表示されます。キーボードや音声で自由に修正・追記できます。"></textarea>
+            </div>
+
             <div class="banner-buttons">
               <button type="button" class="btn-confirm-draw" id="btnConfirmDraw">
-                🎨 はい、この内容で描く
+                🎨 この内容で絵を描く
               </button>
               <button type="button" class="btn-more-talk" id="btnMoreTalk">
                 🔄 修正・再度聞き取りする
@@ -712,6 +721,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261106_05"></script>
+  <script src="app.js?v=20261106_06"></script>
 </body>
 </html>
