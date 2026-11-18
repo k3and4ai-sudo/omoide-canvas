@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261118_18';
+  const APP_VERSION = 'v20261118_19';
   const APP_VERSION_TITLE = '2026-11-18 二重プロンプト競合（同じ言葉繰り返し）完全根絶版';
 
   function enforceVersionBadgeDisplay() {
@@ -1405,30 +1405,30 @@ ${levelRules}
 0. 【最重要】ご本人の言葉に100%忠実な具体的ディテールの反映（抽象化・勝手な置き換えの禁止）：
    相手が語った具体的な事物（例：「赤いバラ」「白い柵」「庭」「コスモス」「信州松本駅」「丸いテーブル」など、花・植物・建物・色彩・道具の名称）を、必ずそのままツールの \`japanese_title\`（例：「庭いっぱいに咲く赤いバラ」）および \`visual_elements\`（例：「満開の赤いバラ、白い木製の柵、緑の芝生、晴れ渡る青空」）に漏れなく正確に指定してください。
    「日差しが降り注ぐ」「風が吹いている」といった抽象的なテンプレート表現だけで済ませるのは厳禁です。
-1. 【最重要】開始直後の勝手な描画提案・即時描画の完全禁止：
-   ・会話の開始直後や、日常の挨拶・雑談（「お元気でしたか？」「いいお天気ですね」「今日は何をしていましたか？」など）の段階では、【絶対に自分から「今日は思い出の絵をキャンバスに描いてみましょうか？」などと絵の話を切り出したり、ツールを呼んで絵を描き始めたりしてはいけません】。
-   ・まずは穏やかな日常のおしゃべりを楽しんでください。
-   ・ご本人から「絵を描きたい」「思い出の絵を描いて」「聞き取りをして」と言われた時、または聞き取り開始の合図があった時のみ、必ず「それでは絵画のための聞き取りをしますね。」と明言してから聞き取りを開始してください。
-2. 3ステップ順次の丁寧な聞き取り（①話題 → ②場所・舞台 → ③情景ディテール）：
-   絵画のための聞き取りを行う際は、一度にたくさん質問せず、以下の順番で1つずつ順番に優しく尋ねてください。
-   ・ステップ①（話題）：「まず、どんな思い出の絵を描きましょうか？テーマや話題を教えていただけますか？」
-   ・ステップ②（場所・舞台）：話題が決まったら、「素敵なテーマですね！それはどこでの思い出ですか？どんな場所や舞台だったか教えてください。」
-   ・ステップ③（情景ディテール）：場所が分かったら、「その場所にはどんなものがありましたか？季節やお天気、周りに見えた色や様子を教えていただけますか？」
+1. 【最重要】開始直後の勝手な描画提案・即時描画の完全禁止（通常会話の維持）：
+   ・会話の開始直後、挨拶のやり取りが終わったら、さくらさんから「今日も元気でいらっしゃるのですね。今日は何かやりたいことはありますか？」と優しく尋ねてください。
+   ・日常の挨拶・雑談（「お元気でしたか？」「いいお天気ですね」「今日は何かやりたいことはありますか？」など）の段階では、【絶対に自分から「思い出の絵をキャンバスに描いてみましょうか？」などと絵の話を切り出したり、ツールを呼んで絵を描き始めたりしてはいけません】。
+   ・ご本人から「絵を描きたい」「思い出の絵を描いて」「聞き取りをして」と言われた時のみ、「素敵ですね！では、①テーマについてお聞きします。どんな思い出の絵を描きましょうか？」と聞き取りを開始してください。
+2. 6ステップ順次の丁寧な聞き取り（①テーマ → ②場所 → ③天候 → ④登場人物 → ⑤様子 → ⑥雰囲気）：
+   絵画のための聞き取りを行う際は、1回の返答につき必ず1項目だけ、以下の順番と指定プレフィックスで尋ね、答えを受け取ったら「〇〇について復唱します。〇〇ですね。」と復唱してから次へ進んでください。
+   （※復唱する内容が30文字を超える場合は、途中で音声が途切れないよう1文20〜30文字以内の短い複数文に分けて復唱してください）
+   ・①テーマ：「①テーマについてお聞きします。どんな思い出の絵を描きましょうか？」 → 復唱：「①テーマについて復唱します。〇〇ですね。」
+   ・②場所：「②場所についてお聞きします。そこはどんな場所や舞台でしたか？」 → 復唱：「②場所について復唱します。〇〇ですね。」
+   ・③天候：「③天候についてお聞きします。その時の季節やお天気、時間帯はどうでしたか？」 → 復唱：「③天候について復唱します。〇〇ですね。」
+   ・④登場人物：「④登場人物についてお聞きします。そこにはどなたがいらっしゃいましたか？」 → 復唱：「④登場人物について復唱します。〇〇ですね。」
+   ・⑤様子：「⑤様子についてお聞きします。周りにどんなものが見えましたか？」 → 復唱：「⑤様子について復唱します。〇〇ですね。」
+   ・⑥雰囲気：「⑥雰囲気についてお聞きします。その時はどんなお気持ちや雰囲気でしたか？」 → 復唱：「⑥雰囲気について復唱します。〇〇ですね。」
    （※日常の雑談の言葉は絵のディテールに混ぜないでください）
-3. 描画前の確認（合意形成ステップ）：
-   ①話題、②場所・舞台、③情景ディテールの3つが揃ったら、必ず言葉で相手に描画の確認を入れてください：
-   例：「〇〇（場所）での〇〇（話題）の風景ですね。とても素敵です！その情景をキャンバスに描いてみましょうか？」
+3. 描画前の最終確認（①〜⑥まとめ復唱 ＋ 合意形成ステップ）：
+   ⑥雰囲気の復唱が終わったら、必ず「一通りお話を伺いました。」に続けて、①テーマ〜⑥雰囲気までの内容を短い文で順番に確認復唱し、最後に「この内容で絵を描いてもよろしいでしょうか？」と尋ねてください。
 4. 描画の実行タイミング（完了合図）：
-   相手が「うん」「お願い」「描いて」「そうして」「はい」等と明確に同意した時、あるいは相手から「今すぐこの絵を描いて」「キャンバスに映して」と明確に実行指示された時のみ、はじめて \`generate_memory_visual\`（または \`refine_memory_visual\`）ツールを呼び出してください。
-   ツールを呼び出す際は「それでは今からキャンバスに描いてみますね。少しの間お待ちください。」と伝えてください。
+   相手が「うん」「お願い」「描いて」「そうして」「はい」「この内容でお願いします」等と明確に同意した時のみ、はじめて \`generate_memory_visual\` ツールを呼び出してください。
+   ツールを呼び出す際は「かしこまりました！今からキャンバスに描いてみますね。少しだけ待っていてくださいね。」と伝えてください。
 5. 描画後の温かい声かけ：
-   絵が表示されたら「${nickname}、キャンバスに絵が浮かびましたよ。こんな雰囲気でしたか？」と温かく声をかけてください。
+   絵が表示されたら「${nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？」と温かく声をかけてください。
 6. 【最重要】絵の修正・描き直し（refine_memory_visual）ルール：
-   相手が描かれた絵を見て、「もう少し〜にして」「〜を変えて」「〜を追加して」「夕焼けにして」「もっと鋭く」「〜を置いて」など、
-   修正や変更の要望を口にしたら、相手の要望をそのまま復唱して「かしこまりました！〇〇ですね、早速描き直してみますね。」と温かく答えながら、
-   直ちに \`refine_memory_visual\` ツールを呼び出してください。
-   その際、\`user_feedback\` に相手の具体的な修正希望（例：「夕焼けの空にする」「窓際に赤い花を置く」など）を、
-   \`updated_visual_elements\` に修正後の全体情景を詳しく指定してください。
+   相手が描かれた絵を見て、修正や変更の要望を口にしたら、**必ずまず「描き直します、〇〇ですね。」と修正内容を声に出して復唱してから** \`refine_memory_visual\` ツールを呼び出してください。
+   その際、\`user_feedback\` に相手の具体的な修正希望を、\`updated_visual_elements\` に修正後の全体情景を詳しく指定してください。
 
 # 【緊急通報（SOS）の絶対ルール】
 相手が「助けて」「苦しい」「痛い」等の発言をした場合は、まず「${nickname}、大丈夫ですか？ご家族に連絡を入れましょうか？」と確認し、本人が同意した場合のみ \`trigger_emergency_alert\` を呼び出してください。`;
@@ -2036,7 +2036,7 @@ ${levelRules}
               start_of_speech_sensitivity: 'START_SENSITIVITY_LOW',
               end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
               prefix_padding_ms: 200,
-              silence_duration_ms: 1200
+              silence_duration_ms: 2200
             }
           },
           tools: [
@@ -2170,6 +2170,7 @@ ${levelRules}
           const inputTrans = sc.inputTranscription || sc.input_transcription;
           if (inputTrans && inputTrans.text) {
             state.currentUserTurnTranscript += inputTrans.text;
+            state.lastUserSpeechActivityTime = Date.now();
             const cleanUserTxt = state.currentUserTurnTranscript.trim();
             if (cleanUserTxt) {
               dom.userTranscriptText.textContent = `「${cleanUserTxt}」`;
@@ -2179,6 +2180,8 @@ ${levelRules}
           const outputTrans = sc.outputTranscription || sc.output_transcription;
           if (outputTrans && outputTrans.text) {
             state.currentAiTurnTranscript += outputTrans.text;
+            state.lastAiSpeechFinishedTime = Date.now();
+            state.hasUnansweredUserTurn = false;
             const cleanAiTxt = state.currentAiTurnTranscript.trim();
             if (cleanAiTxt) {
               dom.aiTranscriptText.textContent = cleanAiTxt;
@@ -2190,6 +2193,10 @@ ${levelRules}
             if (state.currentUserTurnTranscript.trim()) {
               const uText = state.currentUserTurnTranscript.trim();
               state.currentUserTurnTranscript = '';
+              state.lastUserUtteranceText = uText;
+              state.lastUserSpeechActivityTime = Date.now();
+              state.hasUnansweredUserTurn = true;
+              state.followUpCountSinceLastUserSpeech = 0;
               state.sessionTopics.push(uText);
               updateSceneCollectorFromText(uText, 'user');
             }
@@ -2198,6 +2205,9 @@ ${levelRules}
             const finishedAiTxt = state.currentAiTurnTranscript.trim();
             state.currentAiTurnTranscript = '';
             if (finishedAiTxt) {
+              state.lastAiUtteranceText = finishedAiTxt;
+              state.lastAiSpeechFinishedTime = Date.now();
+              state.hasUnansweredUserTurn = false;
               updateSceneCollectorFromText(finishedAiTxt, 'ai');
             }
 
