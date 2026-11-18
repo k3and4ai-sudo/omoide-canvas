@@ -56,10 +56,11 @@ body {
    ヘッダー
    ========================================================================== */
 .app-header {
-  height: 64px;
+  min-height: 68px;
+  height: auto;
   background: #ffffff;
   border-bottom: 1.5px solid var(--border-color);
-  padding: 0 28px;
+  padding: 6px 28px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -328,6 +329,144 @@ body {
 @keyframes pulse-dot {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.4); opacity: 0.6; }
+}
+
+/* 描画モードで聞き取って抽出した言葉の表示カード（アバターと音量スライダーの間） */
+.extracted-words-card {
+  background: #ffffff;
+  border: 1.5px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.extracted-words-card.active-mode {
+  border-color: #2c5e4f;
+  box-shadow: 0 2px 8px rgba(44, 94, 79, 0.15);
+  background: #fdfefd;
+}
+
+.extracted-words-card.drawing-mode {
+  border-color: #e07a5f;
+  box-shadow: 0 2px 8px rgba(224, 122, 95, 0.2);
+  background: #fffbf9;
+}
+
+.extracted-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px dashed #e8ece9;
+  padding-bottom: 5px;
+}
+
+.extracted-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--primary-color);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.extracted-status-badge {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: #f0f4f1;
+  color: #555555;
+  transition: all 0.3s ease;
+}
+
+.extracted-status-badge.badge-collecting {
+  background: #e8f5e9;
+  color: #2e7d32;
+  border: 1px solid #c8e6c9;
+}
+
+.extracted-status-badge.badge-drawing {
+  background: #fbe9e7;
+  color: #d84315;
+  border: 1px solid #ffccbc;
+}
+
+.extracted-status-badge.badge-confirming {
+  background: #fff8e1;
+  color: #f57f17;
+  border: 1px solid #ffe082;
+}
+
+.extracted-content {
+  min-height: 48px;
+  max-height: 160px;
+  overflow-y: auto;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.extracted-placeholder {
+  margin: 0;
+  color: #888888;
+  font-size: 0.88rem;
+  font-style: italic;
+  padding: 4px 2px;
+}
+
+.extracted-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.extracted-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: #f7f9f8;
+  border-left: 3px solid #81b29a;
+  animation: fadeInWord 0.3s ease forwards;
+}
+
+.extracted-item.step-topic {
+  border-left-color: #e07a5f;
+  background: #fffaf7;
+}
+
+.extracted-item.step-location {
+  border-left-color: #f4a261;
+}
+
+.extracted-item.step-details {
+  border-left-color: #2c5e4f;
+}
+
+.extracted-tag {
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: #444444;
+  white-space: nowrap;
+}
+
+.extracted-word {
+  color: #222222;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+@keyframes fadeInWord {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* さくらさんの声の大きさ（スピーカー音量）カード */
@@ -913,9 +1052,10 @@ body {
 .error-banner-desc {
   font-size: 13px;
   color: #7f1d1d;
-  line-height: 1.4;
+  line-height: 1.5;
   margin: 0;
-  word-break: break-all;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .btn-dismiss-error {
@@ -2168,10 +2308,25 @@ body {
   /* 1. ヘッダーの文字折り返し・崩れ防止 */
   .app-header {
     height: auto;
-    min-height: 54px;
+    min-height: 60px;
     padding: 8px 12px;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  .header-controls {
+    width: auto;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .header-controls-top {
+    justify-content: flex-end;
+  }
+
+  .header-controls-bottom {
+    justify-content: flex-end;
+    gap: 4px;
   }
 
   .brand {
@@ -2353,8 +2508,28 @@ body {
    ========================================================================== */
 .header-controls {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+
+.header-controls-row {
+  display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.header-controls-top {
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.header-controls-bottom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .btn-api-key-status.active-key {
@@ -2399,26 +2574,93 @@ body {
   color: var(--text-muted);
 }
 
-.api-key-input-wrap {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.api-key-input-wrap input {
-  flex: 1;
-  font-family: monospace;
+/* ログインモーダル APIキー入力欄（横幅を大きく広げ、ボタンを1段下に配置） */
+.api-key-label {
+  display: block;
+  font-weight: 700;
   font-size: 15px;
-  letter-spacing: 0.03em;
+  color: var(--primary-color);
+  margin-bottom: 8px;
 }
 
-.btn-eye {
+.api-key-input-full-wrap {
+  width: 100%;
+  margin-bottom: 10px;
+}
+
+.api-key-input-large {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: 'SF Mono', Consolas, Monaco, monospace;
+  font-size: 16px;
+  line-height: 1.5;
+  padding: 12px 14px;
+  border: 2px solid #2c5e4f;
+  border-radius: var(--radius-md);
+  background: #ffffff;
+  color: #111111;
+  letter-spacing: 0.5px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.08);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.api-key-input-large:focus {
+  border-color: #e07a5f;
+  box-shadow: 0 0 0 3px rgba(224, 122, 95, 0.25);
+  outline: none;
+}
+
+.api-key-actions-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.btn-api-paste {
+  flex: 1.2;
+  min-width: 170px;
+  background: #fdf8f5;
+  border: 1.5px solid #e07a5f;
+  color: #c85a32;
+  font-weight: 700;
+  font-size: 14px;
+  padding: 11px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.btn-api-paste:hover, .btn-api-paste:active {
+  background: #e07a5f;
+  color: #ffffff;
+}
+
+.btn-api-toggle-visibility {
+  flex: 1;
+  min-width: 140px;
   background: #f4efe6;
   border: 1.5px solid var(--border-color);
+  color: #444444;
+  font-weight: 600;
+  font-size: 13.5px;
+  padding: 11px 14px;
   border-radius: var(--radius-sm);
-  padding: 9px 12px;
-  font-size: 16px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.btn-api-toggle-visibility:hover, .btn-api-toggle-visibility:active {
+  background: #eae2d5;
 }
 
 .remember-key-label {

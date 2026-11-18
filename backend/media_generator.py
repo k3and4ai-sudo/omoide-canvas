@@ -8,6 +8,7 @@ import uuid
 import json
 import logging
 import re
+import concurrent.futures
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,9 @@ from backend.models import (
     AmbientSoundType,
     MemoryArtifact
 )
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +68,7 @@ def build_safe_prompt(
 
     # 3. P_safety_negative (安全制約サフィックス)
     p_safety_negative = (
-        " Do NOT render photorealistic human faces. Depict any human figures strictly from behind, "
-        "at a far distance, or as soft storybook silhouettes. No modern skyscrapers, no smartphones, "
+        " Do NOT render photorealistic human faces. No modern skyscrapers, no smartphones, "
         "no dark scary shadows, no sharp contrasts, no text or watermarks."
     )
 
@@ -391,6 +394,11 @@ def repair_and_validate_svg(raw_svg: str) -> Optional[str]:
     new_tag += ">"
     svg_part = new_tag + svg_part[len(old_tag):]
 
+    # 最後の完全なタグ（>）以降の途切れた不完全文字列やマークダウン記号（```）を確実にカット
+    last_gt = svg_part.rfind(">")
+    if last_gt != -1:
+        svg_part = svg_part[:last_gt + 1]
+
     # 一旦末尾の </svg> を除去し、開いたタグのスタックを解析して未クローズの親タグをすべて逆順に補完
     svg_body = re.sub(r"</svg\s*>", "", svg_part, flags=re.IGNORECASE)
 
@@ -435,6 +443,17 @@ def repair_and_validate_svg(raw_svg: str) -> Optional[str]:
         return repaired
     except Exception as e:
         logger.warning(f"SVG XML parsing failed after auto-repair: {e}")
+        # 二次修復：途中で途切れた最後の要素をさらに1階層巻き戻して再検証
+        try:
+            prev_gt = svg_body.rfind("<", 0, svg_body.rfind(">"))
+            if prev_gt > start_pos:
+                fallback_body = svg_body[:prev_gt]
+                fallback_repaired = fallback_body + "\n" + "\n".join(closing_tags) + "\n</svg>"
+                ET.fromstring(fallback_repaired)
+                logger.info("SVG XML parsing succeeded via secondary rollback auto-repair!")
+                return fallback_repaired
+        except Exception:
+            pass
         return None
 
 
@@ -453,10 +472,22 @@ def sanitize_scene_elements(title: str, elements: str) -> Tuple[str, str]:
     if not clean_title or len(clean_title) < 2:
         clean_title = "懐かしい思い出の情景"
 
-    clean_elements = elements
-    for p in noise_patterns:
-        clean_elements = clean_elements.replace(p, "")
-    clean_elements = clean_elements.strip(" 、。？！!?")
+    clean_elements_list = []
+    if isinstance(elements, list):
+        for elem in elements:
+            e = str(elem)
+            for p in noise_patterns:
+                e = e.replace(p, "")
+            e = e.strip(" 、。？！!?")
+            if e and len(e) >= 2:
+                clean_elements_list.append(e)
+        clean_elements = "、".join(clean_elements_list)
+    else:
+        clean_elements = str(elements)
+        for p in noise_patterns:
+            clean_elements = clean_elements.replace(p, "")
+        clean_elements = clean_elements.strip(" 、。？！!?")
+
     if not clean_elements or len(clean_elements) < 3:
         clean_elements = f"{clean_title}、心温まる水彩画の風景"
 
@@ -485,19 +516,23 @@ def generate_memory_visual_artifact_sync(
 
     file_name = f"{memory_id}.png"
     file_path = MEDIA_DIR / file_name
-    effective_api_key = (api_key or "").strip()
+    effective_api_key = (api_key or os.environ.get("GEMINI_API_KEY") or "").strip()
 
     logger.info(f"Generating visual artifact (sync): {clean_title} (ID: {memory_id})")
     logger.info(f"Applied Prompt: {final_prompt}")
 
     image_generated = False
     is_fallback = False
+    model_attempts = []
+    used_model_name = ""
+
     if effective_api_key and effective_api_key != "your_gemini_api_key_here":
         try:
             client = genai.Client(api_key=effective_api_key)
 
             # 1. Flash Image (gemini-2.5-flash-image) を試行
             try:
+                logger.info("Attempting Image generation with gemini-2.5-flash-image...")
                 nb_res = client.models.generate_content(
                     model="gemini-2.5-flash-image",
                     contents=final_prompt,
@@ -513,9 +548,16 @@ def generate_memory_visual_artifact_sync(
                                 f.write(part.inline_data.data)
                             image_generated = True
                             is_fallback = False
+                            used_model_name = "gemini-2.5-flash-image"
+                            model_attempts.append("✅ gemini-2.5-flash-image: 画像生成成功")
                             logger.info(f"Flash Image generation succeeded: {file_path}")
                             break
             except Exception as nb_err:
+                err_str = str(nb_err)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    model_attempts.append("❌ gemini-2.5-flash-image: 429 クォータ超過（Free Tier 日次上限到達 / 本日17:00リセット予定）")
+                else:
+                    model_attempts.append(f"❌ gemini-2.5-flash-image: エラー ({err_str[:60]})")
                 logger.warning(f"Flash Image skipped ({nb_err}). Proceeding to Gemini 3.8 Flash SVG generation.")
 
             # 2. オーダーメイドSVG情景画生成（水彩・リアル・油絵・色鉛筆に対応）
@@ -531,30 +573,48 @@ def generate_memory_visual_artifact_sync(
 {clean_elements}
 
 【画風方針】:
-{style_desc}。モチーフの質感や光と影のコントラストを生き生きと表現してください。
+{style_desc}。モチーフの質感、奥行き、光と影のグラデーションや細部の描き込みを豊かに、丁寧かつ緻密に表現してください。
 
 【最重要造形ルール】
-1. ユーザーがお話しした具体的なモチーフ・特徴・造形（山、夕焼け、海、学校、教室、喫茶店、花、木製テーブル、窓、雪、川など）を100%忠実に描いてください。
-   - 山について語られている場合：鋭角な三角形・ギザギザの険しい岩峰・切り立った山頂・陰影・雪渓をシャープなポリゴンやパス（<polygon>, <path>）でダイナミックに描いてください！
-   - 庭やバラについて語られている場合：青空、木漏れ日、緑の芝生、白いウッドフェンス、鮮やかな真紅のバラ（立体的な花びら・蕾・葉）を豊かに描いてください！
+1. ユーザーがお話しした具体的なモチーフ・特徴・造形（山、夕焼け、海、学校、校門、並木道、教室、喫茶店、花、木製テーブル、窓、雪、川など）を100%忠実に、細部まで丁寧に描き込んでください。
+   - 建物・校門・並木道について語られている場合：レンガや木目の質感、屋根瓦や窓枠、木々の枝葉や木漏れ日、地面の陰影や落ち葉まで細かく表現してください。
+   - 山について語られている場合：鋭角な三角形・ギザギザの険しい岩峰・切り立った山頂・陰影・雪渓をシャープなポリゴンやパス（<polygon>, <path>）でダイナミックに描いてください。
+   - 庭やバラについて語られている場合：青空、木漏れ日、緑の芝生、白いウッドフェンス、鮮やかな真紅のバラ（立体的な花びら・蕾・葉）を豊かに描いてください。
    - 喫茶店や店内について語られている場合：木目テーブル、コーヒー、クリームソーダ、ペンダントライト、窓などを描いてください。
-   - 学校や教室、海、季節など、会話に出てきた情景を主役として具体的に配置してください。
-2. 背景やモチーフにはグラデーション（<linearGradient>, <radialGradient>）を効果的に使い、立体感と深みを与えてください。
-3. 人物のリアルな顔は描かず、後ろ姿や遠景、あるいは情景・静物を美しく描いてください。
+2. 背景やモチーフにはグラデーション（<linearGradient>, <radialGradient>）や柔らかいフィルターを効果的に使い、立体感と深みを与えてください。
+3. 【人物・にぎわいの描写ルール】情景に「生徒」「友達」「人」「大勢」などの人物が含まれる場合は、背景だけで終わらせず、必ず前景〜中景の道や校門・広場に【複数の人物（大勢なら8〜15人以上）】を後ろ姿・横向き・遠景の温かいイラスト調ではっきり大きく描いてください（制服・カバン・歩いている動き等も表現し、1つの `<g id="people-layer">` にまとめて描くと簡潔です）。
 4. <svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全な整形式SVGコードのみを出力してください。余計な解説文やマークダウン枠（```xml 等）は一切含めないでください。"""
 
-                candidate_svg_models = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
+                candidate_svg_models = [
+                    "gemini-3.5-flash",       # 高精細・緻密な描画を最優先
+                    "gemini-3.5-flash-lite"   # フォールバック
+                ]
                 for model_candidate in candidate_svg_models:
+                    executor = None
                     try:
-                        logger.info(f"Attempting SVG generation with {model_candidate} for '{clean_title}'...")
-                        svg_res = client.models.generate_content(
-                            model=model_candidate,
-                            contents=svg_prompt,
-                            config=types.GenerateContentConfig(
-                                temperature=0.3,
-                                max_output_tokens=5000
+                        logger.info(f"Attempting SVG generation with {model_candidate} for '{clean_title}' (max 180s timeout)...")
+
+                        def _call_model(target_model=model_candidate):
+                            return client.models.generate_content(
+                                model=target_model,
+                                contents=svg_prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=0.3,
+                                    max_output_tokens=16384
+                                )
                             )
-                        )
+
+                        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                        future = executor.submit(_call_model)
+                        try:
+                            svg_res = future.result(timeout=180.0)
+                        except concurrent.futures.TimeoutError:
+                            model_attempts.append(f"⏱️ {model_candidate}: 180秒タイムアウト（Googleサーバー応答遅延）")
+                            logger.warning(f"SVG generation with {model_candidate} timed out after 180s. Trying next model...")
+                            if executor:
+                                executor.shutdown(wait=False, cancel_futures=True)
+                            continue
+
                         if svg_res and svg_res.text:
                             raw_text = svg_res.text
                             # 構文修復 & 整形式XMLバリデーションを実行
@@ -567,20 +627,47 @@ def generate_memory_visual_artifact_sync(
                                 file_name = svg_name
                                 image_generated = True
                                 is_fallback = False
+                                used_model_name = model_candidate
+                                model_attempts.append(f"✅ {model_candidate}: SVG生成成功")
                                 logger.info(f"SVG generation & XML validation succeeded with {model_candidate}: {svg_path}")
+                                if executor:
+                                    executor.shutdown(wait=False, cancel_futures=True)
                                 break
                             else:
+                                model_attempts.append(f"⚠️ {model_candidate}: SVG構文不整合（タグ未完結またはXMLパース失敗）")
                                 logger.warning(f"SVG validation failed for {model_candidate}. Trying next model...")
                     except Exception as svg_err:
+                        err_str = str(svg_err)
+                        if "429" in err_str:
+                            model_attempts.append(f"❌ {model_candidate}: 429 クォータ制限")
+                        else:
+                            model_attempts.append(f"❌ {model_candidate}: エラー ({err_str[:50]})")
                         logger.warning(f"SVG generation with {model_candidate} failed: {svg_err}. Trying next model...")
+                    finally:
+                        if executor:
+                            executor.shutdown(wait=False, cancel_futures=True)
         except Exception as client_err:
+            model_attempts.append(f"❌ API Client エラー: {str(client_err)[:50]}")
             logger.warning(f"GenAI Client setup or generation error: {client_err}")
 
     if not image_generated:
-        # ユーザー指示: AIモデルで描けなかった時はダミー絵や過去の画像を表示せず白紙とする
-        file_name = ""
-        is_fallback = True
-        logger.info(f"AI models could not draw '{clean_title}'. Canvas will remain blank as requested by user.")
+        # AIクラウド生成がクォータ上限(429)やGoogleサーバー高負荷(503/タイムアウト)で失敗した場合、
+        # お父さんの語った思い出情景に合わせた温かい水彩画風情景スケッチを確約生成してキャンバスにお届けする
+        try:
+            generate_fallback_image(clean_title, file_path, clean_elements)
+            file_name = f"{memory_id}.png"
+            image_generated = True
+            is_fallback = True
+            used_model_name = "情景スケッチ水彩画（※AI画像クォータ上限のため温かい水彩画を生成）"
+            model_attempts.append("🎨 情景スケッチ水彩画: 生成完了")
+            logger.info(f"Generated guaranteed storyboard watercolor sketch for '{clean_title}': {file_path}")
+        except Exception as fb_err:
+            logger.error(f"Fallback sketch failed: {fb_err}")
+            file_name = ""
+            is_fallback = True
+            logger.info(f"AI models and fallback could not draw '{clean_title}'. Canvas will remain blank.")
+
+    error_summary = "\n".join(model_attempts) if model_attempts else "利用可能な画像生成モデルがありませんでした。"
 
     artifact = MemoryArtifact(
         memory_id=memory_id,
@@ -594,7 +681,9 @@ def generate_memory_visual_artifact_sync(
         media_url=f"/static/memories/{file_name}" if file_name else "",
         ambient_sound_type=ambient_sound,
         refine_history=[],
-        is_fallback=is_fallback
+        is_fallback=is_fallback,
+        error_details=error_summary,
+        model_summary=used_model_name or "なし (全モデル試行失敗)"
     )
 
     # メタデータ保存
@@ -664,10 +753,116 @@ async def refine_memory_visual_artifact(
         orig_desc = updated_visual_elements or user_feedback
         scene_type_str = SceneType.PAST_MEMORY.value
 
-    # 更新版プロンプト作成（相手の修正指示 user_feedback と updated_visual_elements を最優先で結合）
-    refine_details = f"【修正指示】{user_feedback}。{updated_visual_elements}".strip()
-    new_visual_elements = f"{orig_desc}、{refine_details}" if orig_desc else refine_details
+    # 【情景要素の完全マージ（要素の省かれを100%防止）】
+    # 以前の情景（orig_desc）、バックエンドやGeminiから送られた情景（updated_visual_elements）、
+    # ユーザーの修正指示（user_feedback）を重複なく結合する
+    elements_parts = []
+    if orig_desc and orig_desc.strip():
+        elements_parts.append(orig_desc.strip(" 、。"))
+    if updated_visual_elements and updated_visual_elements.strip():
+        clean_upd = updated_visual_elements.strip(" 、。")
+        if clean_upd not in (orig_desc or ""):
+            elements_parts.append(clean_upd)
+    if user_feedback and user_feedback.strip():
+        clean_fb = user_feedback.strip(" 、。")
+        if clean_fb not in (orig_desc or "") and clean_fb not in (updated_visual_elements or ""):
+            elements_parts.append(f"【修正追加】{clean_fb}")
+
+    new_visual_elements = "、".join(elements_parts) if elements_parts else (user_feedback or updated_visual_elements or "思い出の情景")
     new_title = f"{orig_title.replace(' (修正版)', '')} (修正版)"
+
+    # 【元絵の完全継承（SVGベース描き直し）】
+    # 元絵がSVGファイルである場合、元のSVGソースコード自体をGeminiに渡して直接要素を追加・編集させることで、
+    # 背景・校舎・木々・色合いなどの既存の構図がリセット・単純化されるのを100%防ぐ！
+    orig_media_url = data.get("media_url", "")
+    orig_svg_path = None
+    if orig_media_url and orig_media_url.endswith(".svg"):
+        candidate_path = Path(orig_media_url.lstrip("/"))
+        if candidate_path.exists():
+            orig_svg_path = candidate_path
+        elif (MEDIA_DIR / Path(orig_media_url).name).exists():
+            orig_svg_path = MEDIA_DIR / Path(orig_media_url).name
+
+    if orig_svg_path and orig_svg_path.exists():
+        import asyncio
+        def _refine_svg_sync():
+            try:
+                orig_svg_code = orig_svg_path.read_text(encoding="utf-8")
+                effective_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+                if not effective_key or effective_key == "your_gemini_api_key_here":
+                    return None
+                client = genai.Client(api_key=effective_key)
+                refine_svg_prompt = (
+                    f"以下は、ご本人の大切な思い出を描いた既存のSVGイラストコード（viewBox=\"0 0 800 600\"）です。\n"
+                    f"この元のSVGイラストの背景・建物・風景・色調・構図は【100%そのまま残し】、\n"
+                    f"ご本人からの修正要望：「{user_feedback}」だけを既存のSVGに重ねて描き加えるための【追加レイヤー <g id=\"refinement-layer\">...</g>】のみを出力してください。\n\n"
+                    f"【元のSVGコード（座標・構図・背景の参照用）】\n{orig_svg_code}\n\n"
+                    f"【絶対厳守ルール】\n"
+                    f"1. 元のSVGを書き直す必要はありません。既存の地面・道・校門・背景の座標（viewBox 800x600）に合わせて、新しく描き加える要素だけを含む `<g id=\"refinement-layer\"> ... </g>` を1つ出力してください。\n"
+                    f"2. 「{user_feedback}」が大勢の生徒や人物に関する指示である場合は、校門や通学路・前景〜中景の歩道上に、制服姿やカバンを持った人物（大勢なら10〜15人程度、遠近感をつけて）をはっきり視認できるサイズ（高さ40〜110px程度）と色彩で複数描画してください。\n"
+                    f"3. 人物を描く場合は、温かみのある親しみやすいイラスト表現（後ろ姿・横向き・シンプルなシルエットやデフォルメ）で描いてください。\n"
+                    f"4. `<g id=\"refinement-layer\">` で始まり `</g>` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（```）は一切不要です。"
+                )
+                for m_name in ("gemini-3.5-flash-lite", "gemini-3.5-flash"):
+                    try:
+                        logger.info(f"Refining existing SVG ({orig_svg_path.name}) with {m_name} for feedback: '{user_feedback}'...")
+                        res = client.models.generate_content(
+                            model=m_name,
+                            contents=refine_svg_prompt,
+                            config=types.GenerateContentConfig(temperature=0.25, max_output_tokens=8192)
+                        )
+                        raw_out = (res.text or "").strip()
+                        raw_out = re.sub(r'^```[a-zA-Z]*\s*', '', raw_out)
+                        raw_out = re.sub(r'\s*```$', '', raw_out).strip()
+
+                        candidate_svg = None
+                        full_svg_match = re.search(r"<svg[\s\S]*?</svg>", raw_out, re.IGNORECASE)
+                        if full_svg_match:
+                            candidate_svg = full_svg_match.group(0)
+                        else:
+                            g_match = re.search(r"<g[\s\S]*?</g>", raw_out, re.IGNORECASE)
+                            if g_match and "</svg>" in orig_svg_code:
+                                layer_code = g_match.group(0)
+                                candidate_svg = orig_svg_code.replace("</svg>", f"\n  {layer_code}\n</svg>")
+
+                        if candidate_svg:
+                            refined_svg_code = repair_and_validate_svg(candidate_svg)
+                        else:
+                            refined_svg_code = None
+
+                        if refined_svg_code:
+                            new_id = str(uuid.uuid4())[:8]
+                            new_svg_filename = f"{new_id}.svg"
+                            new_svg_path = MEDIA_DIR / new_svg_filename
+                            new_svg_path.write_text(refined_svg_code, encoding="utf-8")
+                            art = MemoryArtifact(
+                                memory_id=new_id,
+                                user_id=data.get("user_id", "default_user"),
+                                title=new_title,
+                                scene_type=SceneType(scene_type_str),
+                                visual_description=new_visual_elements,
+                                applied_prompt=refine_svg_prompt[:600],
+                                media_format=MediaFormat.IMAGE,
+                                media_url=f"/static/memories/{new_svg_filename}",
+                                ambient_sound_type=AmbientSoundType(data.get("ambient_sound_type", AmbientSoundType.NONE.value)),
+                                is_fallback=False,
+                                refine_history=data.get("refine_history", []) + [user_feedback]
+                            )
+                            with open(MEDIA_DIR / f"{new_id}.json", "w", encoding="utf-8") as jf:
+                                json.dump(art.model_dump(mode="json"), jf, ensure_ascii=False, indent=2)
+                            logger.info(f"Successfully refined SVG preserving original composition: {new_svg_filename}")
+                            return art
+                        else:
+                            logger.warning(f"SVG refinement output with {m_name} failed XML validation (len={len(raw_out)}). Trying next model...")
+                    except Exception as svg_err:
+                        logger.warning(f"SVG refinement with {m_name} failed: {svg_err}")
+            except Exception as outer_err:
+                logger.warning(f"Failed to refine SVG directly: {outer_err}")
+            return None
+
+        refined_art = await asyncio.to_thread(_refine_svg_sync)
+        if refined_art:
+            return refined_art
 
     new_artifact = await generate_memory_visual_artifact(
         user_id=data.get("user_id", "default_user"),

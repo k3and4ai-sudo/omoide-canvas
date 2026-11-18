@@ -15,18 +15,45 @@
   'use strict';
 
   // ============================================================================
+  // バージョン管理 ＆ キャッシュバスター確実反映
+  // ============================================================================
+  const APP_VERSION = 'v20261118_18';
+  const APP_VERSION_TITLE = '2026-11-18 二重プロンプト競合（同じ言葉繰り返し）完全根絶版';
+
+  function enforceVersionBadgeDisplay() {
+    try {
+      const badges = document.querySelectorAll('.app-version-badge');
+      badges.forEach(b => {
+        b.textContent = APP_VERSION;
+        b.title = APP_VERSION_TITLE;
+        b.style.cursor = 'pointer';
+        b.onclick = () => {
+          if (confirm(`最新バージョン ${APP_VERSION} です。\n画面を最新状態に強制再読み込みしますか？`)) {
+            window.location.reload(true);
+          }
+        };
+      });
+    } catch (e) {}
+  }
+  enforceVersionBadgeDisplay();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', enforceVersionBadgeDisplay);
+  }
+
+  // ============================================================================
   // 定数・ステート管理
   // ============================================================================
   const SAMPLE_RATE_IN = 16000;   // マイク入力サンプリングレート
   const SAMPLE_RATE_OUT = 24000;  // Gemini返答音声サンプリングレート
-  const MIN_DRAW_INTERVAL_MS = 120 * 1000; // 描画間隔の最小時間（2分 = 120秒）
+  const MIN_DRAW_INTERVAL_MS = 30 * 1000; // 描画間隔の最小時間（30秒）
 
   // 周囲音・テレビ音声カットモード別のRMSしきい値設定
-  // ※無音判定・発話完了判定はお父さんの「文字起こし」から行うため、標準モードでは小さな声も100%そのままGeminiへ届ける
+  // ※テレビや第三者の遠くの声を確実に遮断し、マイク前での肉声のみを通過させる
   const NOISE_GATE_PRESETS = {
-    normal: { rms: 0.0001, vuThresholdPercent: 3, hangoverMs: 350, eosSilenceMs: 600, label: '標準感度（おすすめ）' },
-    tv_cut: { rms: 0.0020, vuThresholdPercent: 6, hangoverMs: 300, eosSilenceMs: 650, label: 'テレビ・周囲音カット' },
-    strict: { rms: 0.0050, vuThresholdPercent: 12, hangoverMs: 250, eosSilenceMs: 700, label: '強めカット' }
+    tv_cut: { rms: 0.0040, vuThresholdPercent: 8,  hangoverMs: 450, eosSilenceMs: 650, label: 'テレビ・周囲音カット' },
+    strict: { rms: 0.0100, vuThresholdPercent: 18, hangoverMs: 300, eosSilenceMs: 700, label: '強めカット（テレビ大音量）' },
+    ultra:  { rms: 0.0220, vuThresholdPercent: 35, hangoverMs: 250, eosSilenceMs: 750, label: '超強力カット（口元近接専用）' },
+    normal: { rms: 0.0018, vuThresholdPercent: 3,  hangoverMs: 550, eosSilenceMs: 650, label: '標準感度（推奨・静かなお部屋）' }
   };
 
   // 画風スタイル定義（水彩画・リアル・油絵・色鉛筆スケッチ）
@@ -106,6 +133,7 @@
     hasDrawnImage: false,           // キャンバスに1枚以上の絵が描画完了しているか
     lastUserModification: '',       // 直近で検知された修正指示テキスト
     pendingRefineTimer: null,       // AIツール呼び出しスキップ時の描き直し自動トリガータイマー
+    drawnSpeechFallbackTimer: null, // 描画完了時の音声フォールバック確約タイマー
     currentAiTurnTranscript: '',    // Gemini直結時のAI字幕バッファ
     currentUserTurnTranscript: '',  // Gemini直結時のユーザー字幕バッファ
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
@@ -188,6 +216,11 @@
     // パートナー＆セッション
     avatarContainer: document.getElementById('avatarContainer'),
     partnerStatusText: document.getElementById('partnerStatusText'),
+    extractedWordsCard: document.getElementById('extractedWordsCard'),
+    extractedStatusBadge: document.getElementById('extractedStatusBadge'),
+    extractedContent: document.getElementById('extractedContent'),
+    extractedPlaceholder: document.getElementById('extractedPlaceholder'),
+    extractedList: document.getElementById('extractedList'),
     speakerVolumeCard: document.getElementById('speakerVolumeCard'),
     speakerVolumeSlider: document.getElementById('speakerVolumeSlider'),
     speakerVolumeValue: document.getElementById('speakerVolumeValue'),
@@ -611,40 +644,62 @@
   async function init() {
     setupEventListeners();
     setupSpeakerVolume();
-    initLoginModalState();
     clearCanvasState();
     renderQuotaUI();
     await detectBackendAvailability();
+    await initLoginModalState();
     await fetchUserProfile();
     drawFlatOscilloscope(); // 初期オシロスコープ波形（水平線）描画
     const modeLabel = state.hasLocalBackend
       ? 'ローカルサーバー連携モード'
       : 'トンネル不要・ブラウザ直結モード（24時間常時稼働）';
-    logDiag(`システムが初期化されました（${modeLabel}）。ログイン待機中です。`);
+    logDiag(`システムが初期化されました（${modeLabel}）。`);
   }
 
-  function initLoginModalState() {
+  async function initLoginModalState() {
+    let savedKey = '';
+    
+    // 1. URLパラメータに key または api_key があれば端末に自動保存（端末設定ショートカット）
     try {
-      const savedKey = localStorage.getItem(STORAGE_KEY_API);
-      if (savedKey && savedKey.length >= 15) {
-        state.sessionApiKey = savedKey;
-        state.isLoggedIn = true;
-        if (dom.inputSessionApiKey) {
-          dom.inputSessionApiKey.value = savedKey;
-        }
-        if (dom.chkRememberKeyOnDevice) {
-          dom.chkRememberKeyOnDevice.checked = true;
-        }
-        const masked = `${savedKey.slice(0, 6)}...${savedKey.slice(-4)}`;
-        if (dom.apiKeyStatusBadge) {
-          dom.apiKeyStatusBadge.textContent = `認証済 (${masked})`;
-        }
-        dom.btnOpenLoginModal?.classList.add('active-key');
-        showLoginMessage(`🔑 前回のAPIキー（${masked}）を復元しました。「ログインして開始」を押してください。`, false);
-        logDiag(`前回の保存APIキーを復元しました (${masked})`);
+      const urlParams = new URLSearchParams(window.location.search);
+      const paramKey = (urlParams.get('key') || urlParams.get('api_key') || '').trim();
+      if (paramKey && paramKey.length >= 15) {
+        localStorage.setItem(STORAGE_KEY_API, paramKey);
+        savedKey = paramKey;
+        // URLパラメータをブラウザ履歴からクリーンアップ（キー露出防止）
+        const cleanUrl = window.location.origin + window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+        logDiag('URLパラメータから端末専用APIキーを登録しました。');
       }
     } catch (e) {}
-    // 起動時は常にログイン画面を表示（前回キーが記憶されていれば入力済みの状態）
+
+    // 2. 端末の localStorage から保存キーを取得
+    if (!savedKey) {
+      try {
+        savedKey = localStorage.getItem(STORAGE_KEY_API) || '';
+      } catch (e) {}
+    }
+
+    // 3. この端末に保存されたAPIキーがあれば自動で読み出して認証完了
+    if (savedKey && savedKey.length >= 15) {
+      state.sessionApiKey = savedKey;
+      state.isLoggedIn = true;
+      if (dom.inputSessionApiKey) {
+        dom.inputSessionApiKey.value = savedKey;
+      }
+      if (dom.chkRememberKeyOnDevice) {
+        dom.chkRememberKeyOnDevice.checked = true;
+      }
+      const masked = `${savedKey.slice(0, 6)}...${savedKey.slice(-4)}`;
+      if (dom.apiKeyStatusBadge) {
+        dom.apiKeyStatusBadge.textContent = `端末認証済 (${masked})`;
+      }
+      dom.btnOpenLoginModal?.classList.add('active-key');
+      logDiag(`この端末に保存されたAPIキーを読み込みました (${masked})`);
+      return;
+    }
+
+    // 4. この端末にキーが未保存の場合のみ、ログイン画面を表示して入力を促す
     openLoginModal();
   }
 
@@ -697,13 +752,17 @@
     // 2. バックエンドがない環境（GitHub Pages等）でのブラウザ直結フォールバック
     const masked = `${rawKey.slice(0, 6)}...${rawKey.slice(-4)}`;
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash?key=${encodeURIComponent(rawKey)}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite?key=${encodeURIComponent(rawKey)}`;
       const res = await fetch(url, { mode: 'cors' });
       if (res.ok) {
         return { valid: true, masked_key: masked, message: 'APIキーの認証に成功しました（ブラウザ直結モード）' };
       }
       if (res.status === 400 || res.status === 403) {
         return { valid: false, message: 'APIキーが無効か、利用権限がありません。Google AI Studioで発行したキーをご確認ください。' };
+      }
+      // 404や503などの場合はキー自体の形式が正しければ通過
+      if (rawKey.startsWith('AIzaSy') || rawKey.startsWith('AQ') || rawKey.length >= 25) {
+        return { valid: true, masked_key: masked, message: 'APIキーを設定しました（直結モード）' };
       }
     } catch (err) {
       // ブラウザのCORS制限等でfetchが弾かれた場合でも、キーの形式が妥当であれば通過させる
@@ -946,31 +1005,35 @@
       }
     });
 
-    // クリップボードからの貼り付けボタン
+    // クリップボードからの貼り付けボタン（貼り付け後に自動で認証・画面オープン）
     dom.btnPasteApiKey?.addEventListener('click', async () => {
       try {
         const text = await navigator.clipboard.readText();
         if (text && dom.inputSessionApiKey) {
-          const cleanKey = text.trim().replace(/[\r\n\s]/g, '');
+          const cleanKey = text.trim().replace(/^["'`]|["'`]$/g, '').replace(/[\r\n\s]/g, '');
           dom.inputSessionApiKey.value = cleanKey;
-          dom.inputSessionApiKey.focus();
-          showLoginMessage('📋 クリップボードから貼り付けました。「🚀 このAPIキーでログインして開始」を押してください。', false);
+          showLoginMessage('📋 クリップボードから貼り付けました！自動でログイン認証を行います...', false);
+          // 貼り付け後、即座にログイン認証を実行してスムーズにモーダルを閉じる！
+          await handleLoginSubmit();
+        } else {
+          showLoginMessage('クリップボードが空です。APIキーをコピーしてから押してください。', true);
         }
       } catch (err) {
-        // クリップボード読み取り権限がない場合は入力枠にフォーカスしてショートカットを案内
+        // クリップボード読み取り権限がない場合は入力枠にフォーカスして案内
         dom.inputSessionApiKey?.focus();
-        showLoginMessage('ブラウザの権限制限のため、入力枠をクリックして Ctrl + V（または右クリック貼り付け）してください。', false);
+        showLoginMessage('枠内をタップして「貼り付け」を行った後、下の「🚀 このAPIキーでログインして開始」を押してください。', false);
       }
     });
 
-    // ペースト時の改行・空白除去による消失・誤送信の完全防止
+    // ペースト時の改行・空白・クォート除去による誤送信防止
     dom.inputSessionApiKey?.addEventListener('paste', (e) => {
       const clipboardData = e.clipboardData || window.clipboardData;
       if (clipboardData) {
         e.preventDefault();
         const pastedText = clipboardData.getData('text') || '';
-        const cleanKey = pastedText.trim().replace(/[\r\n\s]/g, '');
+        const cleanKey = pastedText.trim().replace(/^["'`]|["'`]$/g, '').replace(/[\r\n\s]/g, '');
         dom.inputSessionApiKey.value = cleanKey;
+        showLoginMessage('📋 キーが貼り付けられました！「🚀 このAPIキーでログインして開始」を押してください。', false);
       }
     });
 
@@ -978,7 +1041,7 @@
       if (!dom.inputSessionApiKey) return;
       const isPwd = dom.inputSessionApiKey.type === 'password';
       dom.inputSessionApiKey.type = isPwd ? 'text' : 'password';
-      dom.btnToggleKeyVisibility.textContent = isPwd ? '🙈' : '👁️';
+      dom.btnToggleKeyVisibility.textContent = isPwd ? '👁️ キーを表示する' : '🙈 キーを隠す';
     });
     dom.loginModal?.addEventListener('click', (e) => {
       if (e.target === dom.loginModal && state.isLoggedIn) {
@@ -1123,17 +1186,20 @@
   function setNoiseGateMode(mode) {
     const validMode = NOISE_GATE_PRESETS[mode] ? mode : 'normal';
     state.noiseGateMode = validMode;
+    try {
+      localStorage.setItem('omoide_noise_gate_mode', validMode);
+    } catch (e) {}
     if (dom.selectNoiseGateQuick) dom.selectNoiseGateQuick.value = validMode;
     const modalNoiseSelect = document.getElementById('selectNoiseGateMode');
     if (modalNoiseSelect) modalNoiseSelect.value = validMode;
 
     // VUメーター上のしきい値マーカー位置を更新
     const preset = NOISE_GATE_PRESETS[validMode];
-    const thresholdPercent = Math.min(95, Math.round(preset.rms * 1400));
+    const thresholdPercent = preset.vuThresholdPercent;
     if (dom.vuMeterThreshold) {
       dom.vuMeterThreshold.style.left = `${thresholdPercent}%`;
     }
-    logDiag(`周囲音対策モードを「${preset.label} (RMS>${preset.rms})」に変更しました。`);
+    logDiag(`周囲音対策モードを「${preset.label} (RMS>${preset.rms}, しきい値:${thresholdPercent}%)」に変更しました。`);
   }
 
   function setArtStyle(styleKey) {
@@ -1497,22 +1563,29 @@ ${levelRules}
       state.userRequestedStop = false;
       state.sessionStartTime = Date.now();
 
-      // 直前のセッションからの再開（続き）かどうかの判定
-      const hasPreviousContext = !!(state.previousSessionContext && (state.previousSessionContext.lastTopic || state.previousSessionContext.lastArtTitle));
-      const hasExistingArt = state.hasDrawnImage || (dom.memoryImage && !dom.memoryImage.classList.contains('hidden') && dom.memoryImage.src);
+      // 【多重接続・二重起動の完全防止】既存のWebSocketが残っていればイベントを遮断して即座に破棄
+      if (state.socket) {
+        try {
+          state.socket.onopen = null;
+          state.socket.onmessage = null;
+          state.socket.onclose = null;
+          state.socket.onerror = null;
+          state.socket.close();
+        } catch (e) {}
+        state.socket = null;
+      }
 
-      if (hasPreviousContext || hasExistingArt) {
-        // 前の話の続きとして再開する：キャンバスと話題を維持！
-        const resumeTopic = state.previousSessionContext?.lastArtTitle || state.previousSessionContext?.lastTopic || '前回の風景';
-        logDiag(`【再開】前回の話題（${resumeTopic}）を引き継いで再開します。`);
-        if (state.previousSessionContext?.topics && state.previousSessionContext.topics.length > 0) {
-          state.sessionTopics = [...state.previousSessionContext.topics];
-        }
-      } else {
-        // まったくの初回、または明示的に白紙に戻されている場合
+      // 明示的な修正指示（描き直しモード）以外は、前回の古い話題を引きずらず、常にクリーンな新規セッションとして開始！
+      if (!state.isRefiningArt) {
+        state.previousSessionContext = null;
         state.sessionTopics = [];
         state.sessionMemories = [];
+        resetSceneCollector();
         clearCanvasState();
+        logDiag('新しいお話の聞き取りをクリーンな状態で開始します。');
+      } else {
+        const resumeTopic = state.previousSessionContext?.lastArtTitle || state.previousSessionContext?.lastTopic || '前回の風景';
+        logDiag(`【描き直し】前回の話題（${resumeTopic}）を引き継いで再開します。`);
       }
 
       state.isAiSpeaking = true; // 接続〜最初の挨拶完了までマイクを完全保護（エコー遮断ガード）
@@ -1707,75 +1780,98 @@ ${levelRules}
 
     state.currentSilenceSec = silenceMs / 1000;
 
-    // フォローアップ送信直後の最低待機（AIの音声生成・到着待ち 4.2秒）
-    if (sinceLastFollowUp < 4200) {
+    // フォローアップ送信直後の最低待機（AIの音声生成・到着待ち 10.0秒）
+    if (sinceLastFollowUp < 10000) {
       return;
     }
 
-    // 1. お父さんの文字起こし確定後、3.0秒以上経過してもAIの返答が始まらない場合（最優先）
-    if (state.hasUnansweredUserTurn && userSilenceMs >= 3000) {
+    // 1. お父さんの文字起こし確定後、12.0秒以上経過してもAIの返答が始まらない場合（バックエンド4.2s/6.5s監視との二重発火を完全防止）
+    if (state.hasUnansweredUserTurn && userSilenceMs >= 12000 && !state.isAiSpeaking) {
       state.lastAiSpeechFinishedTime = now;
       state.currentSilenceSec = 0;
       triggerSilenceFollowUp('after_user_speech');
       return;
     }
 
-    // 2. 文字起こしがまったくない無音状態が3.0秒以上続いた場合
+    // 2. 文字起こしがまったくない無音状態が続いた場合
     const lastAiText = (state.lastAiUtteranceText || '').trim();
     const aiEndedWithQuestion = /(?:でしょうか|ますか|ましょうか|ですか|かな|教えて|聞かせて|？|\?)/.test(lastAiText);
-    // ※【超重要】聞き取り内容の確認中（confirming / ready / テキストボックス表示中）、
-    // 描画中（drawing）、描画完了後（drawn）は、ユーザー様が情景を確認・編集している最中、または絵画鑑賞中のため、
-    // 無音フォローアップタイマーによる割り込み・別の聞き取り開始を100%完全遮断する！
-    const isBannerOpen = dom.collectorActionBanner && !dom.collectorActionBanner.classList.contains('hidden');
-    if (sc.status === 'confirming' || sc.status === 'ready' || sc.status === 'drawing' || sc.status === 'drawn' || state.isDrawingMedia || isBannerOpen || sc.aiHasAskedConfirmation) {
+
+    // 絵画生成中・描画中・描画完了後は無音フォローアップを完全遮断
+    if (sc.status === 'drawing' || sc.status === 'drawn' || state.isDrawingMedia) {
       return;
     }
 
     const followUpCount = state.followUpCountSinceLastUserSpeech || 0;
 
-    // (2a) AIの直前の発話が質問で終わっていない（感想のみ・途中中断など）場合：無音3.0秒で次の質問を促す
-    if ((!aiEndedWithQuestion || state.wasAiInterrupted) && silenceMs >= 3000 && followUpCount === 0) {
-      state.lastAiSpeechFinishedTime = now;
-      state.currentSilenceSec = 0;
-      triggerSilenceFollowUp('ai_no_question');
+    // (2a) 【ユーザー要件・最重要】描画確認フェーズ（confirming / ready / aiHasAskedConfirmation）での返答待ち20秒催促：
+    // さくらさんが「この内容で絵を描いてもよろしいでしょうか？」と尋ねてから20秒間無音が続いた場合、
+    // 自発的に「お父さん、こちらの内容で絵を描き始めてもよろしいでしょうか？」と優しく催促発話する
+    const isConfirmingPhase = sc.status === 'confirming' || sc.status === 'ready' || sc.aiHasAskedConfirmation;
+    if (isConfirmingPhase) {
+      if (silenceMs >= 20000 && !state.isAiSpeaking) {
+        state.lastAiSpeechFinishedTime = now;
+        state.currentSilenceSec = 0;
+        triggerSilenceFollowUp('confirm_prompt_20s');
+        return;
+      }
       return;
     }
 
-    // (2b) 思い出聞き取り中（collecting）：
-    // ・現在ステップの質問がまだAIから出ていない場合は無音3.0秒で直ちに質問させる
-    // ・すでに現在ステップの質問をAIが投げかけてお父さんの返答を待っている最中は、3秒で割り込まずゆっくり待つ（12秒無音時のみ1回優しく声かけ）
+    // (2b) 通常会話（idle）の場合：お父さんがゆっくりお話しできるよう15秒待機
+    if (sc.status === 'idle') {
+      if (silenceMs >= 15000 && followUpCount === 0) {
+        state.lastAiSpeechFinishedTime = now;
+        state.currentSilenceSec = 0;
+        triggerSilenceFollowUp('idle_silence');
+        return;
+      }
+      return;
+    }
+
+    // (2c) 聞き取り中（collecting）：
+    // ・AIの直前の発話が質問で終わっていない（途中中断等）：無音3.0秒で次の質問を促す
+    // ・現在ステップの質問がまだAIから出ていない：無音3.0秒で直ちに質問させる
+    // ・すでに現在ステップの質問をAIが投げかけてお父さんの返答を待っている最中：
+    //   文章が途切れても最後までじっくり聞くため、20秒間無音が続いた場合のみ1回優しく催促する
     if (sc.status === 'collecting') {
       const alreadyAskedStep = aiEndedWithQuestion && didAiAskCurrentStep(lastAiText, sc.activeStep);
-      if (!alreadyAskedStep && silenceMs >= 3000 && followUpCount === 0) {
+      if ((!aiEndedWithQuestion || state.wasAiInterrupted) && silenceMs >= 12000 && followUpCount === 0) {
+        state.lastAiSpeechFinishedTime = now;
+        state.currentSilenceSec = 0;
+        triggerSilenceFollowUp('ai_no_question');
+        return;
+      }
+      if (!alreadyAskedStep && silenceMs >= 12000 && followUpCount === 0) {
         state.lastAiSpeechFinishedTime = now;
         state.currentSilenceSec = 0;
         triggerSilenceFollowUp('listening_next_step');
         return;
       }
-      if (alreadyAskedStep && silenceMs >= 12000 && followUpCount === 0) {
+      if (silenceMs >= 20000) {
         state.lastAiSpeechFinishedTime = now;
         state.currentSilenceSec = 0;
-        triggerSilenceFollowUp('listening_stall');
+        triggerSilenceFollowUp('listening_stall_20s');
         return;
       }
-    }
-
-    // (2c) 6ステップ一通り完了後（confirming / ready）にAIからまだ内容確認の質問（よろしいでしょうか？等）が完了していない場合、
-    // または途中で音声が切れてしまった場合：無音3.0秒で直ちに簡潔な確認質問を促す
-    const aiEndedWithConfirmationQuestion = /(?:よろしいでしょうか|描いてみましょうか|描いてもいいですか|描きますか|いかがですか)[？\?]?$/.test(lastAiText);
-    if ((sc.status === 'confirming' || sc.status === 'ready') && !aiEndedWithConfirmationQuestion && silenceMs >= 3000 && followUpCount === 0) {
-      state.lastAiSpeechFinishedTime = now;
-      state.currentSilenceSec = 0;
-      triggerSilenceFollowUp('confirm_summary');
-      return;
     }
   }
 
   function triggerSilenceFollowUp(reason) {
     const sc = state.sceneCollector;
-    // 確認中、描画中、または描画完了直後は無音フォローアップによる割り込み・別の聞き取り開始を100%防止！
+    // 描画中（drawing）、描画完了後（drawn）は完全遮断
+    if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') {
+      return;
+    }
+
+    // 確認中（confirming）は20秒催促（confirm_prompt_20s）のみ通過を許可
     const isBannerOpen = dom.collectorActionBanner && !dom.collectorActionBanner.classList.contains('hidden');
-    if (state.isDrawingMedia || sc.status === 'confirming' || sc.status === 'ready' || sc.status === 'drawing' || sc.status === 'drawn' || isBannerOpen || sc.aiHasAskedConfirmation) {
+    if (reason !== 'confirm_prompt_20s' && (sc.status === 'confirming' || sc.status === 'ready' || isBannerOpen || sc.aiHasAskedConfirmation)) {
+      return;
+    }
+
+    // AIが発話中、または発話終了後3.5秒以内は無音フォローアップによる割り込みを完全遮断！
+    if (state.isAiSpeaking || (Date.now() - (state.lastAiSpeechFinishedTime || 0) < 3500)) {
       return;
     }
 
@@ -1857,16 +1953,25 @@ ${levelRules}
 
   function connectLocalBackendWebSocket() {
     state.isDirectGeminiWs = false;
+    if (state.socket) {
+      try {
+        state.socket.onopen = null;
+        state.socket.onmessage = null;
+        state.socket.onclose = null;
+        state.socket.onerror = null;
+        state.socket.close();
+      } catch (e) {}
+      state.socket = null;
+    }
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const params = new URLSearchParams();
     if (state.sessionApiKey) {
       params.set('api_key', state.sessionApiKey);
     }
-    const topicForResume = state.previousSessionContext?.lastArtTitle || state.previousSessionContext?.lastTopic || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '');
-    const isResume = !!(topicForResume && (state.hasDrawnImage || state.previousSessionContext));
-    if (isResume && topicForResume) {
-      params.set('recent_topic', topicForResume);
-      params.set('last_art', state.previousSessionContext?.lastArtTitle || '');
+    // 明示的な描き直し（修正指示）のときのみ前回の話題をサーバーへ渡す
+    if (state.isRefiningArt && state.previousSessionContext?.lastArtTitle) {
+      params.set('recent_topic', state.previousSessionContext.lastArtTitle);
+      params.set('last_art', state.previousSessionContext.lastArtTitle);
       params.set('is_resume', 'true');
     }
     const queryString = params.toString() ? `?${params.toString()}` : '';
@@ -1879,12 +1984,6 @@ ${levelRules}
     };
     state.socket.onmessage = handleWebSocketMessage;
     state.socket.onclose = () => {
-      if (!state.userRequestedStop && state.isSessionActive && state.sessionApiKey) {
-        logDiag('ローカルサーバー接続が切れたため、ブラウザ直結モードへ自動引き継ぎします...');
-        state.hasLocalBackend = false;
-        connectDirectGeminiLiveWebSocket(true);
-        return;
-      }
       logDiag('WebSocket接続が終了しました。');
       stopSessionCleanup();
     };
@@ -1912,7 +2011,7 @@ ${levelRules}
     ws.onopen = () => {
       const setupPayload = {
         setup: {
-          model: 'models/gemini-2.5-flash-native-audio-preview-09-2025',
+          model: 'models/gemini-2.5-flash-native-audio-latest',
           generationConfig: {
             responseModalities: ['AUDIO'],
             speechConfig: {
@@ -2441,12 +2540,26 @@ ${levelRules}
       }
       const rms = Math.sqrt(sumSq / downsampledData.length);
       const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.normal;
-      const targetHangoverChunks = Math.max(4, Math.round((preset.hangoverMs || 350) / chunkMs));
+      const targetHangoverChunks = Math.max(4, Math.round((preset.hangoverMs || 300) / chunkMs));
 
-      // ※無音判定・無音タイマーはお父さんの「文字起こし」からのみ行うため、
-      //   マイク音量（RMS）では lastUserSpeechActivityTime や sendEosSignal を一切操作しない！
-      //   さくらさんが話していない間は、お父さんの小さな声も欠落なくGeminiへ届ける。
-      const isAboveFloor = (rms >= preset.rms) || (Date.now() < (state.userSpeakingUntil || 0));
+      // 【最重要】AI発話中・スピーカー再生中のエコー完全遮断：
+      // さくらさんがスピーカーから喋っている間および再生終了直後（余韻期間）は、
+      // スピーカー音がGemini Live APIに送られてしまうのを物理的に遮断する（余韻は即答を逃さないよう最小化）
+      const isAiPlaying = state.isAiSpeaking || (state.audioContextOut && state.nextPlaybackTime > state.audioContextOut.currentTime + 0.08);
+      if (isAiPlaying) {
+        voiceHangoverChunks = 0;
+        preSpeechRingBuffer = [];
+        // スピーカー音再生中は完全無音（0x00）を送信してGemini Liveの誤検知・自己割り込みを根絶
+        const zeroPcm = new Int16Array(downsampledData.length);
+        sendPcmAudioChunk(zeroPcm.buffer);
+        return;
+      }
+
+      // 【重要】ノイズゲート判定：
+      // 1. RMS音量が設定しきい値以上（肉声の取りこぼし防止のため実効感度を最適化）
+      // 2. またはブラウザ音声認識（Web Speech API）がユーザー発話を検知中（小声・遠いマイクでも確実に肉声を通す）
+      const isRecognizingUser = (state.userSpeakingUntil > Date.now()) || state.isUserTranscribing;
+      const isAboveFloor = (rms >= (preset.rms * 0.7)) || (isRecognizingUser && rms >= 0.0006);
 
       if (isAboveFloor) {
         if (voiceHangoverChunks <= 0 && preSpeechRingBuffer.length > 0) {
@@ -2463,18 +2576,31 @@ ${levelRules}
         sendPcmAudioChunk(pcm16.buffer);
       } else {
         preSpeechRingBuffer.push(pcm16.buffer.slice(0));
-        if (preSpeechRingBuffer.length > 6) {
+        if (preSpeechRingBuffer.length > 16) {
           preSpeechRingBuffer.shift();
         }
+        // 周囲音・テレビ音カット時：Gemini Liveに完全無音（0x00）を送信し、VAD発話を即座に終了させて返答を促す
         const zeroPcm = new Int16Array(downsampledData.length);
         sendPcmAudioChunk(zeroPcm.buffer);
       }
     };
 
+    // 120Hz ハイパスフィルター（エアコン・空調・テレビの低域・反響ノイズをカット）
+    let audioFilterNode = null;
+    try {
+      audioFilterNode = audioContext.createBiquadFilter();
+      audioFilterNode.type = 'highpass';
+      audioFilterNode.frequency.value = 120;
+      audioFilterNode.Q.value = 0.707;
+      source.connect(audioFilterNode);
+      audioFilterNode.connect(processor);
+    } catch (e) {
+      source.connect(processor);
+    }
+
     // マイクスルー（ハウリング）防止用の無音GainNodeを介してdestinationへ接続
     const zeroGain = audioContext.createGain();
     zeroGain.gain.value = 0;
-    source.connect(processor);
     processor.connect(zeroGain);
     zeroGain.connect(audioContext.destination);
     state.processorNode = processor;
@@ -2584,6 +2710,12 @@ ${levelRules}
       } else if (state.isUserTranscribing) {
         nextText = '📝 お父さんの言葉を文字起こし中... 🟢';
         nextColor = 'var(--primary)';
+      } else if (lastPeakLevel >= thresholdPercent) {
+        nextText = '🗣️ お父さんの声を認識中 🟢';
+        nextColor = '#2a9d8f';
+      } else if (volumePercent >= 3) {
+        nextText = `🔇 周囲音カット中（しきい値: ${thresholdPercent}% 未満）`;
+        nextColor = 'var(--text-muted)';
       } else if (state.hasCompletedInitialGreeting && !state.isDrawingMedia) {
         const secVal = Math.min(3.0, Math.max(0, state.currentSilenceSec || 0)).toFixed(1);
         nextText = `🎤 文字起こし待機（無音タイマー: ${secVal}秒 / 3.0秒）`;
@@ -2715,6 +2847,17 @@ ${levelRules}
             state.currentSilenceSec = 0;
             state.hasUnansweredUserTurn = true;
 
+            // バックエンドWebSocket接続中であれば、確定テキストを補完送信して音声途切れ・無反応を完全防止
+            if (state.socket && state.socket.readyState === WebSocket.OPEN && !state.isDirectGeminiWs) {
+              try {
+                state.socket.send(JSON.stringify({
+                  type: 'user_transcript',
+                  text: textToSend,
+                  collector_status: state.sceneCollector.status
+                }));
+              } catch (wsErr) {}
+            }
+
             if (state.isSimulation && !state.hasLocalBackend) {
               // ブラウザ単体デモモード時の対話＆水彩画生成シミュレーション
               logDiag(`発話完了を検知（デモ）: 「${textToSend}」`);
@@ -2842,7 +2985,7 @@ ${levelRules}
     const pEra = (sceneType === 'future_dream')
       ? 'A peaceful, dreamy, and bright atmosphere. '
       : 'Set in nostalgic 1950s-1970s Showa-era Japan. ';
-    const pSafety = ' Do NOT render photorealistic human faces. Depict any human figures strictly from behind, at a far distance, or as soft storybook silhouettes. No modern skyscrapers, no smartphones, no dark scary shadows, no sharp contrasts, no text or watermarks.';
+    const pSafety = ' Do NOT render photorealistic human faces. No modern skyscrapers, no smartphones, no dark scary shadows, no sharp contrasts, no text or watermarks.';
     return `${pStyle}${pEra}${(visualElements || '').trim()}${pSafety}`;
   }
 
@@ -4151,14 +4294,31 @@ ${artStyle.svgStyleRules}
             state.hasUnansweredUserTurn = false;
             state.hasCompletedInitialGreeting = true;
             state.wasAiInterrupted = false;
-            // 「絵画のための聞き取りをしますね」の開始合図だけはストリーミング中でも即座に反応させる（描画中は絶対に発火させない）
-            if (!state.isDrawingMedia && /(絵画のための聞き取りをしますね|絵画のための聞き取りを始め|絵のための聞き取りを|聞き取りをしますね|聞き取りをはじめ)/.test(data.text) && state.sceneCollector.status === 'idle') {
+            state.isAiSpeaking = true;
+            state.currentSilenceSec = 0;
+            // 「絵画のための聞き取りをしますね」または「①テーマ」の開始合図をストリーミング中でも即座に検知してcollectingへ移行
+            if (!state.isDrawingMedia && /(絵画のための聞き取りをしますね|絵画のための聞き取りを始め|絵のための聞き取りを|聞き取りをしますね|聞き取りをはじめ|思い出の絵を描いていきましょう|①テーマ|テーマについてお聞きします)/.test(data.text) && state.sceneCollector.status === 'idle') {
               startListeningSession(false);
+            }
+            // さくらさんの発話ストリーミング中にも「お聞きします」「復唱します」を検知して即座にフォーカス移動＆抽出！
+            if (state.sceneCollector.status === 'collecting' && /(?:についてお聞きします|について復唱します)/.test(data.text)) {
+              extractAiEchoRepeatToCurrentStep(data.text);
             }
             if (data.turn_complete !== false) {
               state.aiTurnCounter = (state.aiTurnCounter || 0) + 1;
+              if (!state.recentAiUtteranceHistory) state.recentAiUtteranceHistory = [];
+              state.recentAiUtteranceHistory.push(data.text);
+              if (state.recentAiUtteranceHistory.length > 6) {
+                state.recentAiUtteranceHistory.shift();
+              }
               if (!state.isAiSpeaking) {
                 state.lastAiSpeechFinishedTime = Date.now();
+              }
+              // さくらさんが聞き取り復唱やまとめを話した場合、各ステップカードへ確実に即座反映
+              if (/(?:一通りお話を伺いました|一通り伺いました|テーマは|場所は|季節は|お天気|生徒|学生|服装|着ていた|気持ち|ですね|でした)/.test(data.text)) {
+                parseAndFillCollectorCardsFromVisualElements(data.text, '');
+                updateExtractedWordsCard();
+                renderSceneCollectorUI();
               }
               updateSceneCollectorFromText(data.text, 'ai');
               // シミュレーションモード時はブラウザ音声合成で喋らせる！
@@ -4177,12 +4337,32 @@ ${artStyle.svgStyleRules}
               clearTimeout(state.userTranscriptFinalizeTimer);
               state.userTranscriptFinalizeTimer = null;
             }
-            // 文字起こし確定時（または文字起こしが800ms止まった無音移行時）に1回だけ抽出し、そこから無音タイマーをカウント開始
+
+            // エコーを除外し、状態（聞き取り中・確認合意・描画後修正指示）に応じた情景・指示判定を実行
+            if (!isEchoOfAiSpeech(data.text)) {
+              updateSceneCollectorFromText(data.text, 'user', false);
+            }
+
+            // 文字起こし確定時（または文字起こしが800ms止まった無音移行時）に確定抽出 ＆ お話メモへ登録
+            const registerUserSpeechFinal = (finalText) => {
+              // 【ユーザー要件・厳格化】さくらさんの発言エコーは100%遮断！
+              if (isEchoOfAiSpeech(finalText)) {
+                return;
+              }
+
+              // 【ユーザー要件・完全一本化】
+              // ユーザー発話からの直接カード投入は100%禁止！
+              // カード確定・ステップ進行はさくらさんの復唱（extractAiEchoRepeatToCurrentStep）に一本化します。
+            };
+
             if (data.turn_complete === true) {
               state.isUserTranscribing = false;
               state.lastUserSpeechActivityTime = Date.now();
               state.currentSilenceSec = 0;
-              updateSceneCollectorFromText(data.text, 'user');
+              registerUserSpeechFinal(data.text);
+              if (!isEchoOfAiSpeech(data.text)) {
+                updateSceneCollectorFromText(data.text, 'user', true);
+              }
             } else {
               state.isUserTranscribing = true;
               const latestText = data.text;
@@ -4190,10 +4370,84 @@ ${artStyle.svgStyleRules}
                 state.isUserTranscribing = false;
                 state.lastUserSpeechActivityTime = Date.now();
                 state.currentSilenceSec = 0;
-                updateSceneCollectorFromText(latestText, 'user');
+                registerUserSpeechFinal(latestText);
+                if (!isEchoOfAiSpeech(latestText)) {
+                  updateSceneCollectorFromText(latestText, 'user', true);
+                }
               }, 800);
             }
           }
+          break;
+
+        case 'scene_memory_full_sync': {
+          logDiag(`📝 情景フル同期を受信: タイトル=「${data.title}」, 要素=「${data.visual_elements || data.summary}」`);
+          const sc = state.sceneCollector;
+          sc.status = 'confirming';
+          sc.aiHasAskedConfirmation = true;
+
+          const title = (data.title || '').trim();
+          const visual = (data.visual_elements || data.summary || '').trim();
+
+          if (title && title !== '思い出の風景') {
+            sc.topic = title;
+            if (dom.valTopic) {
+              dom.valTopic.textContent = title;
+              dom.cardTopic?.classList.add('is-filled');
+            }
+          }
+
+          if (visual) {
+            sc.latestAiSummary = visual;
+            parseAndFillCollectorCardsFromVisualElements(visual, title);
+          }
+
+          // 箇条書きテキストボックスへの投入（直接編集可能にする）
+          if (dom.editSceneDescription) {
+            const bulleted = buildCollectorBulletedSummary();
+            dom.editSceneDescription.value = bulleted;
+            state.userHasManuallyEditedScene = false;
+          }
+
+          // アクションバナーの表示（「🎨 この内容で絵を描く」ボタン）
+          if (dom.collectorActionBanner) {
+            dom.collectorActionBanner.classList.remove('hidden');
+          }
+
+          // 左側の情景メモカード＆右側の6ステップカードの確定描画
+          updateExtractedWordsCard();
+          renderSceneCollectorUI();
+          break;
+        }
+
+        case 'scene_memory_update':
+          // 【ユーザー要件・厳格化】聞き取り中（collecting）以外の日常会話・挨拶では絶対に抽出しない！
+          if (state.sceneCollector.status !== 'collecting') {
+            break;
+          }
+          if (data.summary) {
+            let sSum = data.summary.replace(/^[^\s、。]{2,10}さん[、\s]*/g, '').replace(/一通りお話を伺いました[。！]*\s*/g, '').trim();
+            sSum = sSum.replace(/(?:この内容でよろしいでしょうか|描いてもよろしいでしょうか|描いてみましょうか|よろしいでしょうか)[？?。！\s]*$/g, '').trim();
+            if (sSum.length >= 5) {
+              state.sceneCollector.latestAiSummary = sSum;
+            }
+          }
+          if (data.user_speech) {
+            const uSpeech = (data.user_speech || '').trim();
+            // 【エコー遮断】さくらさんの発言エコーなら除外！
+            if (isEchoOfAiSpeech(uSpeech)) {
+              break;
+            }
+            const cWords = ['はい', 'いいえ', 'うん', 'ええ', 'もしもし', 'テスト', 'こんにちは', 'こんばんは', 'ありがとう', 'どうも'];
+            if (uSpeech.length >= 2 && !cWords.includes(uSpeech)) {
+              if (!state.recentUserSpeechList) state.recentUserSpeechList = [];
+              if (!state.recentUserSpeechList.includes(uSpeech)) {
+                state.recentUserSpeechList.push(uSpeech);
+                if (state.recentUserSpeechList.length > 5) state.recentUserSpeechList.shift();
+              }
+            }
+          }
+          updateExtractedWordsCard();
+          renderSceneCollectorUI();
           break;
 
         case 'avatar_state':
@@ -4210,6 +4464,13 @@ ${artStyle.svgStyleRules}
             }
           }
           setAvatarState(data.state);
+          break;
+
+        case 'drawing_models_info':
+          logDiag(`🎨 描画モデル情報: メイン=${data.primary_model}, フォールバック=${(data.fallback_models || []).join(', ')}`);
+          if (dom.drawingSubtext) {
+            dom.drawingSubtext.textContent = `🖌️ 試行モデル: ${data.primary_model} (待機: ${(data.fallback_models || []).join(', ')})`;
+          }
           break;
 
         case 'canvas_error':
@@ -4252,19 +4513,57 @@ ${artStyle.svgStyleRules}
           logDiag(`サーバーより情景確認通知を受信: ${data.summary || data.topic}`);
           state.sceneCollector.status = 'confirming';
           state.sceneCollector.aiHasAskedConfirmation = true;
+          state.sceneCollector.latestAiSummary = (data.summary || data.topic || '').trim();
+          if (data.topic && !state.sceneCollector.topic) {
+            state.sceneCollector.topic = data.topic;
+          }
           if (dom.editSceneDescription) {
-            const bulleted = buildCollectorBulletedSummary();
-            dom.editSceneDescription.value = bulleted;
+            // サーバーから届いたさくらさんの聞き取り要約を最優先でセット
+            const summaryText = data.summary || buildCollectorBulletedSummary();
+            dom.editSceneDescription.value = summaryText;
             state.userHasManuallyEditedScene = false;
           }
           if (dom.collectorActionBanner) {
             dom.collectorActionBanner.classList.remove('hidden');
           }
           renderSceneCollectorUI();
+          updateExtractedWordsCard();
           break;
 
         case 'new_media':
           displayGeneratedMedia(data);
+          break;
+
+        case 'collector_sync':
+          if (data.status === 'save_confirming' || data.is_awaiting_save_confirmation) {
+            state.sceneCollector.status = 'drawn';
+            state.sceneCollector.isAwaitingSaveConfirmation = true;
+            if (dom.refineHintText) {
+              dom.refineHintText.textContent = '💾 この絵を保存して絵画モードを終了しますか？（声で「はい・保存する」または「保存しない」とお答えください）';
+            }
+            if (dom.collectorRefineBar) {
+              dom.collectorRefineBar.classList.remove('hidden');
+            }
+            renderSceneCollectorUI();
+            logDiag('💾 サーバーより保存確認フェーズへの移行を受信しました。');
+          } else if (data.status === 'idle') {
+            state.sceneCollector.status = 'idle';
+            state.sceneCollector.isAwaitingSaveConfirmation = false;
+            state.sceneCollector.isAwaitingConfirmation = false;
+            state.sceneCollector.drawConfirmedByUser = false;
+            state.lastAiSpeechFinishedTime = Date.now();
+            state.lastFollowUpTriggerTime = Date.now();
+            state.currentSilenceSec = 0;
+            if (data.action === 'saved') {
+              logDiag('💾 絵がアルバムに保存され、絵画モードが終了しました。通常会話に戻ります。');
+            } else {
+              logDiag('💬 絵は保存されずに絵画モードが終了しました。通常会話に戻ります。');
+            }
+            if (dom.collectorRefineBar) {
+              dom.collectorRefineBar.classList.add('hidden');
+            }
+            renderSceneCollectorUI();
+          }
           break;
 
         case 'emergency_dispatched':
@@ -4284,6 +4583,11 @@ ${artStyle.svgStyleRules}
   // 音声再生（Gemini PCM 24kHz スピーカー再生）
   // ============================================================================
   function queueAudioPlayback(arrayBuffer) {
+    if (state.drawnSpeechFallbackTimer) {
+      clearTimeout(state.drawnSpeechFallbackTimer);
+      state.drawnSpeechFallbackTimer = null;
+    }
+    state.hasUnansweredUserTurn = false;
     const ctx = state.audioContextOut;
     if (!ctx) return;
 
@@ -4335,7 +4639,7 @@ ${artStyle.svgStyleRules}
               state.socket.send(JSON.stringify({ type: 'ai_speech_ended' }));
             }
           }
-        }, 400);
+        }, 150);
       }
     };
 
@@ -4351,8 +4655,8 @@ ${artStyle.svgStyleRules}
     if (state.aiSpeechEndTimer) {
       clearTimeout(state.aiSpeechEndTimer);
     }
-    // スピーカーからの出音余韻マージン（400ms）
-    const remainingMs = Math.max(100, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 400);
+    // スピーカーからの出音余韻マージン（150ms: 相手の問いかけ直後の「はい」「うん」の即答を逃さない）
+    const remainingMs = Math.max(100, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 150);
     state.aiSpeechEndTimer = setTimeout(() => {
       state.isAiSpeaking = false;
       state.lastAiSpeechFinishedTime = Date.now();
@@ -4447,6 +4751,20 @@ ${artStyle.svgStyleRules}
 
   function updateDrawingTimerDisplay() {
     const elapsedSec = Math.floor((Date.now() - drawingStartTime) / 1000);
+
+    // 万一サーバー通信が途切れて75秒以上経過した場合のフェイルセーフ（SVG生成60秒タイムアウトに対応）
+    if (elapsedSec >= 75 && state.isDrawingMedia) {
+      logDiag('描画タイムアウト（75秒経過）: セーフティネットにより描画オーバーレイを自動解除します。');
+      stopDrawingProgress();
+      if (state.sceneCollector && state.sceneCollector.status === 'drawing') {
+        state.sceneCollector.status = 'ready';
+        renderSceneCollectorUI();
+      }
+      setAvatarState('listening');
+      showCanvasError('描画の待機時間タイムアウト', '絵の生成に時間がかかりました。もう一度「🎨 この内容で絵を描く」ボタンを押すか、お話しください。', true);
+      return;
+    }
+
     if (dom.drawingTimer) {
       let phaseText = 'AIが情景を構成中...';
       if (elapsedSec >= 4 && elapsedSec < 10) {
@@ -4571,6 +4889,27 @@ ${artStyle.svgStyleRules}
     // 描画完了直後にサーバーから「画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？」の音声が届くまで無音タイマーを抑制
     state.lastAiSpeechFinishedTime = Date.now() + 6000;
     state.lastFollowUpTriggerTime = Date.now();
+
+    // 【描画完了時の音声確約ガード】
+    // ローカルバックエンド接続時（Gemini Live音声）はGemini側が直接発話するため、
+    // フォールバックは通信障害時のセーフティネットとして7秒待機（二重発話防止）
+    if (state.drawnSpeechFallbackTimer) {
+      clearTimeout(state.drawnSpeechFallbackTimer);
+      state.drawnSpeechFallbackTimer = null;
+    }
+    const fallbackDelay = (state.isSimulation || !state.hasLocalBackend) ? 2000 : 7000;
+    state.drawnSpeechFallbackTimer = setTimeout(() => {
+      state.drawnSpeechFallbackTimer = null;
+      if (!state.isAiSpeaking && state.sceneCollector.status === 'drawn') {
+        const rawName = (state.currentProfile?.call_name || 'お父さん').replace(/\s*さん$/, '');
+        const suffix = rawName.endsWith('お父さん') || rawName.endsWith('お母さん') || rawName.endsWith('ちゃん') || rawName.endsWith('先生') ? '' : 'さん';
+        const nickname = `${rawName}${suffix}`;
+        const fallbackMsg = `${nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？`;
+        logDiag(`📢 描画完了の音声フォールバックを起動: ${fallbackMsg}`);
+        speakTextWithWebSpeech(fallbackMsg);
+      }
+    }, fallbackDelay);
+
     if (dom.refineHintText) {
       dom.refineHintText.textContent = '💡 絵が完成しました！「この雰囲気でよい」とお話しいただくか、保存して通常会話に戻れます';
     }
@@ -4595,9 +4934,10 @@ ${artStyle.svgStyleRules}
       dom.captionFallbackNotice?.classList.add('hidden');
 
       const rInfo = getPacificResetTimeInfo();
+      const errDetails = mediaData.error_details ? `\n\n【試行モデル状況】\n${mediaData.error_details}` : '';
       showCanvasError(
-        '⚠️ AIモデルの描画制限のため白紙',
-        `Google AIのクォータ上限（429）のため、新しい絵を生成できませんでした。ご要望通りキャンバスは白紙のままお話を続けます。（本日${rInfo.timeStr}リセット予定）`,
+        '⚠️ AIモデルの描画制限・タイムアウトのため白紙',
+        `AI画像生成サービスの制限・タイムアウトのため、絵を生成できませんでした。ご要望通りキャンバスは白紙のままお話を続けます。（本日${rInfo.timeStr}リセット予定）${errDetails}`,
         true
       );
 
@@ -4611,7 +4951,8 @@ ${artStyle.svgStyleRules}
       dom.btnSaveImage?.classList.remove('hidden');
       dom.canvasPlaceholder.classList.add('hidden');
       const curStyle = ART_STYLES[state.currentArtStyle] || ART_STYLES.watercolor;
-      dom.captionTag.textContent = mediaData.media_format === 'video' ? '動く絵本' : curStyle.name;
+      const modelTag = mediaData.used_model ? ` [${mediaData.used_model}]` : '';
+      dom.captionTag.textContent = (mediaData.media_format === 'video' ? '動く絵本' : curStyle.name) + modelTag;
       dom.captionFallbackBadge?.classList.add('hidden');
       dom.captionFallbackNotice?.classList.add('hidden');
       dismissCanvasError();
@@ -4781,11 +5122,11 @@ ${artStyle.svgStyleRules}
     const userTagEl = document.querySelector('.user-tag');
     if (userTagEl) userTagEl.textContent = `🎤 ${rawName}${suffix}`;
 
-    if (profile.noise_gate_mode) {
-      setNoiseGateMode(profile.noise_gate_mode);
-    } else {
-      setNoiseGateMode('normal');
-    }
+    const savedNoiseMode = (function() {
+      try { return localStorage.getItem('omoide_noise_gate_mode'); } catch (e) { return null; }
+    })();
+    const targetNoiseMode = profile.noise_gate_mode || savedNoiseMode || 'tv_cut';
+    setNoiseGateMode(targetNoiseMode);
   }
 
   function loadProfileIntoForm() {
@@ -4983,6 +5324,7 @@ ${artStyle.svgStyleRules}
       lastStepAdvanceAiTurn: -1,
       lastStepAdvanceTime: 0
     };
+    state.recentUserSpeechList = [];
     renderSceneCollectorUI();
   }
 
@@ -5006,56 +5348,498 @@ ${artStyle.svgStyleRules}
     return parts.join('・');
   }
 
+  /**
+   * 【ユーザー要件・最重要】さくらさんの発言エコー（スピーカー音の再認識）高精度判定フィルター
+   * 直近のAI発話全文・文末・部分フレーズと比較し、AI発言と類似または内包するテキストを100%遮断する
+   */
+  function isEchoOfAiSpeech(userText) {
+    if (!userText || typeof userText !== 'string') return true;
+    const cleanUser = userText.replace(/[\s、。！？「」・""''\(\)（）\-\.]/g, '').trim();
+    if (cleanUser.length < 1) return true;
+
+    // 「はい」「秋です」等の短い回答・相槌はエコー判定しない
+    if (/^(?:はい|うん|ええ|そう|お願い|お願いします|いいよ|いいですよ|描いて|書いて|秋|春|夏|冬|朝|昼|夕方|夜)$/.test(cleanUser)) {
+      return false;
+    }
+
+    const now = Date.now();
+    const isDuringAiPlayback = state.isAiSpeaking || (now - (state.lastAiSpeechFinishedTime || 0) < 500);
+
+    // AIが音声をスピーカーから出力中でない場合は、完全一致以外はすべてユーザーの肉声！
+    if (!isDuringAiPlayback) {
+      if (state.lastAiUtteranceText && state.lastAiUtteranceText.replace(/[\s、。！？「」・""''\(\)（）\-\.]/g, '').trim() === cleanUser) {
+        return true;
+      }
+      return false;
+    }
+
+    // 比較対象のAI発話リスト（最新発話 ＋ 過去の発話履歴）
+    const aiTextsToCheck = [
+      state.lastAiUtteranceText || '',
+      ...(state.recentAiUtteranceHistory || [])
+    ];
+
+    for (const rawAiText of aiTextsToCheck) {
+      if (!rawAiText) continue;
+      const cleanAi = rawAiText.replace(/[\s、。！？「」・""''\(\)（）\-\.]/g, '').trim();
+      if (!cleanAi) continue;
+
+      // 1. 完全一致
+      if (cleanAi === cleanUser) {
+        logDiag(`🛡️ AIエコー遮断（完全一致）: 「${userText}」`);
+        return true;
+      }
+
+      // 2. 音声再生中において、ユーザーテキストがAI発話の大部分（8文字以上）丸ごと入ってきた場合
+      if (cleanUser.length >= 8 && cleanAi.includes(cleanUser)) {
+        logDiag(`🛡️ AIエコー遮断（AI発話の内包一致）: 「${userText}」`);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * 【ユーザー要件・最重要】
+   * 会話文から絵画に不要な相槌（「そうですね」「うん」「え」「あの」「その」等）や
+   * 会話用助動詞・語尾（「ありました」「でした」「ですね」「ですよ」「ます」等）を徹底的に省き、
+   * 名詞、動詞、形容詞、形容動詞を優先した美しい文節レベルの情景フレーズに整形する
+   */
   function cleanScenePhrase(text) {
-    if (!text) return '';
-    let s = text.trim()
-      .replace(/^(?:ええと|あの|その|うん|はい|で|えっと|なんか)[、\s]*/g, '')
-      .replace(/[「」]/g, '')
-      .replace(/\s+/g, ' ');
-    // 連続した単語の重複を整理
-    s = s.replace(/(.+?)\1+/g, '$1');
-    return s.trim();
+    if (!text || typeof text !== 'string') return '';
+    let s = text.trim();
+
+    // 0. 文頭のステップ名プレフィックス（「場所は」「場所としては」「テーマは」「季節は」等）の徹底除去
+    s = s.replace(/^(?:(?:[①②③④⑤⑥1-6]|ステップ[1-6①-⑥])?\s*(?:テーマ|話題|場所|舞台|季節|天候|お天気|天気|登場人物|人物|人|様子|見えたもの|見えた様子|雰囲気|お気持ち|気持ち|気分)(?:としては|について|の確認|は|で|の)?[\s、。・,]*)+/g, '');
+
+    // 1. 文頭・文中の相槌・フィラー・不要な前置きの徹底除去
+    s = s.replace(/^(?:うん|え|ええ|ええと|えーと|あの|その|そうですね|そう|うーん|じゃあ|それでは|なんか|ちょっと|まあ|普通の|普通に|普通のね|やっぱり|本当|本当に|えっと|あのね|そのね|えー|あー|おー)[\s、。・,]*/g, '');
+    s = s.replace(/[\s、。・,]*(?:うん|え|ええ|ええと|えーと|あの|その|そうですね|なんか|まあ|ちょっと|普通の)[\s、。・,]+/g, ' ');
+
+    // 2. 記号・カギ括弧の除去
+    s = s.replace(/[「」『』""''\(\)（）]/g, '').trim();
+
+    // 3. 文末の会話用述語・助動詞を文節レベルの連体形・体言止め・様子に整形
+    s = s.replace(/(?:にありました|がありました|がありましたね|がありましたよ|でしたね|でしたよ|でした|ありました|いましたね|いましたよ|いました|でした|です|ます|ですね|ですよ|だよ|だね)[。！!\s]*$/g, '');
+    s = s.replace(/(?:歩いてました|歩いていました|歩いてた|歩いていた)[。！!\s]*$/g, '歩く様子');
+    s = s.replace(/(?:見えてました|見えていました|見えてた|見えていた)[。！!\s]*$/g, '見える様子');
+    s = s.replace(/(?:咲いてました|咲いていました|咲いてた|咲いていた)[。！!\s]*$/g, '咲く様子');
+    s = s.replace(/(?:走ってました|走っていました|走ってた|走っていた)[。！!\s]*$/g, '走る様子');
+    s = s.replace(/(?:並んでました|並んでいました|並んでた|並んでいた)[。！!\s]*$/g, '並ぶ様子');
+
+    // 4. 文末に残った不要な助詞（と、が、を、に、で、は等）を綺麗にトリム
+    s = s.replace(/[、。・\s]*(?:と|が|を|に|で|は|へ|より|から)[、。・\s]*$/g, '');
+    s = s.replace(/^[、。・\s]+|[、。・\s]+$/g, '').trim();
+
+    // 5. 連続した句読点や空白の整理
+    s = s.replace(/[、\s]{2,}/g, '、').replace(/[。]{2,}/g, '。');
+
+    const cleanRes = s.trim();
+
+    // 6. ステップ名そのもの（「場所」「テーマ」等）や中身のない単語は抽出無効（空文字）とする
+    const invalidWords = [
+      '場所', 'ばしょ', 'テーマ', '話題', 'わだい', '季節', 'きせつ', '天気', 'てんき', 'お天気',
+      '人物', 'じんぶつ', '人', '様子', 'ようす', '見えたもの', '雰囲気', 'ふんいき', '気持ち', 'きもち',
+      '気分', 'お気持ち', '確認', '聞き取り', 'お話', 'お話し', 'ですね', 'です'
+    ];
+    if (invalidWords.includes(cleanRes)) {
+      return '';
+    }
+
+    return cleanRes;
+  }
+
+  /**
+   * ストリーミング途中の前方一致断片（「校門」「校門と」等）が重複蓄積するのを防ぎ、
+   * 最も完成度の高いフレーズのみを保持するヘルパー
+   */
+  function addDetailCleanly(detailsSet, newPhrase) {
+    if (!newPhrase || typeof newPhrase !== 'string') return;
+    const p = newPhrase.trim();
+    if (!p || p.length < 2) return;
+    for (const existing of Array.from(detailsSet)) {
+      if (p === existing) return;
+      if (p.startsWith(existing) || p.includes(existing)) {
+        detailsSet.delete(existing);
+      } else if (existing.startsWith(p) || existing.includes(p)) {
+        return;
+      }
+    }
+    detailsSet.add(p);
+  }
+
+  /**
+   * 【ユーザー要件・完全準拠】
+   * さくらさんの発話から「聞き取り項目」と「復唱抽出項目」を明示的プレフィックスで高精度検知：
+   * 1. 「①テーマについてお聞きします」等の質問宣言で、フォーカスを該当項目へ即座に移動
+   * 2. 「①テーマについて復唱します」等の復唱宣言で、フォーカスを該当項目へ移動し、
+   *    復唱内容を確実に抽出してカードへ格納、filledにし、次のステップへ自動進行
+   */
+  function extractAiEchoRepeatToCurrentStep(aiUtterance) {
+    if (!aiUtterance || typeof aiUtterance !== 'string') return;
+    const sc = state.sceneCollector;
+    if (sc.status !== 'collecting' && sc.status !== 'confirming') return;
+
+    let didUpdate = false;
+
+    // A. 復唱パターンの定義（最優先で抽出・確定）
+    const echoStepDefs = [
+      {
+        step: 'topic',
+        label: '①話題・テーマ',
+        triggerRegex: /(?:[①1一]|ステップ1|ステップ①)?\s*(?:テーマ|話題)(?:の聞き取り)?について復唱します/,
+        contentRegex: /(?:[①1一]|ステップ1|ステップ①)?\s*(?:テーマ|話題)(?:の聞き取り)?について復唱します[。、\s]*(.+?)(?:ですね|だったのですね|だったんですね|なんですね|でしたね|でした|です|だね)[！!\s]*$/
+      },
+      {
+        step: 'place',
+        label: '②場所・舞台',
+        triggerRegex: /(?:[②2二]|ステップ2|ステップ②)?\s*(?:場所|舞台)(?:の聞き取り)?について復唱します/,
+        contentRegex: /(?:[②2二]|ステップ2|ステップ②)?\s*(?:場所|舞台)(?:の聞き取り)?について復唱します[。、\s]*(.+?)(?:ですね|だったのですね|だったんですね|なんですね|でしたね|でした|です|だね)[！!\s]*$/
+      },
+      {
+        step: 'weather',
+        label: '③天候・季節',
+        triggerRegex: /(?:[③3三]|ステップ3|ステップ③)?\s*(?:天候|季節|お天気|天気)(?:の聞き取り)?について復唱します/,
+        contentRegex: /(?:[③3三]|ステップ3|ステップ③)?\s*(?:天候|季節|お天気|天気)(?:の聞き取り)?について復唱します[。、\s]*(.+?)(?:ですね|だったのですね|だったんですね|なんですね|でしたね|でした|です|だね)[！!\s]*$/
+      },
+      {
+        step: 'people',
+        label: '④登場人物',
+        triggerRegex: /(?:[④4四]|ステップ4|ステップ④)?\s*(?:登場人物|人物|人)(?:の聞き取り)?について復唱します/,
+        contentRegex: /(?:[④4四]|ステップ4|ステップ④)?\s*(?:登場人物|人物|人)(?:の聞き取り)?について復唱します[。、\s]*(.+?)(?:ですね|だったのですね|だったんですね|なんですね|でしたね|でした|です|だね)[！!\s]*$/
+      },
+      {
+        step: 'details',
+        label: '⑤様子・光景',
+        triggerRegex: /(?:[⑤5五]|ステップ5|ステップ⑤)?\s*(?:様子|見えたもの|見えた様子)(?:の聞き取り)?について復唱します/,
+        contentRegex: /(?:[⑤5五]|ステップ5|ステップ⑤)?\s*(?:様子|見えたもの|見えた様子)(?:の聞き取り)?について復唱します[。、\s]*(.+?)(?:ですね|だったのですね|だったんですね|なんですね|でしたね|でした|です|だね)[！!\s]*$/
+      },
+      {
+        step: 'mood',
+        label: '⑥雰囲気・お気持ち',
+        triggerRegex: /(?:[⑥6六]|ステップ6|ステップ⑥)?\s*(?:雰囲気|お気持ち|気持ち|気分)(?:の聞き取り)?について復唱します/,
+        contentRegex: /(?:[⑥6六]|ステップ6|ステップ⑥)?\s*(?:雰囲気|お気持ち|気持ち|気分)(?:の聞き取り)?について復唱します[。、\s]*(.+?)(?:ですね|だったのですね|だったんですね|なんですね|でしたね|でした|です|だね)[！!\s]*$/
+      }
+    ];
+
+    // B. 質問パターンの定義（フォーカス移動用）
+    const askStepDefs = [
+      { step: 'topic', regex: /(?:[①1一]|ステップ1|ステップ①)?\s*(?:テーマ|話題)(?:の聞き取り)?についてお聞きします/ },
+      { step: 'place', regex: /(?:[②2二]|ステップ2|ステップ②)?\s*(?:場所|舞台)(?:の聞き取り)?についてお聞きします/ },
+      { step: 'weather', regex: /(?:[③3三]|ステップ3|ステップ③)?\s*(?:天候|季節|お天気|天気)(?:の聞き取り)?についてお聞きします/ },
+      { step: 'people', regex: /(?:[④4四]|ステップ4|ステップ④)?\s*(?:登場人物|人物|人)(?:の聞き取り)?についてお聞きします/ },
+      { step: 'details', regex: /(?:[⑤5五]|ステップ5|ステップ⑤)?\s*(?:様子|見えたもの|見えた様子)(?:の聞き取り)?についてお聞きします/ },
+      { step: 'mood', regex: /(?:[⑥6六]|ステップ6|ステップ⑥)?\s*(?:雰囲気|お気持ち|気持ち|気分)(?:の聞き取り)?についてお聞きします/ }
+    ];
+
+    const sents = aiUtterance.split(/[。\n！？!?]+/).map(s => s.trim()).filter(s => s.length >= 2);
+
+    // 1. まず復唱の検出と抽出（「〜について復唱します」）
+    for (const def of echoStepDefs) {
+      if (def.triggerRegex.test(aiUtterance)) {
+        // フォーカスを抽出対象ステップに即座に移動
+        sc.activeStep = def.step;
+        sc.turnTargetStep = def.step;
+        logDiag(`🎯 さくらさんの発言「${def.label}について復唱します」を検知 → フォーカスを【${def.label}】に移動`);
+
+        // 復唱内容の抽出
+        let extractedPhrase = '';
+        const m = aiUtterance.match(def.contentRegex);
+        if (m && m[1]) {
+          extractedPhrase = m[1];
+        } else {
+          for (let i = 0; i < sents.length; i++) {
+            if (def.triggerRegex.test(sents[i])) {
+              const afterTrigger = sents[i].replace(def.triggerRegex, '').replace(/^[。、\s]+/, '');
+              if (afterTrigger) {
+                extractedPhrase = afterTrigger.replace(/(?:ですね|だったのですね|だったんですね|なんですね|でしたね|でした|です|だね)[！!\s]*$/, '');
+                break;
+              } else if (i + 1 < sents.length) {
+                extractedPhrase = sents[i + 1].replace(/(?:ですね|だったのですね|だったんですね|なんですね|でしたね|でした|です|だね)[！!\s]*$/, '');
+                break;
+              }
+            }
+          }
+        }
+
+        if (extractedPhrase) {
+          const phrase = cleanScenePhrase(extractedPhrase);
+          if (phrase && phrase.length >= 2 && phrase.length <= 40 && !/(?:聞き取り|絵を描|キャンバス|始め|一通り|お話を伺い|よろしいでしょうか)/.test(phrase)) {
+            if (def.step === 'topic') {
+              sc.topic = phrase;
+              sc.stepStates.topic = 'filled';
+            } else if (def.step === 'place') {
+              sc.place = phrase;
+              sc.stepStates.place = 'filled';
+            } else if (def.step === 'weather') {
+              sc.weather = phrase;
+              sc.seasonWeather = phrase;
+              sc.stepStates.weather = 'filled';
+            } else if (def.step === 'people') {
+              sc.people = phrase;
+              sc.stepStates.people = 'filled';
+            } else if (def.step === 'details') {
+              addDetailCleanly(sc.details, phrase);
+              sc.stepStates.details = 'filled';
+            } else if (def.step === 'mood') {
+              sc.mood = phrase;
+              sc.stepStates.mood = 'filled';
+            }
+            logDiag(`✅ 【${def.label}】の復唱内容を確定・抽出: 「${phrase}」`);
+            didUpdate = true;
+
+            // 復唱確定によりステップを前進
+            const nextPending = findNextPendingStep(def.step);
+            if (nextPending) {
+              sc.activeStep = nextPending;
+              sc.turnTargetStep = nextPending;
+              logDiag(`➡️ さくらさんの復唱確定により「${STEP_LABELS[def.step]}」完了 → 次の項目へ進行: 「${STEP_LABELS[nextPending]}」`);
+            }
+          }
+        }
+      }
+    }
+
+    // 2. 質問の検出（「〜についてお聞きします」）によるフォーカス移動
+    for (const def of askStepDefs) {
+      if (def.regex.test(aiUtterance)) {
+        sc.activeStep = def.step;
+        sc.turnTargetStep = def.step;
+        logDiag(`👉 さくらさんの発言「${STEP_LABELS[def.step]}についてお聞きします」を検知 → 聞き取りフォーカスを【${STEP_LABELS[def.step]}】に移動`);
+        didUpdate = true;
+      }
+    }
+
+    // 3. フォールバック（明示的な「復唱します」プレフィックスがない場合の従来の構文抽出）
+    if (!didUpdate) {
+      for (const sent of sents) {
+        if (/(?:ですか|でしょうか|どうでしたか|いらっしゃいましたか|見えましたか|教えて|どんな|どこ|誰|どなた)[？?]?$/.test(sent)) {
+          continue;
+        }
+        const m = sent.match(/^(?:素敵ですね[、\s]*)?(?:なるほど[、\s]*)?(.+?)[、\s]*(?:だったのですね|だったんですね|でしたね|ですね|でしたよ|でした|なんですね|なのですね|わけですね)[！!\s]*$/);
+        if (m && m[1]) {
+          const rawPhrase = m[1].replace(/^(?:それでは|では|はい|ええ|そう|お父さん|お母さん|〇〇さん)[\s、]*/, '');
+          const phrase = cleanScenePhrase(rawPhrase);
+          if (phrase && phrase.length >= 2 && phrase.length <= 35 && !/(?:聞き取り|絵を描|キャンバス|始め|一通り|お話を伺い|よろしいでしょうか)/.test(phrase)) {
+            let targetStep = null;
+            if (/(?:秋晴れ|晴れ|快晴|雨|雪|曇り|秋|春|夏|冬|朝|昼|夕暮れ|夕方|夕焼け|日差し|木漏れ日|時間|天気|お天気)/.test(phrase) && !sc.weather) {
+              targetStep = 'weather';
+            } else if (/(?:生徒|学生|友達|お友達|家族|先生|子ども|子供|仲間|同級生|大勢の人|人)/.test(phrase) && !sc.people) {
+              targetStep = 'people';
+            } else if (/(?:学校|校門|正門|校舎|校庭|通学路|道路|坂道|道|教室|庭|公園|駅|畑|田んぼ|川|海|山|神社|お寺|家|実家|部屋|港)/.test(phrase) && !sc.place) {
+              targetStep = 'place';
+            } else if (/(?:楽しかった|嬉しい|賑やか|懐かしい|温かい|穏やか|気分|気持ち|雰囲気)/.test(phrase) && !sc.mood) {
+              targetStep = 'mood';
+            } else if (/(?:見えた|歩いて|並んで|自転車|制服|学生服|服装|様子)/.test(phrase) && sc.details.size < 2) {
+              targetStep = 'details';
+            }
+
+            if (!targetStep) {
+              targetStep = (sc.activeStep && COLLECTOR_STEPS.includes(sc.activeStep) && sc.stepStates[sc.activeStep] !== 'filled')
+                ? sc.activeStep
+                : (findNextPendingStep() || sc.activeStep);
+            }
+
+            if (targetStep && COLLECTOR_STEPS.includes(targetStep)) {
+              if (targetStep === 'topic') {
+                sc.topic = phrase;
+                sc.stepStates.topic = 'filled';
+              } else if (targetStep === 'place') {
+                sc.place = phrase;
+                sc.stepStates.place = 'filled';
+              } else if (targetStep === 'weather') {
+                sc.weather = phrase;
+                sc.seasonWeather = phrase;
+                sc.stepStates.weather = 'filled';
+              } else if (targetStep === 'people') {
+                sc.people = phrase;
+                sc.stepStates.people = 'filled';
+              } else if (targetStep === 'details') {
+                if (sc.details.size < 2) addDetailCleanly(sc.details, phrase);
+                sc.stepStates.details = 'filled';
+              } else if (targetStep === 'mood') {
+                sc.mood = phrase;
+                sc.stepStates.mood = 'filled';
+              }
+              const nextPending = findNextPendingStep(targetStep);
+              if (nextPending) {
+                sc.activeStep = nextPending;
+                sc.turnTargetStep = nextPending;
+              }
+              didUpdate = true;
+            }
+          }
+        }
+      }
+    }
+
+    renderSceneCollectorUI();
+    updateExtractedWordsCard();
+  }
+
+  function parseAndFillCollectorCardsFromVisualElements(visual, title) {
+    if (!visual && !title) return;
+    const sc = state.sceneCollector;
+    const rawText = `${visual || ''} ${title || ''}`;
+
+    // 文ごとに分割（句点、改行、感嘆符など）
+    const sentences = rawText.split(/[。\n！？!?]+/).map(s => s.trim()).filter(s => s.length >= 2);
+
+    for (const sent of sentences) {
+      // 1. 話題・テーマの抽出
+      if (/(?:テーマ|話題|お話|思い出)は/.test(sent)) {
+        const m = sent.match(/(?:テーマ|話題|お話|思い出)は(?:『|「)?(.+?)(?:』|」)?(?:ですね|でした|です|だね)?$/);
+        if (m && m[1]) {
+          sc.topic = cleanScenePhrase(m[1]);
+          sc.stepStates.topic = 'filled';
+        }
+      }
+
+      // 2. 場所・舞台の抽出
+      if (/(?:場所|舞台)は/.test(sent) || /(?:学校|校門|校庭|通学路|道路|坂道|道|教室|庭|公園|駅|畑|田んぼ|川|海|山|神社|お寺|家|実家|部屋|港)/.test(sent)) {
+        const m = sent.match(/(?:場所|舞台)は(?:『|「)?(.+?)(?:』|」)?(?:ですね|でした|です|だね)?$/);
+        if (m && m[1]) {
+          sc.place = cleanScenePhrase(m[1]);
+          sc.stepStates.place = 'filled';
+        } else if (!sc.place) {
+          const pm = sent.match(/([^\s、。]{2,15}(?:学校|校門|校庭|通学路|道路|坂道|道|教室|庭|公園|駅|畑|田んぼ|川|海|山|神社|お寺|家|実家|部屋|港)(?:の近く|のそば|周辺)?)/);
+          if (pm && pm[1]) {
+            sc.place = cleanScenePhrase(pm[1]);
+            sc.stepStates.place = 'filled';
+          }
+        }
+      }
+
+      // 3. 季節・天候・時間の抽出
+      if (/(?:季節|天気|お天気|天候|時間)は/.test(sent) || /(?:秋晴れ|日本晴れ|快晴|晴れ|青空|曇り|雨|雪|秋|春|夏|冬|朝|昼|夕暮れ|夕方|夕焼け|日差し|木漏れ日)/.test(sent)) {
+        const m = sent.match(/(?:季節|天気|お天気|天候|時間)は(?:『|「)?(.+?)(?:』|」)?(?:ですね|でした|です|だね)?$/);
+        if (m && m[1]) {
+          sc.weather = cleanScenePhrase(m[1]);
+          sc.seasonWeather = sc.weather;
+          sc.stepStates.weather = 'filled';
+        } else if (!sc.weather) {
+          const wm = sent.match(/([^\s、。]{1,10}(?:秋晴れ|晴れのいい日|晴れの日|快晴|晴れ|青空|朝|昼|夕暮れ時|夕暮れ|夕焼け|夕方|秋|春|夏|冬))/);
+          if (wm && wm[1]) {
+            sc.weather = cleanScenePhrase(wm[1]);
+            sc.seasonWeather = sc.weather;
+            sc.stepStates.weather = 'filled';
+          }
+        }
+      }
+
+      // 4. 登場人物の抽出
+      if (/(?:登場人物|一緒にいた人|どなたと|お友達|ご家族|生徒|学生|友達|家族|先生|人|子ども|子供)/.test(sent)) {
+        const m = sent.match(/(?:登場人物|一緒にいた人|どなたと|お友達|ご家族)は(?:『|「)?(.+?)(?:』|」)?(?:ですね|でした|です|でしたね)?$/);
+        if (m && m[1]) {
+          sc.people = cleanScenePhrase(m[1]);
+          sc.stepStates.people = 'filled';
+        } else if (!sc.people) {
+          const pem = sent.match(/([^\s、。]{1,15}(?:大勢の生徒|生徒さん|生徒たち|男子女子の生徒|男子学生|女子学生|学生たち|学生|お友達|友達|同級生|先生|家族|仲間|大勢の人))/);
+          if (pem && pem[1]) {
+            sc.people = cleanScenePhrase(pem[1]);
+            sc.stepStates.people = 'filled';
+          }
+        }
+      }
+
+      // 5. 見えたもの・様子の抽出
+      if (/(?:着ていた|身につけていた|見えた|歩いていた|並んで|自転車|制服|学生服|服装|様子|照らされて)/.test(sent)) {
+        const dm = sent.match(/([^\s、。]{2,20}(?:学生服を着ていた|制服を着ていた|着ていた|歩いていた|様子|自転車|並んでいた|照らされて綺麗))/);
+        if (dm && dm[1]) {
+          addDetailCleanly(sc.details, cleanScenePhrase(dm[1]));
+          sc.stepStates.details = 'filled';
+        }
+      }
+
+      // 6. 気分・雰囲気の抽出
+      if (/(?:気持ち|気分|雰囲気|空気感|楽しかった|賑やか|懐かしい|温かい|穏やか)/.test(sent)) {
+        const m = sent.match(/(?:気持ち|気分|雰囲気|空気感)は(?:『|「)?(.+?)(?:』|」)?(?:ですね|でした|です|でしたね)?$/);
+        if (m && m[1]) {
+          sc.mood = cleanScenePhrase(m[1]);
+          sc.stepStates.mood = 'filled';
+        } else if (!sc.mood) {
+          const mm = sent.match(/([^\s、。]{2,20}(?:楽しかった気持ち|楽しかった|楽しい|ワイワイ喋りながら|賑やか|懐かしい気分|懐かしい気持ち|懐かしい|穏やか|温かい))/);
+          if (mm && mm[1]) {
+            sc.mood = cleanScenePhrase(mm[1]);
+            sc.stepStates.mood = 'filled';
+          }
+        }
+      }
+    }
+
+    if (title && !sc.topic) {
+      sc.topic = cleanScenePhrase(title);
+      sc.stepStates.topic = 'filled';
+    }
+
+    // 埋まっている項目のステータスを確実に filled にする
+    for (const st of COLLECTOR_STEPS) {
+      if (sc[st] || (st === 'details' && sc.details.size > 0)) {
+        sc.stepStates[st] = 'filled';
+      }
+    }
+  }
+
+  /**
+   * 【ユーザー要件・完全一本化】
+   * ユーザー様の発話から直接カード（①〜⑥）の値を抽出・変更することは100%完全撤廃！
+   * カードの確定とステップ進行は、さくらさんが耳で聞いて優しく「〜ですね」と復唱した言葉（extractAiEchoRepeatToCurrentStep）のみで行います。
+   */
+  function assignUtteranceDirectlyToCollector(utt) {
+    return;
   }
 
   function buildCollectorBulletedSummary() {
     const sc = state.sceneCollector;
     const lines = [];
-    if (sc.topic) {
-      lines.push(`・話題・思い出：${cleanScenePhrase(sc.topic)}`);
+    if (sc.topic && sc.topic !== '未特定' && sc.topic !== 'お話を聞いています') {
+      lines.push(`・①話題・思い出：${cleanScenePhrase(sc.topic)}`);
     }
-    if (sc.place) {
-      lines.push(`・場所・舞台：${cleanScenePhrase(sc.place)}`);
+    if (sc.place && sc.place !== '未特定') {
+      lines.push(`・②場所・舞台：${cleanScenePhrase(sc.place)}`);
     }
-    if (sc.weather) {
-      lines.push(`・季節・天候：${cleanScenePhrase(sc.weather)}`);
+    const weather = sc.weather || sc.seasonWeather;
+    if (weather && weather !== '未特定') {
+      lines.push(`・③季節・天候：${cleanScenePhrase(weather)}`);
     }
-    if (sc.people) {
-      lines.push(`・登場人物：${cleanScenePhrase(sc.people)}`);
+    if (sc.people && sc.people !== '未特定') {
+      lines.push(`・④登場人物：${cleanScenePhrase(sc.people)}`);
     }
-    if (sc.details.size > 0) {
+    if (sc.details && sc.details.size > 0) {
       const detailsArray = Array.from(sc.details)
         .map(d => cleanScenePhrase(d))
         .filter(d => d.length >= 2 && !d.includes('Google') && !d.includes('テスト'));
       if (detailsArray.length > 0) {
-        lines.push(`・見えた様子：${detailsArray.join('、')}`);
+        lines.push(`・⑤見えた様子：${detailsArray.join('、')}`);
       }
     }
-    if (sc.mood) {
-      lines.push(`・気分・雰囲気：${cleanScenePhrase(sc.mood)}`);
+    if (sc.mood && sc.mood !== '未特定') {
+      lines.push(`・⑥気分・雰囲気：${cleanScenePhrase(sc.mood)}`);
     }
-    return lines.length > 0 ? lines.join('\n') : (sc.topic ? `・思い出：${sc.topic}` : '・思い出の風景');
+    if (lines.length === 0) {
+      return '・思い出の風景（お話しいただいた情景がここに箇条書きで並びます）';
+    }
+    return lines.join('\n');
   }
 
+  /**
+   * 【ユーザー要件】描画エンジンへのプロンプトは①〜⑥の抽出内容をつなぎ合わせて作成する
+   */
   function buildCollectorSummaryText() {
     const sc = state.sceneCollector;
     const items = [];
-    if (sc.topic) items.push(`①話題：${sc.topic}`);
-    if (sc.place) items.push(`②場所：${sc.place}`);
-    if (sc.weather) items.push(`③天候：${sc.weather}`);
-    if (sc.people) items.push(`④登場人物：${sc.people}`);
-    if (sc.details.size > 0) items.push(`⑤様子：${Array.from(sc.details).join('・')}`);
-    if (sc.mood) items.push(`⑥雰囲気：${sc.mood}`);
-    return items.join(' ／ ');
+    if (sc.topic && sc.topic !== '未特定') items.push(cleanScenePhrase(sc.topic));
+    if (sc.place && sc.place !== '未特定') items.push(cleanScenePhrase(sc.place));
+    const weather = sc.weather || sc.seasonWeather;
+    if (weather && weather !== '未特定') items.push(cleanScenePhrase(weather));
+    if (sc.people && sc.people !== '未特定') items.push(cleanScenePhrase(sc.people));
+    if (sc.details && sc.details.size > 0) {
+      const dArr = Array.from(sc.details).map(d => cleanScenePhrase(d)).filter(d => d.length >= 2);
+      if (dArr.length > 0) items.push(dArr.join('、'));
+    }
+    if (sc.mood && sc.mood !== '未特定') items.push(cleanScenePhrase(sc.mood));
+    return items.join('、');
   }
 
   function findNextPendingStep(startAfterStep = null) {
@@ -5086,18 +5870,22 @@ ${artStyle.svgStyleRules}
   /**
    * 絵画のための聞き取りセッションを開始する（ボタンまたはさくらさんの発話連動）
    */
-  function startListeningSession(triggerPrompt = false) {
+  function startListeningSession(triggerPrompt = false, resetIfIdle = true) {
     const sc = state.sceneCollector;
     if (sc.status === 'drawing' || state.isDrawingMedia) {
       logDiag('描画進行中のため、聞き取り開始は待機します。');
       return;
     }
+    // 【重要】idleまたはdrawnから新しく聞き取りを始める場合は、前回の情景データをクリアして必ず①話題からスタート！
+    if (resetIfIdle && (sc.status === 'idle' || sc.status === 'drawn')) {
+      resetSceneCollector();
+    }
     sc.status = 'collecting';
     sc.aiHasAskedConfirmation = false;
     sc.isAwaitingConfirmation = false;
     sc.drawConfirmedByUser = false;
-    sc.activeStep = findNextPendingStep() || 'topic';
-    sc.turnTargetStep = sc.activeStep;
+    sc.activeStep = 'topic';
+    sc.turnTargetStep = 'topic';
     sc.lastStepAdvanceAiTurn = -1;
     sc.lastStepAdvanceTime = 0;
     setAvatarState('listening');
@@ -5356,6 +6144,13 @@ ${artStyle.svgStyleRules}
       sc.isAwaitingConfirmation = true;
       sc.activeStep = 'confirm';
       logDiag('✨ 6ステップの聞き取りが一通り完了しました！内容確認へ移行します。');
+      if (!sc.aiHasAskedConfirmation && state.hasLocalBackend && !state.isDirectGeminiWs && state.socket && state.socket.readyState === WebSocket.OPEN) {
+        logDiag('📢 さくらさんへ内容確認の発話をリクエストします');
+        state.socket.send(JSON.stringify({
+          type: 'request_ask_confirmation',
+          summary: buildCollectorSummaryText()
+        }));
+      }
     }
     sc.lastStepAdvanceAiTurn = state.aiTurnCounter;
     sc.lastStepAdvanceTime = Date.now();
@@ -5539,12 +6334,12 @@ ${artStyle.svgStyleRules}
     if (/(これでいい|これで良い|この雰囲気でよい|このままでいい|このままがいい|バッチリ|大丈夫|いいよ)/.test(clean)) return null;
 
     const modPatterns = [
-      /(.+?)(?:にしてほしい|にしてくれ|にしてください|に変えてほしい|に変えてくれ|に変えてください|に描き直して|に描きかえて)$/,
-      /(.+?)(?:を追加して|を足して|を置いて|を入れて|を描き足して|を描いてみて)$/,
+      /(.+?)(?:にしてほしい|にしてくれ|にしてください|に変えてほしい|に変えてくれ|に変えてください|に描き直して|に描きかえて|に書き直して)$/,
+      /(.+?)(?:を追加して|を足して|を置いて|を入れて|を描き足して|を書き足して|を描いてみて)$/,
       /(?:もっと|もうちょっと)(.+?)(?:にして|に変えて)$/,
-      /(?:もう一度|もう一回|新しく)(.+?)(?:描いて|描き直して)$/,
-      /(.+?)(?:に修正して|を修正して|に直して|を描き直して)$/,
-      /(?:修正したい|直したい|描き直したい|変更したい|やり直したい)(.+)?$/
+      /(?:もう一度|もう一回|新しく)(.+?)(?:描いて|描き直して|書いて|書き直して)$/,
+      /(.+?)(?:に修正して|を修正して|に直して|を描き直して|を書き直して)$/,
+      /(?:修正したい|直したい|描き直したい|書き直したい|描き直してみたい|書き直してみたい|変更したい|やり直したい)(.+)?$/
     ];
 
     for (const pat of modPatterns) {
@@ -5552,7 +6347,7 @@ ${artStyle.svgStyleRules}
       if (match) return clean;
     }
 
-    if (/^(描き直して|描きかえて|書き直して|修正して|直してほしい|変えてみて|修正したい|直したい|変更したい|やり直したい|ちょっと修正)$/.test(clean)) {
+    if (/(?:描き直して|描きかえて|書き直して|描き直したい|書き直したい|描き直してみたい|書き直してみたい|修正して|直してほしい|直したい|変えてみて|修正したい|変更したい|やり直したい|ちょっと修正|ちょっと書き直|ちょっと描き直)/.test(clean)) {
       return clean;
     }
 
@@ -5719,6 +6514,7 @@ ${artStyle.svgStyleRules}
       /(?:元気でした|元気ですよ|元気です|おかげさまで|ぼちぼちです|まあまあです|変わりないです)/,
       /(?:さくらさんは|そちらはどう|お天気はどう|調子はどう|聞こえますか|もしもし)/,
       /(?:いいお?天気ですね|悪くないですね|暖かいですね|寒いですね|暑いですね|涼しいですね)/,
+      /(?:世間話|雑談|おしゃべり|話をして|お話しして)/,
       /(?:何もしてない|なにもしてない|特に何も|家でブラブラ|ブラブラして|ゆっくりして|のんびりして|テレビを見て|お茶を飲んで)/,
       /^(?:はい|いいえ|うん|ええ|そうですね|そうですか|なるほど|わかりました|ありがとうございます|ありがとう|どうも|ちょっと|さあ|どうかな)(?:ね|よ|な|。|！)*$/
     ];
@@ -5880,22 +6676,31 @@ ${artStyle.svgStyleRules}
     }
 
     // 3. ④ 登場人物（一緒にいた人・人物）の抽出
-    const peopleMatches = cleanText.match(/(?:家族みんなで|家族みんな|家族|両親|おじいちゃん|おばあちゃん|祖父母|祖父|祖母|兄弟|姉妹|兄|弟|姉|妹|親戚|いとこ|夫婦|夫|妻|主人|家内|子供たち|子どもたち|子供|子ども|息子|娘|孫|赤ちゃん|クラスの友達|お友達|友達|友人|親友|幼馴染|同級生|クラスメイト|生徒たち|児童たち|担任の先生|校長先生|先生|先輩|後輩|仲間|近所の人|村の人|町の人|大勢の人|たくさんの人|応援の人|観客|見物客|店員さん|車掌さん|船長さん|飼い犬|わんちゃん|子犬|犬|猫|ペット|自分ひとり|ひとり|一人|誰もいない|人物なし|風景だけ)/g);
+    // ※話題（topic）ですでに「犬」「猫」等が出た場合、登場人物の質問（activeStep === 'people'）でない限り④を勝手に埋めない！
+    const peopleMatches = cleanText.match(/(?:男の子|女の子|男子生徒|女子生徒|男子学生|女子学生|学生たち|学生|生徒たち|生徒|児童たち|高校生|中学生|小学生|子どもたち|子ども|子供たち|子供|若者|家族みんなで|家族みんな|家族|両親|おじいちゃん|おばあちゃん|祖父母|祖父|祖母|兄弟|姉妹|兄|弟|姉|妹|親戚|いとこ|夫婦|夫|妻|主人|家内|息子|娘|孫|赤ちゃん|クラスの友達|お友達|友達|友人|親友|幼馴染|同級生|クラスメイト|担任の先生|校長先生|先生|先輩|後輩|仲間|近所の人|村の人|町の人|大勢の人|大勢の生徒|大勢|たくさんの人|応援の人|観客|見物客|店員さん|車掌さん|船長さん|飼い犬|わんちゃん|子犬|犬|猫|ペット|自分ひとり|ひとり|一人|誰もいない|人物なし|風景だけ)/g);
     if (peopleMatches && peopleMatches.length > 0) {
       peopleMatches.forEach(p => {
+        if (activeStep !== 'people' && sc.topic && sc.topic.includes(p)) {
+          return;
+        }
         sc.people = mergeStepText(sc.people, p);
       });
-      sc.stepStates.people = 'filled';
-      filledNow.add('people');
-      logDiag(`④ 登場人物を記録: 「${sc.people}」`);
+      if (sc.people) {
+        sc.stepStates.people = 'filled';
+        filledNow.add('people');
+        logDiag(`④ 登場人物を記録: 「${sc.people}」`);
+      }
     }
 
     // 4. ② 場所・舞台の抽出
-    const placeMatches = cleanText.match(/(?:(?:小学校|中学校|高校|大学|学校|実家|故郷|信州|松本|海辺|山奥|家の中)の)?(?:園庭|校庭|グラウンド|運動場|校門|正門|花壇|庭園|中庭|庭先|縁側|軒先|座敷|和室|居間|茶の間|お部屋|リビング|台所|ベランダ|屋上|カフェ|喫茶店|純喫茶|食堂|レストラン|温泉旅館|旅館|ホテル|露天風呂|温泉|銭湯|教室|音楽室|図書室|体育館|講堂|校舎|海岸|砂浜|海辺|防波堤|灯台|漁港|港|船の上|公園|広場|神社|お寺|境内|参道|商店街|市場|朝市|デパート|遊園地|動物園|水族館|植物園|駅のホーム|駅舎|駅|汽車|電車|田んぼ|水田|あぜ道|りんご畑|ぶどう畑|みかん畑|茶畑|果樹園|畑|牧場|故郷|ふるさと|実家|山頂|山の麓|山道|峠|渓谷|高原|北アルプス|南アルプス|アルプス|富士山|湖畔|川原|河川敷|土手|橋の上|小学校|中学校|高校|学校|海|山|川|湖|池|森|林|庭|家の中)/g);
+    // ※話題（topic）ですでに言及された単語は、場所の質問（activeStep === 'place'）でない限り②を勝手に埋めない！
+    const placeMatches = cleanText.match(/(?:幹線道路沿い|幹線道路|通学路|歩道|車道|道路沿い|道路|並木道|街道|交差点|踏切|横断歩道|校門前|校門の近く|校門|正門|学校の近く|学校周辺|学校のそば|高校の近く|園庭|校庭|グラウンド|運動場|花壇|庭園|中庭|庭先|縁側|軒先|座敷|和室|居間|茶の間|お部屋|リビング|台所|ベランダ|屋上|カフェ|喫茶店|純喫茶|食堂|レストラン|温泉旅館|旅館|ホテル|露天風呂|温泉|銭湯|教室|音楽室|図書室|体育館|講堂|校舎|海岸|砂浜|海辺|防波堤|灯台|漁港|港|船の上|公園|広場|神社|お寺|境内|参道|商店街|市場|朝市|デパート|遊園地|動物園|水族館|植物園|駅のホーム|駅舎|駅|汽車|電車|田んぼ|水田|あぜ道|りんご畑|ぶどう畑|みかん畑|茶畑|果樹園|畑|家庭菜園|牧場|故郷|ふるさと|実家|山頂|山の麓|山道|峠|渓谷|高原|北アルプス|南アルプス|アルプス|富士山|湖畔|川原|河川敷|土手|橋の上|小学校|中学校|高校|学校|海|山|川|湖|池|森|林|庭|お庭|家の中|お家|家|自宅|犬小屋|小屋|納屋|蔵|道端|近所|道)/g);
     if (placeMatches && placeMatches.length > 0) {
       placeMatches.forEach(pl => {
-        // 「小学校の運動会」の「小学校」単体が話題の一部としてのみ使われている場合は、activeStep==='place'または「小学校で」等の場所表現の時優先
         if (/^(?:小学校|中学校|高校|学校)$/.test(pl) && cleanText.includes(`${pl}の運動会`) && activeStep !== 'place' && placeMatches.length === 1) {
+          return;
+        }
+        if (activeStep !== 'place' && sc.topic && sc.topic.includes(pl)) {
           return;
         }
         sc.place = mergeStepText(sc.place, pl);
@@ -5908,8 +6713,8 @@ ${artStyle.svgStyleRules}
     }
 
     // 5. ① 話題・テーマの抽出
-    const topicKeywordMatch = cleanText.match(/(?:(?:小学校|中学校|高校|学校|昔|子供の頃|若い頃|家族)の(?:頃の)?)?(?:運動会|体育祭|文化祭|学園祭|学芸会|修学旅行|遠足|入学式|卒業式|夏祭り|秋祭り|お祭り|盆踊り|花火大会|お正月|餅つき|お花見|桜見物|紅葉狩り|海水浴|潮干狩り|キャンプ|登山|山登り|ハイキング|温泉旅行|家族旅行|新婚旅行|旅行|お散歩|散歩|お買い物|買い物|魚釣り|釣り|畑仕事|稲刈り|田植え|りんご狩り|ぶどう狩り|みかん狩り|結婚式|誕生日|クリスマス|授業|部活動|部活|野球|剣道|柔道|水泳|合唱コンクール|合唱|音楽会|発表会|展覧会|雪合戦|かまくら|そり遊び|凧揚げ|羽根つき|夕涼み|縁日|朝市|純喫茶|喫茶店|日向ぼっこ)/);
-    const topicFrameMatch = cleanText.match(/(?:(.+?)(?:の絵|について|のお話|の思い出|の風景|の景色|の情景|を描きたい|を書きたい|を描いてみたい|を書いてみたい|を描こう|を書こう))/);
+    const topicKeywordMatch = cleanText.match(/(?:高校時代|高校の頃|高校の通学|通学の思い出|通学路|通学|登校|下校|学生時代|学校の思い出|高校生の頃|中学生の頃|小学生の頃|子どもの頃|子供の頃|若い頃|昔の頃|昔の思い出|運動会|体育祭|文化祭|学園祭|学芸会|修学旅行|遠足|入学式|卒業式|夏祭り|秋祭り|お祭り|盆踊り|花火大会|お正月|餅つき|お花見|桜見物|紅葉狩り|海水浴|潮干狩り|キャンプ|登山|山登り|ハイキング|温泉旅行|家族旅行|新婚旅行|旅行|お散歩|散歩|お買い物|買い物|魚釣り|釣り|畑仕事|稲刈り|田植え|りんご狩り|ぶどう狩り|みかん狩り|結婚式|誕生日|クリスマス|授業|部活動|部活|野球|剣道|柔道|水泳|合唱コンクール|合唱|音楽会|発表会|展覧会|雪合戦|かまくら|そり遊び|凧揚げ|羽根つき|夕涼み|縁日|朝市|純喫茶|喫茶店|日向ぼっこ|犬|いぬ|イヌ|子犬|こいぬ|わんちゃん|ワンちゃん|愛犬|柴犬|ポチ|猫|ねこ|ネコ|子猫|こねこ|ペット|小鳥|インコ|文鳥|金魚|鯉|錦鯉|牛|馬|羊|ヤギ|鶏|ニワトリ|花壇|花|チューリップ|ひまわり|朝顔|コスモス|桜|梅|菊|紫陽花|あじさい|紅葉|たんぽぽ|菜の花|すずらん|バラ|薔薇|庭|お庭|家庭菜園|縁側|座敷|茶の間|居間|台所|囲炉裏|こたつ|火鉢|風鈴|扇風機|蚊取り線香|ラジオ|蓄音機|井戸|手押しポンプ|水車|かまど|昔の暮らし|子供の頃の暮らし|懐かしい暮らし|田舎の暮らし|家族の思い出|故郷の思い出)/);
+    const topicFrameMatch = cleanText.match(/(?:(.+?)(?:の絵|について|のお話|の思い出|の風景|の景色|の情景|を描きたい|を書きたい|を描いてみたい|を書いてみたい|を描こう|を書こう|を飼っていた|を買っていた|と暮らしていた|がいた|があった|がありました|が咲いていた|に行って|に行った|で遊んだ))/);
     if (topicKeywordMatch && topicKeywordMatch[0]) {
       sc.topic = mergeStepText(sc.topic, topicKeywordMatch[0]);
       sc.stepStates.topic = 'filled';
@@ -5917,7 +6722,7 @@ ${artStyle.svgStyleRules}
       logDiag(`① 話題・テーマを記録: 「${sc.topic}」`);
     } else if (topicFrameMatch && topicFrameMatch[1]) {
       const cand = cleanStepAnswerText(topicFrameMatch[1]).replace(/買っていた犬/g, '飼っていた犬');
-      if (cand && cand.length >= 2 && cand.length <= 20) {
+      if (cand && cand.length >= 2 && cand.length <= 24) {
         sc.topic = mergeStepText(sc.topic, cand);
         sc.stepStates.topic = 'filled';
         filledNow.add('topic');
@@ -5926,10 +6731,8 @@ ${artStyle.svgStyleRules}
     }
 
     // 6. ⑤ 見えたもの・様子（具体的な事物・行動・ディテール）の抽出
-    // ※他のステップ回答中（activeStep !== 'details'）に自由文分割を行うと、場所や天気の回答断片が⑤に混入して⑤がスキップされてしまうため、
-    //   自由文分割は activeStep === 'details' の時のみ実行し、他ステップ回答中は明確な具体物キーワードのみ同時抽出する！
     const dynamicDetails = (activeStep === 'details') ? extractDynamicDetailsFromSpeech(cleanText) : [];
-    const actionKeywords = cleanText.match(/(?:障子|襖|ふすま|畳|ちゃぶ台|座布団|縁側|床の間|白線のトラック|トラック|かけっこ|徒競走|綱引き|玉入れ|リレー|応援合戦|騎馬戦|ダンス|フォークダンス|万国旗|赤白帽|ハチマキ|入場門|表彰台|お弁当|水筒|桜の木|満開の桜|赤いバラ|白い柵|花壇|コーヒー|クリームソーダ|ホットケーキ|黒板|机|オルガン|ピアノ|提灯|屋台|金魚すくい|花火|焚き火|テント|リュック|列車|蒸気機関車|釣り竿|麦わら帽子|赤いリンゴ)/g);
+    const actionKeywords = cleanText.match(/(?:学生服を着た|学生服|制服を着た|制服|セーラー服|ブレザー|カバン|通学カバン|ランドセル|帽子|学帽|自転車|歩いてました|歩いていた|歩いている|歩く様子|大勢で歩く|並木|街路樹|看板|障子|襖|ふすま|畳|ちゃぶ台|座布団|縁側|床の間|白線のトラック|トラック|かけっこ|徒競走|綱引き|玉入れ|リレー|応援合戦|騎馬戦|ダンス|フォークダンス|万国旗|赤白帽|ハチマキ|入場門|表彰台|お弁当|水筒|桜の木|満開の桜|赤いバラ|白い柵|花壇|コーヒー|クリームソーダ|ホットケーキ|黒板|机|オルガン|ピアノ|提灯|屋台|金魚すくい|花火|焚き火|テント|リュック|列車|蒸気機関車|釣り竿|麦わら帽子|赤いリンゴ)/g);
     const allDetailCandidates = new Set([...dynamicDetails, ...(actionKeywords || [])]);
 
     allDetailCandidates.forEach(item => {
@@ -5946,9 +6749,7 @@ ${artStyle.svgStyleRules}
         (sc.mood && sc.mood.includes(item) && activeStep !== 'details')
       );
       if (isAlreadyOtherStep) return;
-      if (!sc.details.has(item)) {
-        sc.details.add(item);
-      }
+      addDetailCleanly(sc.details, item);
       filledNow.add('details');
     });
     if (sc.details.size > 0) {
@@ -5959,8 +6760,8 @@ ${artStyle.svgStyleRules}
     // （例：「④登場人物」に対して「近所の幼馴染たちです」と答えた場合など）
     if (!filledNow.has(activeStep) && COLLECTOR_STEPS.includes(activeStep)) {
       const cleanedAns = cleanStepAnswerText(cleanText);
-      // 他の項目だけに向けた回答でなければ activeStep にも格納する
-      if (cleanedAns && cleanedAns.length >= 2 && cleanedAns.length <= 24 && filledNow.size === 0) {
+      const canStoreAsFallback = cleanedAns && cleanedAns.length >= 2 && cleanedAns.length <= 30 && (filledNow.size === 0 || (activeStep === 'topic' && !sc.topic));
+      if (canStoreAsFallback) {
         if (activeStep === 'topic') {
           sc.topic = mergeStepText(sc.topic, cleanedAns);
           sc.stepStates.topic = 'filled';
@@ -5979,7 +6780,7 @@ ${artStyle.svgStyleRules}
           sc.stepStates.people = 'filled';
           filledNow.add('people');
         } else if (activeStep === 'details') {
-          sc.details.add(cleanedAns);
+          addDetailCleanly(sc.details, cleanedAns);
           sc.stepStates.details = 'filled';
           filledNow.add('details');
         } else if (activeStep === 'mood') {
@@ -6039,7 +6840,7 @@ ${artStyle.svgStyleRules}
     return false;
   }
 
-  function updateSceneCollectorFromText(text, speaker = 'user') {
+  function updateSceneCollectorFromText(text, speaker = 'user', isFinal = false) {
     if (!text || typeof text !== 'string') return;
     const clean = normalizeTranscriptText(text);
     if (clean.length < 2) return;
@@ -6051,80 +6852,143 @@ ${artStyle.svgStyleRules}
     }
 
     // =========================================================================
-    // 1. AI（さくらさん）の発話検知
+    // 1. AI（さくらさん）の発話検知 ＆ 発火トリガー・復唱抽出（単一の真実 / Single Source of Truth）
     // =========================================================================
     if (speaker === 'ai') {
-      const isStartListeningPhrase = /(絵画のための聞き取り|絵のための聞き取り|聞き取りをしますね|聞き取りをはじめ|聞き取りを始め|思い出の絵を.*描いてみませんか|思い出の絵を描いてみましょう|どんな思い出の絵を描|どんな絵を描きましょうか|どんな風景を思い浮かべますか)/.test(clean);
+      const isQuestionEnding = /(?:でしょうか|ますか|ですか|かな|教えて|聞かせて|？|\?)/.test(clean);
+
+      // (1) 聞き取り開始発声の検知
+      const isStartListeningPhrase = /(?:絵画のための聞き取り|絵のための聞き取り|情景をお伺いします|聞き取りをしますね|聞き取りをはじめ|聞き取りを始め|思い出の絵を.*描いてみませんか|思い出の絵を描いてみましょう|どんな思い出の絵を描|どんな絵を描きましょうか|どんな風景を思い浮かべますか|テーマや話題を教えて)/.test(clean);
       if (isStartListeningPhrase) {
         if (sc.status === 'idle' || sc.status === 'drawn') {
-          startListeningSession(false);
+          startListeningSession(false, false);
+          logDiag(`🎙️ さくらさんの聞き取り開始発声を検知（「${clean}」）。聞き取りセッションを開始しました。`);
         }
+      }
+
+      // (2) 描画開始発声の検知（ユーザー要件：描画発火トリガーをさくらさんの発声に一本化！）
+      const isDrawingStartPhrase = /(?:今からキャンバスに描|キャンバスに描いてみますね|描いてみますね|いま一生懸命描|キャンバスに描きますね|絵を描いてみますね|少しだけ待っていてくださいね|少し待っていてくださいね)/.test(clean);
+      if (isDrawingStartPhrase && !isQuestionEnding) {
+        // 【最重要防壁】描画を開始できるのは、6ステップすべての聞き取りが一通り完了して確認中（confirming / ready）の時のみ！
+        // idle（日常会話中）や collecting（聞き取り途中）でさくらさんがフライング発言しても絶対に描画しない！
+        if (sc.status !== 'confirming' && sc.status !== 'ready') {
+          logDiag(`⚠️ さくらさんがフライング描画発言を検知しましたが、まだ聞き取り中（status=${sc.status}）のため描画開始を完全にブロックしました。`);
+          return;
+        }
+        if (!state.isDrawingMedia && sc.status !== 'drawing') {
+          logDiag(`🎨 さくらさんの描画開始発声を検知（「${clean}」）。描画パイプラインを正式起動します！`);
+          sc.drawConfirmedByUser = true;
+          sc.isAwaitingConfirmation = false;
+          sc.status = 'drawing';
+          setAvatarState('drawing');
+          renderSceneCollectorUI();
+          executeConfirmedDrawing();
+          return;
+        }
+      }
+
+      // (3) 描き直し開始発声の検知（「描き直します、〇〇ですね」トリガーによる書き直し内容抽出）
+      if (sc.status === 'drawn') {
+        const refineEchoMatch = clean.match(/描き直します[、。,\s]*(.+?)(?:ですね|のですね|ますね|ですね！|ですね。|$)/);
+        if (refineEchoMatch && refineEchoMatch[1] && !isQuestionEnding) {
+          const extractedRefine = cleanScenePhrase(refineEchoMatch[1]) || refineEchoMatch[1].trim();
+          if (extractedRefine && extractedRefine.length >= 2) {
+            state.lastUserModification = extractedRefine;
+            logDiag(`🎨 さくらさんの復唱「描き直します、${extractedRefine}ですね」を検知 → 修正内容を抽出・記録`);
+            if (dom.editSceneDescription && !dom.editSceneDescription.value.includes(extractedRefine)) {
+              dom.editSceneDescription.value = (dom.editSceneDescription.value.trim() ? dom.editSceneDescription.value.trim() + '\n' : '') + `・【描き直し】${extractedRefine}`;
+            }
+            if (!state.isDrawingMedia) {
+              sc.aiHasAskedRefine = false;
+              sc.isAwaitingSaveConfirmation = false;
+              executeRefineDrawing(extractedRefine);
+              return;
+            }
+          }
+        }
+        const isRefineStartPhrase = /(?:描き直してみますね|直してみますね|修正してみますね|描き直しますね|直しますね)/.test(clean);
+        if (isRefineStartPhrase && !isQuestionEnding && !state.isDrawingMedia) {
+          logDiag(`🎨 さくらさんの描き直し開始発声を検知（「${clean}」）。描き直しパイプラインを起動します！`);
+          sc.aiHasAskedRefine = false;
+          sc.isAwaitingSaveConfirmation = false;
+          executeRefineDrawing(state.lastUserModification || '修正・描き直し');
+          return;
+        }
+      }
+
+      // (4) 絵画保存・終了発声の検知（さくらさんの発声に一本化）
+      if (sc.status === 'drawn' || sc.isAwaitingSaveConfirmation) {
+        const isSaveFinishPhrase = /(?:絵を保存しました|保存いたしました|絵画モードを終了して|普通のおしゃべりをしましょう|日常会話に戻ります)/.test(clean);
+        if (isSaveFinishPhrase) {
+          logDiag(`💾 さくらさんの保存・絵画モード終了発声を検知（「${clean}」）。通常会話モードへ復帰します。`);
+          handleSaveAndFinishDrawingMode(false, true);
+          return;
+        }
+
+        // 保存確認質問の検知（「この絵を保存しますか？」）
+        if (/(?:絵を保存しますか|保存する場合は|保存してから絵画モードを終了|保存してまた普通のおしゃべり)/.test(clean)) {
+          sc.isAwaitingSaveConfirmation = true;
+          if (dom.refineHintText) {
+            dom.refineHintText.textContent = '💾 この絵を保存して絵画モードを終了しますか？（声で「はい・保存する」または「保存しない」とお答えください）';
+          }
+          renderSceneCollectorUI();
+          return;
+        }
+      }
+
+      // すでに絵を描き終えている段階（drawn）では、AIの発話によって confirming 等へ巻き戻さない
+      if (sc.status === 'drawn') {
         return;
       }
 
-      // 描画完了後、さくらさんが「この絵を保存しますか？」と尋ねた場合
-      if (sc.status === 'drawn' && /(絵を保存しますか|保存する場合は|保存してから絵画モードを終了|保存してまた普通のおしゃべり)/.test(clean)) {
-        sc.isAwaitingSaveConfirmation = true;
-        if (dom.refineHintText) {
-          dom.refineHintText.textContent = '💾 この絵を保存して絵画モードを終了しますか？（声で「はい・保存する」または「保存しない」とお答えください）';
+      // (5) さくらさんの復唱発話から現在ステップの内容をピンポイント確定
+      if (sc.status === 'collecting') {
+        extractAiEchoRepeatToCurrentStep(clean);
+        updateExtractedWordsCard();
+        if (dom.editSceneDescription) {
+          dom.editSceneDescription.value = buildCollectorBulletedSummary();
         }
         renderSceneCollectorUI();
-        return;
       }
 
-      // すでに絵を描き終えている段階（drawn）では、AIの発話によって confirming 等へ絶対に巻き戻さない！
-      if (sc.status === 'idle' || sc.status === 'drawn') {
-        return;
-      }
-
-      const hasCollectedScene = COLLECTOR_STEPS.some(s => hasStepValue(s));
-      const isQuestionTurn = /(?:でしょうか|ますか|ましょうか|ですか|かな|教えて|聞かせて|？|\?)/.test(clean);
-
-      // (1) 一通り聞き取り完了後の内容確認・描画確認の呼びかけ
-      const isConfirming = hasCollectedScene && /(一通りお話を伺いました|内容でよろしいでしょうか|キャンバスに描いてみましょうか|その情景を.*描いてみましょうか|絵にしてみましょうか|絵を描いてもよろしいでしょうか|このまま.*描きますね)/.test(clean);
+      // (6) 一通り聞き取り完了後の内容確認の検知（各項目復唱 ＆ 30文字以内複数文）
+      const isConfirming = /(?:一通りお話を伺いました|一通りお伺いしました|一通り伺いました)/.test(clean) ||
+        (/(?:この内容で絵を描いてもよろしい|この内容でよろしい|描いてよろしいでしょうか|描いても大丈夫でしょうか)/.test(clean) && !isDrawingStartPhrase);
       if (isConfirming) {
         sc.aiHasAskedConfirmation = true;
         sc.isAwaitingConfirmation = true;
         sc.status = 'confirming';
         sc.activeStep = 'confirm';
+        parseAndFillCollectorCardsFromVisualElements(clean, '');
+        updateExtractedWordsCard();
+        if (dom.editSceneDescription) {
+          dom.editSceneDescription.value = buildCollectorBulletedSummary();
+        }
         renderSceneCollectorUI();
+        logDiag(`✨ さくらさんの内容確認発声を検知。内容確認中へ移行しました。`);
         return;
       }
 
-      // (2) 聞き取り中の場合、さくらさんが実際に尋ねた質問内容に合わせてアクティブステップを確実に同期
-      // （※万一フロントエンドが先走って confirming になっていても、さくらさんがまだステップ質問をしている間は collecting に同期）
+      // (7) さくらさんが尋ねた質問内容に合わせてアクティブステップを次に進める！
       let aiAskedStep = '';
-      if (/(?:どんな思い出の絵|テーマや話題|何の絵を描|どんなテーマ)/.test(clean)) {
-        aiAskedStep = 'topic';
-      } else if (/(?:どこでの思い出|どんなお?場所|どんな舞台|どこにある|どちらの|場所はどこ)/.test(clean)) {
+      if (/(?:場所|どこ|どちら|舞台|外見|道路|道|高校はどんな|どんな所)/.test(clean)) {
         aiAskedStep = 'place';
-      } else if (/(?:季節やお天気|お天気や時間|天候や明暗|時間帯や明るさ|どんなお天気)/.test(clean)) {
+      } else if (/(?:季節|天気|お天気|天候|時間|空|明かり|明るさ|朝|昼|夕方|晴れ)/.test(clean)) {
         aiAskedStep = 'weather';
-      } else if (/(?:どなたがいらっしゃ|誰と一緒|登場人物|どなたと)/.test(clean)) {
+      } else if (/(?:誰|どなた|人|生徒|友達|家族|仲間|男の子|女の子)/.test(clean)) {
         aiAskedStep = 'people';
-      } else if (/(?:どんなものが見え|周りに見えた|どんな様子|何が見え|何が咲い)/.test(clean)) {
+      } else if (/(?:様子|もの|建物|植物|花|景色|何が|どんな風|どんなふう|どんなもの|制服|服装)/.test(clean)) {
         aiAskedStep = 'details';
-      } else if (/(?:どんなお気持ち|どんな雰囲気|気分や雰囲気)/.test(clean)) {
+      } else if (/(?:気持ち|雰囲気|気分|空気感)/.test(clean)) {
         aiAskedStep = 'mood';
+      } else if (/(?:どんな思い出|思い出の絵|テーマ|話題|何の絵|何を思い浮かべ)/.test(clean)) {
+        aiAskedStep = 'topic';
       }
 
-      if (aiAskedStep) {
-        sc.status = 'collecting';
-        sc.isAwaitingConfirmation = false;
+      if (aiAskedStep && sc.status === 'collecting') {
         sc.activeStep = aiAskedStep;
         sc.turnTargetStep = aiAskedStep;
         renderSceneCollectorUI();
-        return;
-      }
-
-      // (3) ご本人が確認に合意した後に絵を描き始めた段階
-      const isDrawingStart = sc.drawConfirmedByUser && hasCollectedScene && !isQuestionTurn && /(今からキャンバスに描いて|キャンバスに描いてみますね|それでは描いてみますね|さっそく描いてみますね|いま一生懸命描)/.test(clean);
-      if (isDrawingStart) {
-        sc.status = 'drawing';
-        setAvatarState('drawing');
-        logDiag('🎨 パートナーの描画開始を検知。情景の聞き取りを中止しました。');
-        renderSceneCollectorUI();
-        return;
       }
 
       renderSceneCollectorUI();
@@ -6132,16 +6996,34 @@ ${artStyle.svgStyleRules}
     }
 
     // =========================================================================
-    // 2. ユーザーの音声発話の検知（6ステップ同時埋め・スキップ・最終確認・描画後保存確認）
+    // 2. ユーザーの音声発話の検知（画風切替・クリア・修正指示の受付、発火トリガーはさくらさんに委譲）
     // =========================================================================
     if (speaker !== 'user') return;
 
+    // 【最重要要件1】さくらさんの発言エコー（スピーカー音の漏れ）は100%除外！
+    if (isEchoOfAiSpeech(clean)) {
+      return;
+    }
+
+    // 確定テキスト（isFinal=true）時は2500msの重複ガードをバイパスして確実に最新情景を反映
     const nowTs = Date.now();
-    if (state.lastProcessedUserText === clean && (nowTs - (state.lastProcessedUserTime || 0) < 2500)) {
+    if (!isFinal && state.lastProcessedUserText === clean && (nowTs - (state.lastProcessedUserTime || 0) < 2000)) {
       return;
     }
     state.lastProcessedUserText = clean;
     state.lastProcessedUserTime = nowTs;
+
+    // お父さんが話した言葉をリアルタイム情景メモに即時プール＆カード表示
+    if (!state.recentUserSpeechList) state.recentUserSpeechList = [];
+    if (clean.length >= 2 && !isCasualNonSceneUtterance(clean)) {
+      if (!state.recentUserSpeechList.includes(clean)) {
+        state.recentUserSpeechList.push(clean);
+        if (state.recentUserSpeechList.length > 5) {
+          state.recentUserSpeechList.shift();
+        }
+      }
+      updateExtractedWordsCard();
+    }
 
     // (0) 音声による取り消し・クリア指示の優先検知
     if (detectAndExecuteVoiceClear(clean)) {
@@ -6182,14 +7064,23 @@ ${artStyle.svgStyleRules}
       }
 
       const isDirectSaveWanted = /(?:保存して|保存する|保存します|保存お願い|残して)/.test(clean) ||
-        (sc.isAwaitingSaveConfirmation && /^(?:はい|うん|ええ|お願いします|お願い|いいよ|いいですよ|そうして|ぜひ|OK|オッケー)/.test(clean.trim()));
+        (sc.isAwaitingSaveConfirmation && !sc.aiHasAskedRefine && /^(?:はい|うん|ええ|お願いします|お願い|いいよ|いいですよ|そうして|ぜひ|OK|オッケー)/.test(clean.trim()));
       if (isDirectSaveWanted) {
         handleSaveAndFinishDrawingMode(true);
         return;
       }
 
-      const hasExplicitRedrawWord = /(?:直して|変えて|変更|修正|描き直|書き直|追加|足して|入れて|置いて|消して|なくして|もっと|違う|ちがう)/.test(clean);
-      const isAtmosphereApproved = !hasExplicitRedrawWord && /(?:この雰囲気|こんな感じ|これでいい|これで良い|このままでいい|このままで良い|このまま|これで|いい雰囲気|良い雰囲気|いい感じ|良い感じ|バッチリ|ばっちり|気に入|素敵|いいですね|良いですね|大丈夫|よいです|いいです|良いです|いいよ|良いよ|はい|うん|ええ|OK|オッケー|問題ない|問題ありません|間違いありません)/.test(clean);
+      // さくらさんが「直しましょうか？」と尋ねた直後の「はい」は描き直しを実行！
+      if (sc.aiHasAskedRefine && /^(?:はい|うん|ええ|お願いします|お願い|いいよ|いいですよ|そうして|ぜひ)/.test(clean.trim())) {
+        logDiag(`ユーザー様が修正確認に「はい」と合意されました。描き直しを実行します。`);
+        sc.aiHasAskedRefine = false;
+        sc.isAwaitingSaveConfirmation = false;
+        executeRefineDrawing(state.lastUserModification || '修正・描き直し');
+        return;
+      }
+
+      const hasExplicitRedrawWord = /(?:直して|なおして|変えて|変更|修正|描き直|書き直|追加|足して|入れて|置いて|消して|なくして|もっと|違う|ちがう|にして|にしたい|描いて)/.test(clean);
+      const isAtmosphereApproved = !hasExplicitRedrawWord && !sc.aiHasAskedRefine && /(?:この雰囲気|こんな感じ|これでいい|これで良い|このままでいい|このままで良い|このまま|これで|いい雰囲気|良い雰囲気|いい感じ|良い感じ|バッチリ|ばっちり|気に入|素敵|いいですね|良いですね|大丈夫|よいです|いいです|良いです|いいよ|良いよ|はい|うん|ええ|OK|オッケー|問題ない|問題ありません|間違いありません)/.test(clean);
       if (isAtmosphereApproved) {
         promptSaveConfirmationAfterApproval();
         return;
@@ -6209,47 +7100,30 @@ ${artStyle.svgStyleRules}
       }
     }
 
-    // ユーザーからの明示的描画リクエスト・最終確認への合意返答の検知
-    // ※【厳格化ルール】必ず一通りの聞き取りが完了し、最終確認（confirming）に入って画面に確認テキストボックスが表示された後にのみ実行する！
-    // ※通常の会話中の「うん、〇〇があって」「はい、〇〇でした」という相槌では絶対に描画を開始しない！
-    const hasAnyCollectedScene = COLLECTOR_STEPS.some(s => hasStepValue(s));
-    const isBannerOpen = dom.collectorActionBanner && !dom.collectorActionBanner.classList.contains('hidden');
-    
-    // 最終確認状態（テキストボックス表示中）でのみ合意を受け付ける
-    const isConfirmingPhase = sc.status === 'confirming' && (isBannerOpen || sc.aiHasAskedConfirmation);
+    // =========================================================================
+    // 【ユーザー要件・絶対ルール】
+    // 描画開始の発火トリガーは、さくらさんの発声（「今からキャンバスに描いてみますね」）に一本化！
+    // ユーザー様からの最終確認合意（「はい」「お願いします」等）はフラグのみ記録し、
+    // さくらさんが受け止めて描画宣言を発話した瞬間に正式起動します。
+    // =========================================================================
+    const isConfirmingPhase = (sc.status === 'confirming' || sc.status === 'ready') && sc.aiHasAskedConfirmation;
 
-    // 明示的な描画命令（「この内容で描いて」「これで描いてください」等）
-    const isExplicitDrawCommand = hasAnyCollectedScene &&
-      /(?:この内容で.*[描書]いて|その内容で.*[描書]いて|それで.*[描書]いて|このまま.*[描書]いてください|キャンバスに[描書]いてください)/.test(clean);
-
-    // 最終確認フェーズにおける明確な合意言葉（単独の「お願いします」「いいですよ」など）
+    // 最終確認フェーズにおける明確な合意言葉（「お願いします」「いいですよ」「これでいいです」「はい」など）
     const isDefiniteAgreementInConfirm = isConfirmingPhase &&
-      /(?:お願いします|いいですよ|いいです|良いです|これでいい|この内容でいい|その内容でいい|そうしてください)/.test(clean) &&
-      !/(?:ない|ません|違う|ちがう|待って|まって|まだ)/.test(clean);
+      /(?:お願いします|いいですよ|いいです|良いです|これでいい|この内容でいい|その内容でいい|そうしてください|^はい$|^うん$|ぜひ|頼みます)/.test(clean) &&
+      !/(?:ない|ません|違う|ちがう|待って|まって|まだ|いいえ)/.test(clean);
 
-    if (isExplicitDrawCommand || isDefiniteAgreementInConfirm) {
-      const now = Date.now();
-      if (state.isDrawingMedia || (now - state.lastDrawTriggerTime < 5000)) {
-        logDiag(`描画中またはクールダウン中のため、重複トリガーをスキップ: 「${clean}」`);
-        return;
-      }
-      logDiag(`ユーザーの最終確認合意・描画指示を正式検知: 「${clean}」`);
+    if (isDefiniteAgreementInConfirm) {
+      logDiag(`ユーザー様の最終確認合意を検知: 「${clean}」（さくらさんの描画開始発声を待機します）`);
       sc.drawConfirmedByUser = true;
       sc.isAwaitingConfirmation = false;
-      sc.status = 'drawing';
-      setAvatarState('drawing');
       renderSceneCollectorUI();
-      executeConfirmedDrawing();
-      return;
-    }
 
-    // 確認待ち中（confirming / ready）の時に、万一まだ言っていなかった情景ワード（例：「障子や襖がありました」「楽しそうに走っていました」）が
-    // 発話された場合は、切り捨てずに6ステップへ反映する
-    if (sc.status === 'confirming' || sc.status === 'ready') {
-      const targetForLateSpeech = COLLECTOR_STEPS.includes(sc.turnTargetStep) ? sc.turnTargetStep : 'details';
-      const lateFilled = extractAllSixStepsSimultaneously(clean, targetForLateSpeech);
-      if (lateFilled.size > 0) {
-        renderSceneCollectorUI();
+      // シミュレーションモード時のみ、さくらさんの描画セリフをWebSpeechで自律発話
+      if (state.isSimulation && !state.hasLocalBackend) {
+        const reply = `かしこまりました！今からキャンバスに描いてみますね。少しだけ待っていてくださいね。`;
+        dom.aiTranscriptText.textContent = reply;
+        speakTextWithWebSpeech(reply);
       }
       return;
     }
@@ -6260,78 +7134,40 @@ ${artStyle.svgStyleRules}
       return;
     }
 
-    // 日常のおしゃべり中（idle）は、明示的な「絵を描きたい / 聞き取り開始」の意図がある時のみ開始
+    // =========================================================================
+    // 【最重要】日常のおしゃべり中（idle）の誤抽出完全防止：
+    // 発火トリガーはさくらさんの発声（「聞き取りをしますね」等）に一本化！
+    // クライアント側から勝手に start_listening を重複送信して会話を巻き戻さない。
+    // =========================================================================
     if (sc.status === 'idle') {
-      const hasExplicitDrawOrListenIntent = /(?:絵を描き|絵を書き|絵を描く|絵を書く|絵にして|キャンバスに描|の絵を描|の絵を書|描いてみたい|書いてみたい|描きたい|書きたい|描きます|書きます|描いてほしい|書いてほしい|絵画の聞き取り|聞き取りをお願い|聞き取りをして|聞き取りを始め)/.test(clean);
-      if (!hasExplicitDrawOrListenIntent) {
-        return;
-      }
+      return;
+    }
 
-      sc.status = 'collecting';
-      sc.aiHasAskedConfirmation = false;
-      sc.isAwaitingConfirmation = false;
-      sc.drawConfirmedByUser = false;
-      extractAllSixStepsSimultaneously(clean, 'topic');
-      sc.activeStep = findNextPendingStep('topic') || 'place';
-      sc.turnTargetStep = 'topic';
-      sc.lastStepAdvanceAiTurn = state.aiTurnCounter;
-      sc.lastStepAdvanceTime = nowTs;
-      logDiag(`📝 ユーザーの絵画・聞き取り希望を検知（「${clean}」）。6ステップ聞き取りを開始しました（現在: ${STEP_LABELS[sc.activeStep]}）。`);
-      renderSceneCollectorUI();
+    // 聞き取りモード中（collecting）以外では6ステップ情景抽出を絶対に実行しない
+    if (sc.status !== 'collecting') {
       return;
     }
 
     // =========================================================================
-    // 【重要】同一AIターン内の分割文字起こし（「家の中の」→「家の中の座敷で買っていました」等）で
-    // まだ質問していない後続ステップ（③天候・⑤様子・⑥雰囲気）へ勝手にジャンプして誤記入されるのを完全防止！
+    // 【ユーザー要件】聞き取り内容の抽出は「さくらさんの復唱」を主軸とする。
+    // ユーザー発話はリアルタイム情景プール（recentUserSpeechList）に保持し、
+    // さくらさんが復唱した言葉を正確に各ステップカードへ反映する。
     // =========================================================================
-    const isNewUserTurnForStep = (
-      sc.lastStepAdvanceAiTurn !== state.aiTurnCounter ||
-      isSkipUtterance
-    );
-    if (isNewUserTurnForStep || !COLLECTOR_STEPS.includes(sc.turnTargetStep)) {
-      sc.turnTargetStep = COLLECTOR_STEPS.includes(sc.activeStep) ? sc.activeStep : (findNextPendingStep() || 'topic');
-    }
-    const stepAsked = sc.turnTargetStep;
+    const stepAsked = COLLECTOR_STEPS.includes(sc.activeStep) ? sc.activeStep : 'topic';
 
-    // =========================================================================
-    // 【要件1】1回の発話から6項目すべてを同時抽出・同時埋めする（現在の質問対象 stepAsked を基準）
-    // =========================================================================
-    const filledSteps = extractAllSixStepsSimultaneously(clean, stepAsked);
-
-    // =========================================================================
-    // 【要件2】ステップ進行 ＆ 聞き取れなかった項目の自動スキップ（1つのAIターンにつき1ステップのみ進行）
-    // =========================================================================
-    if (sc.status === 'collecting') {
-      if (hasStepValue(stepAsked)) {
-        sc.stepStates[stepAsked] = 'filled';
-      } else if (isNewUserTurnForStep && (isSkipUtterance || didAiAskCurrentStep(state.lastAiUtteranceText || '', stepAsked) || filledSteps.size > 0)) {
-        // 現在の質問項目が聞き取れなかった（または「わからない／次へ」と言われた）場合はスキップ！
-        sc.stepStates[stepAsked] = 'skipped';
-        logDiag(`⏭️ 「${STEP_LABELS[stepAsked]}」が聞き取れなかったためスキップして次へ進みます`);
+    // ユーザーからの明示的スキップ指示（「わからない」「パス」「次へ」等）の検知
+    if (isSkipUtterance && sc.stepStates[stepAsked] === 'pending' && !hasStepValue(stepAsked)) {
+      sc.stepStates[stepAsked] = 'skipped';
+      logDiag(`⏭️ 「${STEP_LABELS[stepAsked]}」をスキップして次へ進みます`);
+      const nextPending = findNextPendingStep(stepAsked) || findNextPendingStep();
+      if (nextPending) {
+        sc.activeStep = nextPending;
+        sc.turnTargetStep = nextPending;
+        logDiag(`➡️ 次の聞き取り項目: 「${STEP_LABELS[nextPending]}」`);
       }
-
-      if (isNewUserTurnForStep || hasStepValue(stepAsked) || filledSteps.size > 0) {
-        sc.lastStepAdvanceAiTurn = state.aiTurnCounter;
-        sc.lastStepAdvanceTime = nowTs;
-
-        // 必ず現在の質問項目（stepAsked）の次の未聴取項目を探すため、同一ターン内で2段階・3段階先へ飛ぶことがない！
-        const nextPending = findNextPendingStep(stepAsked);
-        if (nextPending) {
-          if (sc.activeStep !== nextPending) {
-            sc.activeStep = nextPending;
-            logDiag(`➡️ 次の聞き取り項目: 「${STEP_LABELS[nextPending]}」`);
-          }
-        } else {
-          // 6ステップすべてが filled または skipped になった → 一通りの聞き取り完了！内容確認フェーズへ
-          sc.status = 'confirming';
-          sc.isAwaitingConfirmation = true;
-          sc.activeStep = 'confirm';
-          logDiag(`✨ 6ステップの聞き取りが一通り完了しました！内容確認フェーズ（${buildCollectorSummaryText()}）`);
-        }
-      }
+      renderSceneCollectorUI();
+      return;
     }
-
     renderSceneCollectorUI();
   }
 
@@ -6465,9 +7301,10 @@ ${artStyle.svgStyleRules}
       }
     }
 
-    // 一通りの聞き取り完了後の確認・テキスト編集・描画アクションバナー（描画完了後も編集・描き直し可能）
+    // 一通りの聞き取り完了後の確認・テキスト編集・描画アクションバナー（3項目以上埋まればいつでも描画可能）
     if (dom.collectorActionBanner) {
-      if (sc.status === 'confirming' || (sc.status === 'ready' && !state.isDrawingMedia) || sc.aiHasAskedConfirmation || (sc.status === 'drawn' && state.hasDrawnImage)) {
+      const canDrawEarly = (sc.status === 'collecting' && completedCount >= 2);
+      if (sc.status === 'confirming' || (sc.status === 'ready' && !state.isDrawingMedia) || sc.aiHasAskedConfirmation || (sc.status === 'drawn' && state.hasDrawnImage) || canDrawEarly) {
         dom.collectorActionBanner.classList.remove('hidden');
         if (sc.status === 'drawn') {
           if (dom.collectorActionText) {
@@ -6476,6 +7313,14 @@ ${artStyle.svgStyleRules}
           if (dom.btnConfirmDraw) {
             dom.btnConfirmDraw.textContent = '🎨 この内容で描き直す';
             dom.btnConfirmDraw.title = 'テキストボックスの内容を反映して絵を描き直します';
+          }
+        } else if (canDrawEarly && sc.status === 'collecting' && !sc.aiHasAskedConfirmation) {
+          if (dom.collectorActionText) {
+            dom.collectorActionText.textContent = `📝 情景メモが集まりました！この内容でよろしければ【🎨 この内容で絵を描く】を押してください（続けてお話もできます）`;
+          }
+          if (dom.btnConfirmDraw) {
+            dom.btnConfirmDraw.textContent = '🎨 この内容で絵を描く';
+            dom.btnConfirmDraw.title = '集まった情景で今すぐ絵を描きます';
           }
         } else {
           if (dom.collectorActionText) {
@@ -6553,16 +7398,108 @@ ${artStyle.svgStyleRules}
         }));
       } catch (e) {}
     }
+
+    // 左パネル（アバター直下）の「聞き取った情景メモ」カードを最新同期
+    updateExtractedWordsCard();
+  }
+
+  /**
+   * さくらさんのアバターと音量スライダーの間に配置された「聞き取った情景メモ」カードのリアルタイム更新
+   * （描画モード・聞き取りモードで抽出された言葉をリアルタイムにカード表示）
+   */
+  function updateExtractedWordsCard() {
+    if (!dom.extractedWordsCard) return;
+
+    const sc = state.sceneCollector;
+    const isDrawing = (sc.status === 'drawing' || state.isDrawingMedia);
+    const isConfirming = (sc.status === 'confirming' || sc.status === 'ready');
+    const isCollecting = (sc.status === 'collecting');
+    const isDrawn = (sc.status === 'drawn');
+
+    // 1. ステータスバッジの更新
+    if (dom.extractedStatusBadge) {
+      dom.extractedStatusBadge.className = 'extracted-status-badge';
+      if (isDrawing) {
+        dom.extractedStatusBadge.textContent = '🎨 描画中';
+        dom.extractedStatusBadge.classList.add('badge-drawing');
+      } else if (isConfirming) {
+        dom.extractedStatusBadge.textContent = '✨ 内容確認中';
+        dom.extractedStatusBadge.classList.add('badge-confirming');
+      } else if (isCollecting) {
+        const stepName = STEP_LABELS[sc.activeStep] || '聞き取り中';
+        dom.extractedStatusBadge.textContent = `👂 ${stepName.replace(/^[①-⑥]\s*/, '')}`;
+        dom.extractedStatusBadge.classList.add('badge-collecting');
+      } else if (isDrawn) {
+        dom.extractedStatusBadge.textContent = '🖼️ 描画完了';
+        dom.extractedStatusBadge.classList.add('badge-collecting');
+      } else {
+        dom.extractedStatusBadge.textContent = 'おしゃべり中';
+      }
+    }
+
+    // 2. カードの枠線ハイライト
+    dom.extractedWordsCard.classList.toggle('active-mode', isCollecting || isConfirming || isDrawn);
+    dom.extractedWordsCard.classList.toggle('drawing-mode', isDrawing);
+
+    // 3. 抽出された各項目の収集（※聞き取り中・確認中・描画後のみ表示。通常会話中(idle)は非表示）
+    const items = [];
+    if (sc.status !== 'idle') {
+      if (sc.topic) {
+        items.push({ icon: '🏷️', label: '① 話題', text: sc.topic, stepClass: 'step-topic' });
+      }
+      if (sc.place) {
+        items.push({ icon: '📍', label: '② 場所', text: sc.place, stepClass: 'step-location' });
+      }
+      const weather = sc.weather || sc.seasonWeather;
+      if (weather) {
+        items.push({ icon: '🌤️', label: '③ 天候', text: weather, stepClass: 'step-weather' });
+      }
+      if (sc.people) {
+        items.push({ icon: '👥', label: '④ 人物', text: sc.people, stepClass: 'step-people' });
+      }
+      if (sc.details && sc.details.size > 0) {
+        const detailsList = Array.from(sc.details).join('、');
+        items.push({ icon: '👀', label: '⑤ 様子', text: detailsList, stepClass: 'step-details' });
+      }
+      if (sc.mood) {
+        items.push({ icon: '💭', label: '⑥ 雰囲気', text: sc.mood, stepClass: 'step-mood' });
+      }
+    }
+
+    // 4. DOMへの反映
+    if (items.length > 0) {
+      if (dom.extractedPlaceholder) dom.extractedPlaceholder.style.display = 'none';
+      if (dom.extractedList) {
+        dom.extractedList.style.display = 'flex';
+        dom.extractedList.innerHTML = items.map(item => `
+          <li class="extracted-item ${item.stepClass}">
+            <span class="extracted-tag">${item.icon} ${item.label}:</span>
+            <span class="extracted-word">${escapeHtml(item.text)}</span>
+          </li>
+        `).join('');
+      }
+    } else {
+      if (dom.extractedPlaceholder) {
+        dom.extractedPlaceholder.style.display = 'block';
+        dom.extractedPlaceholder.textContent = isCollecting
+          ? 'さくらさんがお話から情景の言葉を聞き取っています...'
+          : 'お話が始まると、さくらさんが聞き取った言葉がここに表示されます';
+      }
+      if (dom.extractedList) {
+        dom.extractedList.style.display = 'none';
+        dom.extractedList.innerHTML = '';
+      }
+    }
   }
 
   async function executeConfirmedDrawing(manualTopic = '') {
     const waitSec = getRemainingDrawCooldownSec();
     if (waitSec > 0) {
       const rInfo = getPacificResetTimeInfo();
-      logDiag(`連続描画防止: 前回の描画から2分間（120秒）経過していないため待機します（残り${waitSec}秒 / 本日${rInfo.timeStr}リセット）`);
+      logDiag(`連続描画防止: 前回の描画から30秒間経過していないため待機します（残り${waitSec}秒 / 本日${rInfo.timeStr}リセット）`);
       showCanvasError(
         '描画待機中（クォータ保護）',
-        `連続描画を防ぐため、前回の描画から2分間お待ちいただいています（残り約 ${waitSec} 秒）。本日${rInfo.timeStr}にクォータが全量リセットされます。`,
+        `連続描画を防ぐため、前回の描画から30秒間お待ちいただいています（残り約 ${waitSec} 秒）。本日${rInfo.timeStr}にクォータが全量リセットされます。`,
         true
       );
       return;

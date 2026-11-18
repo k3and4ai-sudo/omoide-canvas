@@ -18,6 +18,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Quer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 from pydantic import BaseModel
 from google import genai
 
@@ -50,6 +53,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
 
 # 保存ディレクトリ
 STATIC_DIR = Path("static")
@@ -92,7 +97,7 @@ class ApiKeyVerifyRequest(BaseModel):
 
 @app.get("/api/health")
 async def health_check():
-    """死活監視・API接続確認（毎回ユーザー自身によるAPIキー入力方式）"""
+    """死活監視・API接続確認（マルチユーザー対応：端末ごとの個別APIキー必須）"""
     return {
         "status": "ok",
         "app": "omoide-canvas",
@@ -102,20 +107,37 @@ async def health_check():
     }
 
 
+@app.get("/api/auth/server-key")
+async def get_server_key():
+    """端末別ユーザー独立性確保のため、サーバーキー自動配信は無効化"""
+    return {"has_key": False, "api_key": "", "masked_key": ""}
+
+
 @app.post("/api/auth/verify")
 async def verify_user_api_key(req: ApiKeyVerifyRequest):
     """ユーザーがログイン画面で入力した Gemini API キーの有効性を検証"""
-    key = (req.api_key or "").strip()
+    # クリップボード貼り付け時の前後の空白、改行、ダブルクォート等を完全サニタイズ
+    key = (req.api_key or "").strip().strip('"\'`').replace("\r", "").replace("\n", "").replace(" ", "")
     if not key or len(key) < 15:
         return {"valid": False, "message": "APIキーの文字数が不足しています。正しいGemini APIキーを入力してください。"}
+    masked = f"{key[:6]}...{key[-4:]}"
     try:
         client = genai.Client(api_key=key)
-        # 軽量なモデルメタデータ取得でキーの有効性を確認（トークン消費なし）
-        client.models.get(model="gemini-2.5-flash")
-        masked = f"{key[:6]}...{key[-4:]}"
+        # 安定稼働中の gemini-3.5-flash-lite でキーの有効性を確認（トークン消費なし）
+        try:
+            client.models.get(model="gemini-3.5-flash-lite")
+        except Exception:
+            # フォールバック
+            client.models.get(model="gemini-2.5-flash")
         return {"valid": True, "masked_key": masked, "message": "APIキーの認証に成功しました"}
     except Exception as e:
-        logger.warning(f"API Key verification failed: {e}")
+        err_msg = str(e)
+        logger.warning(f"API Key verification warning: {err_msg}")
+        # API側の混雑(503/429)や一時的な接続遅延でも、形式がAIzaSy等で始まる正規キーであれば通過させる
+        if (key.startswith("AIzaSy") or key.startswith("AQ") or len(key) >= 30) and any(
+            w in err_msg.lower() for w in ("503", "429", "quota", "temporary", "timeout", "demand")
+        ):
+            return {"valid": True, "masked_key": masked, "message": "APIキーを設定しました（現在API高負荷中ですがそのまま開始します）"}
         return {"valid": False, "message": "APIキーが無効か、利用権限がありません。Google AI Studioで発行したキーをご確認ください。"}
 
 
@@ -252,17 +274,17 @@ NO_CACHE_HEADERS = {
 }
 
 
-@app.get("/styles.css")
+@app.api_route("/styles.css", methods=["GET", "HEAD"])
 async def serve_styles_css():
     return FileResponse(FRONTEND_DIR / "styles.css", media_type="text/css", headers=NO_CACHE_HEADERS)
 
 
-@app.get("/app.js")
+@app.api_route("/app.js", methods=["GET", "HEAD"])
 async def serve_app_js():
     return FileResponse(FRONTEND_DIR / "app.js", media_type="application/javascript", headers=NO_CACHE_HEADERS)
 
 
-@app.get("/Omoide_Canvas_User_Manual.pdf")
+@app.api_route("/Omoide_Canvas_User_Manual.pdf", methods=["GET", "HEAD"])
 async def serve_user_manual_pdf():
     pdf_path = Path("docs/Omoide_Canvas_User_Manual.pdf")
     if not pdf_path.exists():
@@ -270,7 +292,7 @@ async def serve_user_manual_pdf():
     return FileResponse(pdf_path, media_type="application/pdf")
 
 
-@app.get("/Google_Account_and_Gemini_API_Key_Manual.pdf")
+@app.api_route("/Google_Account_and_Gemini_API_Key_Manual.pdf", methods=["GET", "HEAD"])
 async def serve_api_key_manual_pdf():
     pdf_path = Path("docs/Google_Account_and_Gemini_API_Key_Manual.pdf")
     if not pdf_path.exists():
@@ -278,7 +300,7 @@ async def serve_api_key_manual_pdf():
     return FileResponse(pdf_path, media_type="application/pdf")
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root_index():
     """ルートアクセス時はフロントエンドの index.html を返す"""
     index_file = FRONTEND_DIR / "index.html"

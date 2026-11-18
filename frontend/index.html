@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Kiwi+Maru:wght@400;500&family=Noto+Sans+JP:wght@400;500;700&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=20261106_08">
+  <link rel="stylesheet" href="styles.css?v=20261112_02">
 </head>
 <body>
 
@@ -20,24 +20,29 @@
     <div class="brand">
       <span class="brand-icon">🎨</span>
       <h1 class="brand-title">おもいでキャンバス</h1>
-      <span class="app-version-badge" title="ログイン画面初期表示＆描画フラグ修正＆エラー通知版">v20261106_04</span>
+      <span class="app-version-badge" title="2026-11-18 ステップ遷移時の自動リカバリー中断バグ解消版">v20261118_18</span>
       <span class="user-greeting" id="userGreeting">読み込み中...</span>
     </div>
     <div class="header-controls">
-      <!-- AIクォータ・利用状況モニター -->
-      <div class="quota-monitor-badge" id="quotaMonitorBadge" title="Gemini AI クォータ・利用状況モニター（クリックで詳細表示）">
-        <span class="quota-icon">📊</span>
-        <span class="quota-text" id="quotaText">AI残量: 100% (本日 0/1500回)</span>
+      <!-- 1行目: AI残量モニターバッジ（独立した上の行） -->
+      <div class="header-controls-row header-controls-top">
+        <div class="quota-monitor-badge" id="quotaMonitorBadge" title="Gemini AI クォータ・利用状況モニター（クリックで詳細表示）">
+          <span class="quota-icon">📊</span>
+          <span class="quota-text" id="quotaText">AI残量: 100% (本日 0/1500回)</span>
+        </div>
       </div>
-      <a href="Omoide_Canvas_User_Manual.pdf" target="_blank" rel="noopener noreferrer" class="btn-subtle" title="おもいでキャンバス 取扱説明書（PDF）を開く" style="text-decoration: none;">
-        📘 取扱説明書
-      </a>
-      <button id="btnOpenLoginModal" class="btn-subtle btn-api-key-status" title="APIキーの設定・ログイン切替" aria-label="APIキー設定">
-        🔑 <span id="apiKeyStatusBadge">APIキー未設定</span>
-      </button>
-      <button id="btnToggleCaregiver" class="btn-subtle" title="介護者・ご家族用設定" aria-label="介護者用ダッシュボード">
-        ⚙️ 介護者設定・日報
-      </button>
+      <!-- 2行目: 取扱説明書、認証済みバッジ、介護者設定（下の行） -->
+      <div class="header-controls-row header-controls-bottom">
+        <a href="Omoide_Canvas_User_Manual.pdf" target="_blank" rel="noopener noreferrer" class="btn-subtle" title="おもいでキャンバス 取扱説明書（PDF）を開く" style="text-decoration: none;">
+          📘 取扱説明書
+        </a>
+        <button id="btnOpenLoginModal" class="btn-subtle btn-api-key-status" title="APIキーの設定・ログイン切替" aria-label="APIキー設定">
+          🔑 <span id="apiKeyStatusBadge">APIキー未設定</span>
+        </button>
+        <button id="btnToggleCaregiver" class="btn-subtle" title="介護者・ご家族用設定" aria-label="介護者用ダッシュボード">
+          ⚙️ 介護者設定・日報
+        </button>
+      </div>
     </div>
   </header>
 
@@ -119,6 +124,20 @@
         </div>
       </div>
 
+      <!-- 描画モードで今聞き取って抽出した言葉の表示エリア -->
+      <div class="extracted-words-card" id="extractedWordsCard">
+        <div class="extracted-header">
+          <span class="extracted-title">📝 聞き取った情景メモ</span>
+          <span class="extracted-status-badge" id="extractedStatusBadge">おしゃべり中</span>
+        </div>
+        <div class="extracted-content" id="extractedContent">
+          <p class="extracted-placeholder" id="extractedPlaceholder">お話が始まると、さくらさんが聞き取った言葉がここに表示されます</p>
+          <ul class="extracted-list" id="extractedList" style="display: none;">
+            <!-- JavaScriptで動的生成 -->
+          </ul>
+        </div>
+      </div>
+
       <!-- さくらさんの声の大きさ（スピーカー音量スライダー） -->
       <div class="speaker-volume-card" id="speakerVolumeCard">
         <div class="volume-header">
@@ -154,7 +173,8 @@
           <select id="selectNoiseGateQuick" class="noise-gate-select" aria-label="テレビ・周囲音カット設定">
             <option value="tv_cut" selected>テレビ・周囲音カット（推奨・近接優先）</option>
             <option value="strict">強めカット（テレビ大音量・賑やか）</option>
-            <option value="normal">標準（静かなお部屋）</option>
+            <option value="ultra">超強力カット（口元近接マイク専用）</option>
+            <option value="normal">標準感度（静かなお部屋）</option>
           </select>
         </div>
       </div>
@@ -576,6 +596,7 @@
                   <select id="selectNoiseGateMode" name="noise_gate_mode">
                     <option value="tv_cut" selected>テレビ・周囲音カット（推奨：近くの声のみ反応）</option>
                     <option value="strict">強めカット（テレビが大きい・周囲が賑やかな時）</option>
+                    <option value="ultra">超強力カット（口元近接マイク専用）</option>
                     <option value="normal">標準感度（テレビを消した静かなお部屋）</option>
                   </select>
                 </div>
@@ -658,18 +679,26 @@
 
         <div id="loginApiKeyForm" class="login-form">
           <div class="form-group">
-            <label for="inputSessionApiKey">🔑 Gemini API キー（Google AI Studio）</label>
-            <div class="api-key-input-wrap">
+            <label for="inputSessionApiKey" class="api-key-label">🔑 Gemini API キー（Google AI Studio）</label>
+            <!-- 1段目: キー入力ボックスを横幅いっぱいに広く・見やすく配置 -->
+            <div class="api-key-input-full-wrap">
               <input
                 type="text"
                 id="inputSessionApiKey"
-                placeholder="AIzaSy... または AQ... で始まるAPIキーを入力"
+                class="api-key-input-large"
+                placeholder="AIzaSy... で始まるAPIキーをここに貼り付け"
                 autocomplete="off"
                 spellcheck="false"
-                style="font-family: monospace; letter-spacing: 0.5px;"
               >
-              <button type="button" id="btnPasteApiKey" class="btn-eye" title="クリップボードから貼り付け" style="width: auto; padding: 0 10px; font-size: 0.85rem;">📋 貼り付け</button>
-              <button type="button" id="btnToggleKeyVisibility" class="btn-eye" title="キーの表示/非表示を切り替え">👁️</button>
+            </div>
+            <!-- 2段目: 貼り付けボタンとキー表示切替ボタンをゆったり1段下に配置 -->
+            <div class="api-key-actions-row">
+              <button type="button" id="btnPasteApiKey" class="btn-api-paste" title="クリップボードから貼り付けて自動ログイン">
+                📋 クリップボードから貼り付け
+              </button>
+              <button type="button" id="btnToggleKeyVisibility" class="btn-api-toggle-visibility" title="キーの表示/隠すを切り替え">
+                👁️ キーを表示する
+              </button>
             </div>
           </div>
 
@@ -721,6 +750,6 @@
   </div>
 
   <!-- アプリケーションスクリプト -->
-  <script src="app.js?v=20261106_08"></script>
+  <script src="app.js?v=20261118_18"></script>
 </body>
 </html>

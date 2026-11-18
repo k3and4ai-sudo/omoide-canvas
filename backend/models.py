@@ -104,6 +104,8 @@ class MemoryArtifact(BaseModel):
     applied_prompt: str = Field(..., description="安全ラッパー適用後の最終画像生成プロンプト")
     media_format: MediaFormat = Field(default=MediaFormat.IMAGE, description="画像または動画")
     media_url: str = Field(..., description="生成メディアの公開パスまたはURL")
+    error_details: str = Field(default="", description="描画失敗時またはモデル試行時の詳細エラーログ")
+    model_summary: str = Field(default="", description="描画に使用または試行したモデル情報")
     ambient_sound_type: AmbientSoundType = Field(default=AmbientSoundType.NONE, description="連動する環境音")
     refine_history: List[str] = Field(default_factory=list, description="共同描画による修正履歴")
     is_fallback: bool = Field(default=False, description="ローカル簡易水彩画エンジンによる代替描画か（会話内容と異なる可能性がある旨の表示用）")
