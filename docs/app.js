@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261118_19';
+  const APP_VERSION = 'v20261118_20';
   const APP_VERSION_TITLE = '2026-11-18 二重プロンプト競合（同じ言葉繰り返し）完全根絶版';
 
   function enforceVersionBadgeDisplay() {
@@ -1780,13 +1780,16 @@ ${levelRules}
 
     state.currentSilenceSec = silenceMs / 1000;
 
-    // フォローアップ送信直後の最低待機（AIの音声生成・到着待ち 10.0秒）
-    if (sinceLastFollowUp < 10000) {
+    // フォローアップ送信直後の最低待機（直結モードは4.5秒、バックエンド接続時は10.0秒）
+    const minCooldownMs = state.isDirectGeminiWs ? 4500 : 10000;
+    if (sinceLastFollowUp < minCooldownMs) {
       return;
     }
 
-    // 1. お父さんの文字起こし確定後、12.0秒以上経過してもAIの返答が始まらない場合（バックエンド4.2s/6.5s監視との二重発火を完全防止）
-    if (state.hasUnansweredUserTurn && userSilenceMs >= 12000 && !state.isAiSpeaking) {
+    // 1. お父さんの文字起こし確定後、一定時間経過してもAIの返答が始まらない場合
+    //    （直結モードは5.5秒、バックエンド接続時は12.0秒で二重発火防止）
+    const userWaitMs = state.isDirectGeminiWs ? 5500 : 12000;
+    if (state.hasUnansweredUserTurn && userSilenceMs >= userWaitMs && !state.isAiSpeaking) {
       state.lastAiSpeechFinishedTime = now;
       state.currentSilenceSec = 0;
       triggerSilenceFollowUp('after_user_speech');
@@ -1836,13 +1839,14 @@ ${levelRules}
     //   文章が途切れても最後までじっくり聞くため、20秒間無音が続いた場合のみ1回優しく催促する
     if (sc.status === 'collecting') {
       const alreadyAskedStep = aiEndedWithQuestion && didAiAskCurrentStep(lastAiText, sc.activeStep);
-      if ((!aiEndedWithQuestion || state.wasAiInterrupted) && silenceMs >= 12000 && followUpCount === 0) {
+      const collectWaitMs = state.isDirectGeminiWs ? 3500 : 12000;
+      if ((!aiEndedWithQuestion || state.wasAiInterrupted) && silenceMs >= collectWaitMs && followUpCount === 0) {
         state.lastAiSpeechFinishedTime = now;
         state.currentSilenceSec = 0;
         triggerSilenceFollowUp('ai_no_question');
         return;
       }
-      if (!alreadyAskedStep && silenceMs >= 12000 && followUpCount === 0) {
+      if (!alreadyAskedStep && silenceMs >= collectWaitMs && followUpCount === 0) {
         state.lastAiSpeechFinishedTime = now;
         state.currentSilenceSec = 0;
         triggerSilenceFollowUp('listening_next_step');
@@ -1922,8 +1926,25 @@ ${levelRules}
         } else if (sc.status === 'confirming' || sc.status === 'ready' || sc.activeStep === 'confirm') {
           promptText = `6ステップの聞き取りが一通り完了しました（${summaryStr}）。「一通りお話を伺いました！${summaryStr}、という内容でよろしいでしょうか？もし修正したいところがあればもう一度お伺いしますね。よろしければこのまま絵を描きますね！」と優しく声に出して確認してください。`;
         } else {
-          const stepLabel = STEP_LABELS[sc.activeStep] || '次の項目';
-          promptText = `会話が3秒以上途切れました（現在のまとめ：${summaryStr || '聞き取り中'}、直前の会話：${lastUserText}）。直前の会話に短く共感しつつ、現在確認中の「${stepLabel}」について1つだけテンポよく優しく声に出して質問してください。`;
+          const directStepQuestions = {
+            topic: '「①テーマについてお聞きします。どんな思い出の絵を描きましょうか？」',
+            place: '「②場所についてお聞きします。そこはどんな場所や舞台でしたか？」',
+            weather: '「③天候についてお聞きします。その時の季節やお天気はどうでしたか？」',
+            people: '「④登場人物についてお聞きします。そこにはどなたがいらっしゃいましたか？」',
+            details: '「⑤様子についてお聞きします。周りにどんなものが見えましたか？」',
+            mood: '「⑥雰囲気についてお聞きします。その時はどんなお気持ちでしたか？」'
+          };
+          const qText = directStepQuestions[sc.activeStep] || directStepQuestions.topic;
+          if (reason === 'after_user_speech' && lastUserText) {
+            const stepPrefixMap = {
+              topic: '①テーマ', place: '②場所', weather: '③天候',
+              people: '④登場人物', details: '⑤様子', mood: '⑥雰囲気'
+            };
+            const sPrefix = stepPrefixMap[sc.activeStep] || 'お話の内容';
+            promptText = `お父さんが「${lastUserText}」とお話しになりました。まず「${sPrefix}について復唱します。${lastUserText}ですね。」と短く復唱してから、続けて ${qText} と声に出して尋ねてください。`;
+          } else {
+            promptText = `続けて ${qText} と1文だけで優しく声に出して尋ねてください。`;
+          }
         }
         state.socket.send(JSON.stringify({
           client_content: {
