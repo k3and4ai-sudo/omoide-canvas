@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261120_01';
-  const APP_VERSION_TITLE = '2026-11-20 直結PCM品質改善(4096/平均化ダウンサンプル)・VAD応答改善・不要リカバリー抑止・文字起こし無反応時の自動再接続復旧';
+  const APP_VERSION = 'v20261120_02';
+  const APP_VERSION_TITLE = '2026-11-20 VAD無反応検知の誤発火防止(28秒・連続発話8チャンク以上)・再接続引き継ぎをsystemInstructionへ直注入・既確定ステップへの逆戻り防止・相槌「素敵」誤抽出防止';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -155,6 +155,7 @@
     directToolCalledInTurn: false,  // 直結モード時の当該ターン内ツール呼び出し有無
     directEchoGuardUntil: 0,        // 直結モード時のエコーガード終了時刻 (ms)
     directPcmSentChunks: 0,         // 直結モード時の送信済みPCMチャンク数（VAD無反応検知用）
+    directMicSpeechChunksSinceLastInput: 0, // 直近文字起こし以降のマイク音声チャンク数
     directLastMicSpeechRmsTime: 0,  // 直結モード時のマイク音声検知（RMS>=0.008）最終時刻
     directLastMicPeakRms: 0,        // 直結モード時の直近マイクピークRMS
     directLastVadRecoveryTime: 0,   // 直結モード時のVAD無反応自動再接続の最終実行時刻
@@ -1812,23 +1813,25 @@ ${levelRules}
 
     state.currentSilenceSec = silenceMs / 1000;
 
-    // (0) 直結モード専用：マイク音声(RMS)は送信しているのに Gemini Live から文字起こしもAI返答も一切来ない
-    //     「VAD無反応（デフ）状態」を自動検知して、文脈を引き継いだままWebSocketを再接続復旧する
+    // (0) 直結モード専用：マイク音声(RMS)を一定時間（約0.7秒以上）送信したのに28秒以上
+    //     Gemini Live から文字起こしもAI返答も一切来ない「真のVAD無反応状態」のみ自動再接続復旧する
     if (
       state.isDirectGeminiWs &&
       state.socket &&
       state.socket.readyState === WebSocket.OPEN &&
       (sc.status === 'collecting' || sc.status === 'confirming' || sc.status === 'ready') &&
       state.directPcmSentChunks > 20 &&
-      state.directLastMicSpeechRmsTime > lastAiEnd + 500 &&
-      (now - state.directLastMicSpeechRmsTime) >= 4500 &&
-      (now - Math.max(state.directLastGeminiInputTime || 0, lastAiEnd)) >= 12000 &&
-      (now - (state.directLastVadRecoveryTime || 0)) >= 25000
+      (state.directMicSpeechChunksSinceLastInput || 0) >= 8 &&
+      state.directLastMicSpeechRmsTime > lastAiEnd + 1500 &&
+      (now - state.directLastMicSpeechRmsTime) >= 8000 &&
+      (now - Math.max(state.directLastGeminiInputTime || 0, lastAiEnd)) >= 28000 &&
+      (now - (state.directLastVadRecoveryTime || 0)) >= 45000
     ) {
       state.directLastVadRecoveryTime = now;
       const peakStr = (state.directLastMicPeakRms || 0).toFixed(4);
-      logDiag(`⚠️ [VAD無反応検知] マイク音声送信中(chunks=${state.directPcmSentChunks}, peakRMS=${peakStr})だがGemini文字起こし応答がないため自動再接続して復旧します (step=${sc.activeStep})`);
+      logDiag(`⚠️ [VAD無反応検知] マイク音声送信中(chunks=${state.directPcmSentChunks}, speechChunks=${state.directMicSpeechChunksSinceLastInput}, peakRMS=${peakStr})だが28秒以上Gemini文字起こし応答がないため自動再接続して復旧します (step=${sc.activeStep})`);
       state.directLastMicSpeechRmsTime = 0;
+      state.directMicSpeechChunksSinceLastInput = 0;
       state.directLastMicPeakRms = 0;
       try {
         state.socket.close(4000, 'vad_stall_recovery');
@@ -2612,7 +2615,36 @@ ${levelRules}
     const selectedVoice = partner.voice_name || (partner.gender === '男性' ? 'Puck' : 'Aoede');
     const topicForResume = state.previousSessionContext?.lastArtTitle || state.previousSessionContext?.lastTopic || (state.sessionTopics.length > 0 ? state.sessionTopics[state.sessionTopics.length - 1] : '');
     const isResume = !isReconnect && !!(topicForResume && (state.hasDrawnImage || state.previousSessionContext));
-    const systemInstruction = buildSystemInstructionJS(profile, topicForResume, isResume);
+    let systemInstruction = buildSystemInstructionJS(profile, topicForResume, isResume);
+    // 自動再接続時は、systemInstruction 自体に現在の聞き取り進捗を埋め込むことで
+    // （turn_complete: false の client_content が無視される問題を根本解消し）①への逆戻りを100%防止する
+    if (isReconnect) {
+      const col = state.sceneCollector;
+      const summaryStr = buildCollectorSummaryText();
+      if (col && (col.status === 'collecting' || col.status === 'confirming' || col.status === 'ready' || col.status === 'drawn')) {
+        const stepLabels = {
+          topic: '①テーマ・話題', place: '②場所・舞台', weather: '③天候・明暗',
+          people: '④登場人物', details: '⑤見えたもの・様子', mood: '⑥気分・雰囲気', confirm: '最終確認'
+        };
+        const nextStep = (col.status === 'collecting' && (col.stepStates[col.activeStep] === 'filled' || col.stepStates[col.activeStep] === 'skipped'))
+          ? findNextPendingStepForward(col, col.activeStep)
+          : col.activeStep;
+        if (nextStep && nextStep !== 'confirm' && nextStep !== col.activeStep) {
+          col.activeStep = nextStep;
+        }
+        const curLabel = stepLabels[col.activeStep] || col.activeStep;
+        const filledList = COLLECTOR_STEPS
+          .filter(s => col.stepStates[s] === 'filled' || col.stepStates[s] === 'skipped')
+          .map(s => stepLabels[s])
+          .join('、');
+        const handoverRule = col.status === 'drawn'
+          ? `\n\n【最優先・自動再接続引き継ぎ】通信が一瞬再接続されました。現在キャンバスには既に絵が表示されています（内容：${summaryStr}）。初回挨拶や①からの聞き直しは厳禁です。絵の感想・修正・保存のお話をそのまま続けてください。`
+          : (col.status === 'confirming' || col.status === 'ready')
+            ? `\n\n【最優先・自動再接続引き継ぎ】通信が一瞬再接続されました。①〜⑥の聞き取りはすべて完了しています（内容：${summaryStr}）。①から聞き直すことは厳禁です。最終確認からそのまま続けてください。`
+            : `\n\n【最優先・自動再接続引き継ぎ】通信が一瞬再接続されました。以下の項目はすでに聞き取り済みです（${filledList || 'なし'}：${summaryStr}）。初回挨拶や①テーマからの聞き直しは絶対に禁止します。現在お話し中のステップ【${curLabel}】からそのまま聞き取りを続けてください。`;
+        systemInstruction += handoverRule;
+      }
+    }
 
     let setupCompleted = false;
 
@@ -2717,6 +2749,7 @@ ${levelRules}
           setupCompleted = true;
           state.directReconnectAttempts = 0;
           state.directPcmSentChunks = 0;
+          state.directMicSpeechChunksSinceLastInput = 0;
           state.directLastMicSpeechRmsTime = 0;
           state.directLastMicPeakRms = 0;
           activateSessionUI(isReconnect);
@@ -2833,6 +2866,7 @@ ${levelRules}
             const nowTs = Date.now();
             state.lastUserSpeechActivityTime = nowTs;
             state.directLastGeminiInputTime = nowTs;
+            state.directMicSpeechChunksSinceLastInput = 0;
             state.isUserTranscribing = true;
             state.userSpeakingUntil = nowTs + 1200;
             state.currentSilenceSec = 0;
@@ -3351,6 +3385,7 @@ ${levelRules}
         }
         if (rms >= 0.008) {
           state.directLastMicSpeechRmsTime = Date.now();
+          state.directMicSpeechChunksSinceLastInput = (state.directMicSpeechChunksSinceLastInput || 0) + 1;
         }
         sendPcmAudioChunk(pcm16.buffer);
         return;
@@ -6613,8 +6648,14 @@ ${artStyle.svgStyleRules}
     }
 
     // 2. 質問の検出（「〜についてお聞きします」）によるフォーカス移動
+    // ※すでに確定済み（filled）の過去ステップへの意図しない逆戻りを防止（未入力ステップが残っている場合）
     for (const def of askStepDefs) {
       if (def.regex.test(aiUtterance)) {
+        const hasPendingStep = COLLECTOR_STEPS.some(s => sc.stepStates[s] === 'pending');
+        if (sc.stepStates[def.step] === 'filled' && hasPendingStep && def.step !== sc.activeStep) {
+          logDiag(`🛡️ 既確定ステップ【${STEP_LABELS[def.step]}】へのフォーカス逆戻りをブロックしました（現在: ${STEP_LABELS[sc.activeStep] || sc.activeStep}）`);
+          continue;
+        }
         sc.activeStep = def.step;
         sc.turnTargetStep = def.step;
         logDiag(`👉 さくらさんの発言「${STEP_LABELS[def.step]}についてお聞きします」を検知 → 聞き取りフォーカスを【${STEP_LABELS[def.step]}】に移動`);
@@ -6632,7 +6673,7 @@ ${artStyle.svgStyleRules}
         if (m && m[1]) {
           const rawPhrase = m[1].replace(/^(?:それでは|では|はい|ええ|そう|お父さん|お母さん|〇〇さん)[\s、]*/, '');
           const phrase = cleanScenePhrase(rawPhrase);
-          if (phrase && phrase.length >= 2 && phrase.length <= 35 && !/(?:聞き取り|絵を描|キャンバス|始め|一通り|お話を伺い|よろしいでしょうか)/.test(phrase)) {
+          if (phrase && phrase.length >= 2 && phrase.length <= 35 && !/^(?:素敵|すてき|素晴らしい|すばらしい|よかった|良かった|いいね|いいですね|なるほど|ありがとう|そう|はい|ええ|うん)$/.test(phrase) && !/(?:聞き取り|絵を描|キャンバス|始め|一通り|お話を伺い|よろしいでしょうか)/.test(phrase)) {
             let targetStep = null;
             if (/(?:秋晴れ|晴れ|快晴|雨|雪|曇り|秋|春|夏|冬|朝|昼|夕暮れ|夕方|夕焼け|日差し|木漏れ日|時間|天気|お天気)/.test(phrase) && !sc.weather) {
               targetStep = 'weather';
