@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261118_20';
-  const APP_VERSION_TITLE = '2026-11-18 二重プロンプト競合（同じ言葉繰り返し）完全根絶版';
+  const APP_VERSION = 'v20261119_01';
+  const APP_VERSION_TITLE = '2026-11-19 GitHub Pages直結モードをローカルPCバックエンド同等品質へ完全統合（高精細SVG/差分レイヤー再描画/会話リカバリー・エコー除去）';
 
   function enforceVersionBadgeDisplay() {
     try {
@@ -136,6 +136,15 @@
     drawnSpeechFallbackTimer: null, // 描画完了時の音声フォールバック確約タイマー
     currentAiTurnTranscript: '',    // Gemini直結時のAI字幕バッファ
     currentUserTurnTranscript: '',  // Gemini直結時のユーザー字幕バッファ
+    lastGeneratedSvgCode: '',       // 直前に生成したSVGソースコード（差分レイヤー再描画用）
+    recentAiUtterances: [],         // 直近のAI発話履歴（エコー遮断判定用・最大6件）
+    directUserTranscriptSeq: 0,     // 直結モード時のWeb Speech確定シーケンス番号
+    directInputTransSeq: 0,         // 直結モード時のGemini input_transcriptionシーケンス番号
+    directLastGeminiInputTime: 0,   // 直結モード時のGemini input_transcription最終時刻
+    directLastUserTranscriptTime: 0,// 直結モード時のWeb Speech最終時刻
+    directLastAiPromptTime: 0,      // 直結モード時の自動リカバリー/催促プロンプト最終送信時刻
+    directToolCalledInTurn: false,  // 直結モード時の当該ターン内ツール呼び出し有無
+    directEchoGuardUntil: 0,        // 直結モード時のエコーガード終了時刻 (ms)
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
     aiSpeechEndTimer: null,         // AI発話終了判定タイマー
     noiseGateMode: 'normal',        // 現在の周囲音対策モード（標準感度デフォルト）
@@ -1780,15 +1789,18 @@ ${levelRules}
 
     state.currentSilenceSec = silenceMs / 1000;
 
-    // フォローアップ送信直後の最低待機（直結モードは4.5秒、バックエンド接続時は10.0秒）
-    const minCooldownMs = state.isDirectGeminiWs ? 4500 : 10000;
+    // フォローアップ送信直後の最低待機（直結モードもバックエンド同等リカバリー搭載のため10.0秒統一）
+    const minCooldownMs = state.isDirectGeminiWs ? 9000 : 10000;
     if (sinceLastFollowUp < minCooldownMs) {
+      return;
+    }
+    if (state.isDirectGeminiWs && (now - (state.directLastAiPromptTime || 0) < 9000)) {
       return;
     }
 
     // 1. お父さんの文字起こし確定後、一定時間経過してもAIの返答が始まらない場合
-    //    （直結モードは5.5秒、バックエンド接続時は12.0秒で二重発火防止）
-    const userWaitMs = state.isDirectGeminiWs ? 5500 : 12000;
+    //    （直結モードは5.5秒フォールバックと競合しないよう10.0秒、バックエンド接続時は12.0秒で二重発火防止）
+    const userWaitMs = state.isDirectGeminiWs ? 10000 : 12000;
     if (state.hasUnansweredUserTurn && userSilenceMs >= userWaitMs && !state.isAiSpeaking) {
       state.lastAiSpeechFinishedTime = now;
       state.currentSilenceSec = 0;
@@ -1839,7 +1851,7 @@ ${levelRules}
     //   文章が途切れても最後までじっくり聞くため、20秒間無音が続いた場合のみ1回優しく催促する
     if (sc.status === 'collecting') {
       const alreadyAskedStep = aiEndedWithQuestion && didAiAskCurrentStep(lastAiText, sc.activeStep);
-      const collectWaitMs = state.isDirectGeminiWs ? 3500 : 12000;
+      const collectWaitMs = state.isDirectGeminiWs ? 8000 : 12000;
       if ((!aiEndedWithQuestion || state.wasAiInterrupted) && silenceMs >= collectWaitMs && followUpCount === 0) {
         state.lastAiSpeechFinishedTime = now;
         state.currentSilenceSec = 0;
@@ -1946,6 +1958,8 @@ ${levelRules}
             promptText = `続けて ${qText} と1文だけで優しく声に出して尋ねてください。`;
           }
         }
+        state.directLastAiPromptTime = Date.now();
+        state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
         state.socket.send(JSON.stringify({
           client_content: {
             turns: [{ role: 'user', parts: [{ text: promptText }] }],
@@ -2011,6 +2025,366 @@ ${levelRules}
     state.socket.onerror = (err) => {
       logDiag(`WebSocketエラー: ${err}`);
     };
+  }
+
+  // ============================================================================
+  // GitHub Pages直結モード向け バックエンド同等制御ヘルパー群
+  // （backend/live_session.py & backend/media_generator.py の最新ロジックを完全移植）
+  // ============================================================================
+  function correctJapaneseHomophonesJS(text) {
+    if (!text) return '';
+    let t = String(text);
+    t = t.replace(/(昔|家|実家|子供の頃|子どもの頃|幼い頃|若い頃|以前|前)?\s*(買っていた|買ってました|買ってた|買っていたの|買っていたんだ|買ってたんだ)\s*(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)/g, '$1飼っていた$3');
+    t = t.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買っていた|買ってました|買ってた)/g, '$1を飼っていた');
+    t = t.replace(/(買っていた|買ってました|買ってた)\s*(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)/g, '飼っていた$2');
+    t = t.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)う/g, '$1を飼う');
+    t = t.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)った/g, '$1を飼った');
+    t = t.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)って/g, '$1を飼って');
+    t = t.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)いたい/g, '$1を飼いたい');
+    return t;
+  }
+
+  function isEchoOfAiDirect(userText) {
+    if (!userText) return true;
+    const cleanUser = String(userText).trim().replace(/[\s。、！？・?!\n\r]/g, '');
+    if (!cleanUser) return true;
+
+    const pureApprovalWords = ['はい', 'うん', 'ええ', 'そう', 'お願い', 'お願いします', 'いいよ', 'いいですよ', '描いて', '書いて', '秋', '春', '夏', '冬'];
+    if (pureApprovalWords.includes(cleanUser)) return false;
+
+    const now = Date.now();
+    const isPlaying = state.isAiSpeaking || (now < (state.directEchoGuardUntil || 0));
+
+    const recentList = Array.isArray(state.recentAiUtterances) ? state.recentAiUtterances : [];
+    if (!isPlaying) {
+      for (const aiRaw of recentList) {
+        const cleanAi = String(aiRaw || '').trim().replace(/[\s。、！？・?!\n\r]/g, '');
+        if (cleanAi && cleanUser === cleanAi) {
+          logDiag(`[EchoGuard] 非再生中の完全一致エコーを除外: 「${cleanUser}」`);
+          return true;
+        }
+      }
+      return false;
+    }
+
+    const candidates = [];
+    if (state.currentAiTurnTranscript) candidates.push(state.currentAiTurnTranscript);
+    if (state.lastAiUtteranceText) candidates.push(state.lastAiUtteranceText);
+    for (const hist of recentList) {
+      if (hist && !candidates.includes(hist)) candidates.push(hist);
+    }
+
+    for (const aiRaw of candidates) {
+      const cleanAi = String(aiRaw || '').trim().replace(/[\s。、！？・?!\n\r]/g, '');
+      if (!cleanAi) continue;
+      if (cleanUser === cleanAi) {
+        logDiag(`[EchoGuard] 再生中の完全一致エコーを除外: 「${cleanUser}」`);
+        return true;
+      }
+      if (cleanUser.length >= 8 && cleanAi.includes(cleanUser)) {
+        logDiag(`[EchoGuard] 再生中のAI部分一致エコーを除外: 「${cleanUser}」`);
+        return true;
+      }
+      for (const phrase of ['この内容で絵を描いてもよろしいでしょうか', '一通りお話を伺いました', 'どんな思い出の絵を描きましょうか']) {
+        if (cleanUser.includes(phrase) && cleanUser.length <= phrase.length + 3) {
+          logDiag(`[EchoGuard] 定型句エコーを除外: 「${cleanUser}」`);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function checkUserUtteranceForDrawApprovalDirect(userText) {
+    const sc = state.sceneCollector;
+    if (!userText || state.isDrawingMedia) return false;
+    const clean = String(userText).trim().replace(/\s+/g, '');
+    if (!clean) return false;
+
+    const modifyOrReject = ['修正', '直して', '変えて', '変更', 'やり直し', 'もう一度', 'もう一回', '聞き取り', '聞いて', '違う', 'ちがう', 'まだ', 'いいえ', 'いや', '待って'];
+    if (modifyOrReject.some(w => clean.includes(w))) return false;
+
+    if (sc.status !== 'confirming' && sc.status !== 'ready') return false;
+
+    const recentAi = `${state.currentAiTurnTranscript || ''} ${state.lastAiUtteranceText || ''}`.trim();
+    const hasConfirmQ = ['よろしいですか', 'よろしいでしょうか', '描いてよろしい', '描いてもよろしい', '描きましょうか', '絵にしてよろしい', '絵を描いてみましょうか'].some(kw => recentAi.includes(kw));
+    if (!sc.aiHasAskedConfirmation && !hasConfirmQ) return false;
+
+    const directDrawRegex = /(?:絵を?[描書]いて(?:ください|ちょうだい|みて)?|絵にして|お絵描きして|[描書]いてください|[描書]いてちょうだい|[描書]いてほしい|[描書]いて)/;
+    const approvalRegex = /(?:この内容|その内容|これ|それ|このまま|そのままで?).*(?:[描書]いて|いい|良い|よい|お?願い|よろしく|結構|お?k|オーケー|そうして|進めて|やって)|(?:お?願い(?:します|いたします)?|いいですよ?|良いですよ?|大丈夫です?|結構です|問題(?:ない|ありません))/i;
+    const shortStripped = clean.replace(/[。、！! ]+/g, '');
+    const isShortYes = ['はい', 'いいですよ', 'いいよ', 'ok', 'オッケー', 'うん'].includes(shortStripped.toLowerCase()) && shortStripped.length <= 5;
+
+    if (directDrawRegex.test(clean) || approvalRegex.test(clean) || isShortYes) {
+      sc.drawConfirmedByUser = true;
+      logDiag(`✅ [直結] 最終確認に対するご本人の描画承認を検知しました: 「${clean}」`);
+      return true;
+    }
+    return false;
+  }
+
+  function handleUserUtteranceAfterDrawnDirect(userText) {
+    const sc = state.sceneCollector;
+    if (!userText || (sc.status !== 'drawn' && !sc.isAwaitingSaveConfirmation)) return false;
+    const clean = String(userText).trim().replace(/\s+/g, '');
+    if (!clean) return false;
+
+    const saveAffirmWords = ['保存して', '保存する', '保存します', '保存お願い', '残して', 'アルバムに', '取っておいて', 'とっておいて'];
+    let isSaveReq = saveAffirmWords.some(w => clean.includes(w));
+    if (!isSaveReq && sc.isAwaitingSaveConfirmation) {
+      const shortYes = clean.replace(/[。、！! ]+/g, '').toLowerCase();
+      if (['はい', 'うん', 'ええ', 'お願い', 'お願いします', 'そうして', 'いいよ', 'いいですよ', 'ぜひ', 'ok', 'オッケー'].includes(shortYes)) {
+        isSaveReq = true;
+      }
+    }
+    if (isSaveReq) {
+      logDiag(`💾 [直結] 絵の保存指示を検知: 「${clean}」`);
+      handleSaveAndFinishDrawingMode(true);
+      return true;
+    }
+
+    const cancelSaveWords = ['保存しない', '保存しなくていい', '保存はいいです', '保存は結構です', '保存は不要', '結構です'];
+    if (cancelSaveWords.some(w => clean.includes(w))) {
+      logDiag(`💬 [直結] 保存せず終了指示を検知: 「${clean}」`);
+      handleSaveAndFinishDrawingMode(false);
+      return true;
+    }
+
+    const modifyWords = ['直して', '変えて', '変更', '修正', '描き直', '書き直', '追加', '足して', '入れて', '置いて', '消して', 'なくして', 'もっと', '違う', 'ちがう', 'やり直し', 'もう一度'];
+    const hasModify = modifyWords.some(w => clean.includes(w));
+    const approvalWords = ['このまま', 'これでいい', 'これで良い', 'この雰囲気', 'こんな感じ', 'いいです', '良いです', 'よいです', 'いいよ', '良いよ', 'バッチリ', 'ばっちり', '大丈夫', '問題ない', '変えなくていい', '修正なし', '直さなくていい', '気に入', '素敵', 'いいですね', '良いですね', 'はい', 'うん', 'ええ', 'オッケー', 'ok', 'これでお願い', 'これで頼む'];
+    if (!hasModify && approvalWords.some(w => clean.toLowerCase().includes(w)) && sc.status === 'drawn' && !sc.isAwaitingSaveConfirmation) {
+      logDiag(`✨ [直結] 絵への満足・肯定を検知。保存確認へ移行します: 「${clean}」`);
+      promptSaveConfirmationAfterApproval();
+      return true;
+    }
+    return false;
+  }
+
+  function scheduleDirectFallbackIfGeminiMissedAudio(ws, text, seq) {
+    const startTime = Date.now();
+    const sc = state.sceneCollector;
+    const savedStep = sc.activeStep;
+    setTimeout(() => {
+      if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') return;
+      if (seq !== state.directUserTranscriptSeq) return;
+      // 4.5秒以内に継続発話があった場合は話し途中なので遮らない
+      if (Date.now() - (state.directLastUserTranscriptTime || 0) < 4500) return;
+      // すでにGeminiが音声認識または返答した、あるいは直近プロンプト送信直後なら二重送信しない
+      if ((state.directLastGeminiInputTime || 0) >= startTime - 500) return;
+      if ((state.lastAiSpeechFinishedTime || 0) >= startTime) return;
+      if (state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
+      if (Date.now() - (state.directLastAiPromptTime || 0) < 8500) return;
+
+      const stepPrefixMap = {
+        topic: '①テーマ', place: '②場所', weather: '③天候',
+        people: '④登場人物', details: '⑤様子', mood: '⑥雰囲気'
+      };
+      const stepQuestions = {
+        topic: '「①テーマについてお聞きします。どんな思い出の絵を描きましょうか？」',
+        place: '「②場所についてお聞きします。そこはどんな場所や舞台でしたか？」',
+        weather: '「③天候についてお聞きします。その時の季節やお天気はどうでしたか？」',
+        people: '「④登場人物についてお聞きします。そこにはどなたがいらっしゃいましたか？」',
+        details: '「⑤様子についてお聞きします。周りにどんなものが見えましたか？」',
+        mood: '「⑥雰囲気についてお聞きします。その時はどんなお気持ちでしたか？」'
+      };
+      let promptText = '';
+      if (sc.status === 'collecting') {
+        const sPrefix = stepPrefixMap[savedStep] || 'お話の内容';
+        const nextQ = stepQuestions[sc.activeStep] || stepQuestions.topic;
+        promptText = `お父さんが「${text}」とお話しになりました。まず「${sPrefix}について復唱します。${text}ですね。」と短く復唱してから、続けて ${nextQ} と声に出して尋ねてください。`;
+      } else if (sc.status === 'confirming' || sc.status === 'ready') {
+        const summaryStr = buildCollectorSummaryText();
+        promptText = `お父さんが「${text}」とお話しになりました。現在の内容（${summaryStr}）について優しく返答してください。`;
+      } else {
+        promptText = `お父さんが「${text}」とお話しになりました。温かく共感して返答してください。`;
+      }
+      state.directLastAiPromptTime = Date.now();
+      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
+      logDiag(`🔄 [直結] Gemini無反応のため5.5秒フォールバック送信: 「${text}」`);
+      ws.send(JSON.stringify({
+        client_content: {
+          turns: [{ role: 'user', parts: [{ text: promptText }] }],
+          turn_complete: true
+        }
+      }));
+    }, 5500);
+  }
+
+  function recoverDirectTruncatedConfirmation(ws, truncatedText) {
+    setTimeout(() => {
+      const sc = state.sceneCollector;
+      if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') return;
+      if (state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
+      const profile = state.currentProfile || DEFAULT_USER_PROFILE;
+      const nickname = formatUserNickname(profile.call_name);
+      const summaryCtx = buildCollectorSummaryText() || state.sessionTopics.slice(-6).join('、');
+      const recoveryPrompt =
+        `さくらさん、直前のまとめの復唱が途中で切れてしまいました。\n` +
+        `これまで伺った全項目：\n${summaryCtx}\n\n` +
+        `直前の発言「${truncatedText.slice(-45)}」の続きから、残りの項目（①〜⑥のうちまだ復唱していない項目）をすべて最後まで簡潔に声に出して復唱し、` +
+        `そのあとで必ず${nickname}に向かって「この内容で絵を描いてもよろしいでしょうか？」と尋ねてください。`;
+      state.directLastAiPromptTime = Date.now();
+      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4500);
+      logDiag(`🔄 [直結] 確認まとめ途中途切れを自動リカバリーします`);
+      ws.send(JSON.stringify({
+        client_content: {
+          turns: [{ role: 'user', parts: [{ text: recoveryPrompt }] }],
+          turn_complete: true
+        }
+      }));
+    }, 800);
+  }
+
+  function recoverDirectCollectingQuestion(ws, completedAiTurn) {
+    const sc = state.sceneCollector;
+    const scheduledTime = Date.now();
+    const scheduledStep = sc.activeStep;
+    const wasEchoTruncated = completedAiTurn.includes('復唱') && !completedAiTurn.includes('お聞きします') && !completedAiTurn.includes('ですね');
+    const lastUserUtt = (state.lastUserUtteranceText || '').trim();
+    const summaryCtx = buildCollectorSummaryText() || state.sessionTopics.slice(-6).join('、');
+    const stepQuestions = {
+      topic: '「①テーマについてお聞きします。どんな思い出の絵を描きましょうか？」',
+      place: '「②場所についてお聞きします。そこはどんな場所や舞台でしたか？」',
+      weather: '「③天候についてお聞きします。その時の季節やお天気はどうでしたか？」',
+      people: '「④登場人物についてお聞きします。そこにはどなたがいらっしゃいましたか？」',
+      details: '「⑤様子についてお聞きします。周りにどんなものが見えましたか？」',
+      mood: '「⑥雰囲気についてお聞きします。その時はどんなお気持ちでしたか？」'
+    };
+    const nextStepMap = { topic: 'place', place: 'weather', weather: 'people', people: 'details', details: 'mood', mood: 'confirm' };
+
+    setTimeout(() => {
+      if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (sc.status !== 'collecting' || state.isDrawingMedia) return;
+      if ((state.lastAiSpeechFinishedTime || 0) > scheduledTime || state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
+
+      let effectiveStep = sc.activeStep;
+      if (wasEchoTruncated && effectiveStep === scheduledStep) {
+        effectiveStep = nextStepMap[scheduledStep] || scheduledStep;
+      }
+      const q = stepQuestions[effectiveStep] || stepQuestions.topic;
+      let recMsg = '';
+      if (effectiveStep === 'confirm') {
+        recMsg =
+          `直前の⑥雰囲気の復唱が途中で切れてしまいました。\n` +
+          `お父さんの「${lastUserUtt}」というお話を「〜ですね！」と短く復唱し終えてから、` +
+          `これまで伺った内容（${summaryCtx}）を①〜⑥まで最後まで簡潔に復唱し、` +
+          `最後に「この内容で絵を描いてもよろしいでしょうか？」と尋ねてください。`;
+      } else if (wasEchoTruncated && lastUserUtt) {
+        recMsg =
+          `直前の復唱が途中で切れてしまいました。` +
+          `お父さんの「${lastUserUtt}」というお話の続きを「〜ですね！」と20文字以内の短い文で最後まで復唱し終えてから、` +
+          `続けて ${q} と声に出して尋ねてください。`;
+      } else {
+        recMsg = `続けて ${q} と1文だけで短く声に出して尋ねてください。`;
+      }
+      state.directLastAiPromptTime = Date.now();
+      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
+      logDiag(`🔄 [直結] 聞き取り途中途切れを自動リカバリー (echo_cut=${wasEchoTruncated}, step=${effectiveStep})`);
+      ws.send(JSON.stringify({
+        client_content: {
+          turns: [{ role: 'user', parts: [{ text: recMsg }] }],
+          turn_complete: true
+        }
+      }));
+    }, 2000);
+  }
+
+  function sanitizeSceneElementsJS(title, elements) {
+    const noisePatterns = [
+      '聞こえてますか', '聞こえますか', '聞こえる', 'もしもし', 'あーあー', 'テスト',
+      'マイク', 'こんにちは', 'こんばんは', 'おはよう', 'ありがとう', 'はい', 'いいえ'
+    ];
+    let cleanTitle = String(title || '');
+    for (const p of noisePatterns) cleanTitle = cleanTitle.split(p).join('');
+    cleanTitle = cleanTitle.replace(/^[ 、。？！!?]+|[ 、。？！!?]+$/g, '');
+    if (!cleanTitle || cleanTitle.length < 2) cleanTitle = '懐かしい思い出の情景';
+
+    let cleanElements = Array.isArray(elements) ? elements.join('、') : String(elements || '');
+    for (const p of noisePatterns) cleanElements = cleanElements.split(p).join('');
+    cleanElements = cleanElements.replace(/^[ 、。？！!?]+|[ 、。？！!?]+$/g, '');
+    if (!cleanElements || cleanElements.length < 3) {
+      cleanElements = `${cleanTitle}、心温まる水彩画の風景`;
+    }
+    return { cleanTitle, cleanElements };
+  }
+
+  function repairAndValidateSvgJS(rawSvg) {
+    if (!rawSvg || !rawSvg.includes('<svg')) return null;
+    const startPos = rawSvg.indexOf('<svg');
+    let svgPart = rawSvg.slice(startPos);
+
+    const svgTagMatch = svgPart.match(/<svg[^>]*>/i);
+    if (!svgTagMatch) return null;
+
+    const oldTag = svgTagMatch[0];
+    let addAttrs = '';
+    if (!/viewBox\s*=/i.test(oldTag)) addAttrs += ' viewBox="0 0 800 600"';
+    if (!/xmlns\s*=/i.test(oldTag)) addAttrs += ' xmlns="http://www.w3.org/2000/svg"';
+    if (!/width\s*=/i.test(oldTag)) addAttrs += ' width="800"';
+    if (!/height\s*=/i.test(oldTag)) addAttrs += ' height="600"';
+    const newTag = oldTag.slice(0, -1) + addAttrs + '>';
+    svgPart = newTag + svgPart.slice(oldTag.length);
+
+    const lastGt = svgPart.lastIndexOf('>');
+    if (lastGt !== -1) svgPart = svgPart.slice(0, lastGt + 1);
+
+    const svgBody = svgPart.replace(/<\/svg\s*>/gi, '');
+    const selfClosingTags = new Set([
+      'circle', 'ellipse', 'line', 'path', 'polygon', 'polyline',
+      'rect', 'stop', 'use', 'image', 'feturbulence', 'fedisplacementmap',
+      'fegaussianblur', 'feoffset', 'feblend', 'fecolormatrix', 'fecomposite',
+      'feflood', 'femergenode'
+    ]);
+
+    const stack = [];
+    const tagRegex = /<(\/?)([a-zA-Z0-9:_-]+)([^>]*)>/g;
+    let m;
+    while ((m = tagRegex.exec(svgBody)) !== null) {
+      const isClosing = !!m[1];
+      const tagName = m[2].toLowerCase();
+      const fullTag = m[0];
+      const isSelfClosing = fullTag.endsWith('/>') || selfClosingTags.has(tagName);
+      if (isClosing) {
+        if (stack.length && stack[stack.length - 1] === tagName) {
+          stack.pop();
+        } else if (stack.includes(tagName)) {
+          while (stack.length && stack[stack.length - 1] !== tagName) stack.pop();
+          if (stack.length) stack.pop();
+        }
+      } else if (!isSelfClosing) {
+        stack.push(tagName);
+      }
+    }
+
+    const closingTags = [];
+    while (stack.length) {
+      const t = stack.pop();
+      if (t !== 'svg') closingTags.push(`</${t}>`);
+    }
+
+    const isValidXml = (xmlStr) => {
+      try {
+        const doc = new DOMParser().parseFromString(xmlStr, 'image/svg+xml');
+        return !doc.querySelector('parsererror');
+      } catch (e) {
+        return false;
+      }
+    };
+
+    const repaired = `${svgBody}\n${closingTags.join('\n')}\n</svg>`;
+    if (isValidXml(repaired)) return repaired;
+
+    // 二次修復：最後の不完全要素を1階層巻き戻して再検証
+    const lastGtIdx = svgBody.lastIndexOf('>');
+    const prevLtIdx = svgBody.lastIndexOf('<', lastGtIdx - 1);
+    if (prevLtIdx > 0) {
+      const fallbackRepaired = `${svgBody.slice(0, prevLtIdx)}\n${closingTags.join('\n')}\n</svg>`;
+      if (isValidXml(fallbackRepaired)) return fallbackRepaired;
+    }
+    return null;
   }
 
   function connectDirectGeminiLiveWebSocket(isReconnect = false) {
@@ -2174,12 +2548,21 @@ ${levelRules}
         // 2. サーバーコンテンツ（音声・字幕）
         const sc = msg.serverContent || msg.server_content;
         if (sc) {
+          if (sc.interrupted) {
+            if (Date.now() < (state.directEchoGuardUntil || 0) || state.isAiSpeaking) {
+              logDiag('[EchoGuard] AI発話中の誤割り込み(interrupted)を無視しました');
+            } else {
+              state.wasAiInterrupted = true;
+            }
+          }
+
           const modelTurn = sc.modelTurn || sc.model_turn;
           if (modelTurn && Array.isArray(modelTurn.parts)) {
             for (const part of modelTurn.parts) {
               const inlineData = part.inlineData || part.inline_data;
               if (inlineData && inlineData.data) {
                 const pcmBuf = base64ToArrayBuffer(inlineData.data);
+                state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 2600);
                 queueAudioPlayback(pcmBuf);
               }
               if (part.text && !part.text.trim().startsWith('**')) {
@@ -2192,7 +2575,9 @@ ${levelRules}
           if (inputTrans && inputTrans.text) {
             state.currentUserTurnTranscript += inputTrans.text;
             state.lastUserSpeechActivityTime = Date.now();
-            const cleanUserTxt = state.currentUserTurnTranscript.trim();
+            state.directLastGeminiInputTime = Date.now();
+            state.directInputTransSeq = (state.directInputTransSeq || 0) + 1;
+            const cleanUserTxt = correctJapaneseHomophonesJS(state.currentUserTurnTranscript.trim());
             if (cleanUserTxt) {
               dom.userTranscriptText.textContent = `「${cleanUserTxt}」`;
             }
@@ -2202,6 +2587,7 @@ ${levelRules}
           if (outputTrans && outputTrans.text) {
             state.currentAiTurnTranscript += outputTrans.text;
             state.lastAiSpeechFinishedTime = Date.now();
+            state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 2600);
             state.hasUnansweredUserTurn = false;
             const cleanAiTxt = state.currentAiTurnTranscript.trim();
             if (cleanAiTxt) {
@@ -2210,29 +2596,102 @@ ${levelRules}
           }
 
           if (sc.turnComplete || sc.turn_complete) {
-            // 1. ユーザー自身の発話テキスト（認識できた場合）から情景情報を抽出・蓄積
+            // 1. ユーザー自身の発話テキスト（認識できた場合）をエコー除去・同音異義語補正して処理
             if (state.currentUserTurnTranscript.trim()) {
-              const uText = state.currentUserTurnTranscript.trim();
+              const rawUText = state.currentUserTurnTranscript.trim();
               state.currentUserTurnTranscript = '';
-              state.lastUserUtteranceText = uText;
-              state.lastUserSpeechActivityTime = Date.now();
-              state.hasUnansweredUserTurn = true;
-              state.followUpCountSinceLastUserSpeech = 0;
-              state.sessionTopics.push(uText);
-              updateSceneCollectorFromText(uText, 'user');
+              const uText = correctJapaneseHomophonesJS(rawUText);
+              if (!isEchoOfAiDirect(uText)) {
+                state.lastUserUtteranceText = uText;
+                state.lastUserSpeechActivityTime = Date.now();
+                state.hasUnansweredUserTurn = true;
+                state.followUpCountSinceLastUserSpeech = 0;
+                state.sessionTopics.push(uText);
+                dom.userTranscriptText.textContent = `「${uText}」`;
+                updateSceneCollectorFromText(uText, 'user');
+                // 描画完了後（満足→保存確認→保存/終了）の判定
+                if (!handleUserUtteranceAfterDrawnDirect(uText)) {
+                  // 最終確認フェーズで承認された場合はセーフティネット描画を予約（Geminiがツールを呼ばない場合の保険）
+                  if (checkUserUtteranceForDrawApprovalDirect(uText)) {
+                    setTimeout(() => {
+                      const col = state.sceneCollector;
+                      if (state.isSessionActive && state.isDirectGeminiWs && !state.isDrawingMedia && (col.status === 'confirming' || col.status === 'ready') && col.drawConfirmedByUser) {
+                        logDiag('🎨 [直結セーフティネット] 承認検知後にツール呼び出しが無いため描画を起動します');
+                        executeConfirmedDrawing();
+                      }
+                    }, 3500);
+                  }
+                }
+              }
             }
 
-            // 2. AIの返答音声から情景情報および「描画確認」フレーズを抽出・蓄積
+            // 2. AIの返答音声から情景情報・確認フレーズ・途中途切れリカバリーを処理
             const finishedAiTxt = state.currentAiTurnTranscript.trim();
             state.currentAiTurnTranscript = '';
+            const toolWasCalled = !!state.directToolCalledInTurn;
+            state.directToolCalledInTurn = false;
+
             if (finishedAiTxt) {
               state.lastAiUtteranceText = finishedAiTxt;
               state.lastAiSpeechFinishedTime = Date.now();
               state.hasUnansweredUserTurn = false;
+              state.recentAiUtterances.push(finishedAiTxt);
+              if (state.recentAiUtterances.length > 6) state.recentAiUtterances.shift();
               updateSceneCollectorFromText(finishedAiTxt, 'ai');
+
+              const col = state.sceneCollector;
+              // (A) 確認まとめの途中途切れリカバリー
+              if (
+                (col.status === 'confirming' || col.status === 'ready') &&
+                !state.isDrawingMedia &&
+                (finishedAiTxt.includes('一通りお話を伺いました') || finishedAiTxt.includes('復唱します') || finishedAiTxt.includes('まとめます')) &&
+                !['よろしいですか', 'よろしいでしょうか', '描いてよろしい', '描いてもよろしい', '描きましょうか', '？', '?'].some(kw => finishedAiTxt.includes(kw))
+              ) {
+                recoverDirectTruncatedConfirmation(ws, finishedAiTxt);
+              }
+              // (B) 聞き取り中の復唱・質問途中途切れリカバリー
+              else if (
+                col.status === 'collecting' &&
+                !state.isDrawingMedia &&
+                !/(?:でしょうか|ますか|ましょうか|ですか|かな|教えて|聞かせて|？|\?)/.test(finishedAiTxt) &&
+                !['今から描', '描いてみます', '絵にしてみます', '描き直します'].some(w => finishedAiTxt.includes(w))
+              ) {
+                recoverDirectCollectingQuestion(ws, finishedAiTxt);
+              }
+              // (C) 聞き取り中に「何でしょうか？」等で停滞した場合のステップ進行リカバリー
+              else if (
+                col.status === 'collecting' &&
+                !state.isDrawingMedia &&
+                ['何でしょうか', '何ですか', 'もう一度お話', '聞こえません'].some(w => finishedAiTxt.includes(w)) &&
+                !['どんな', 'いらっしゃい', '様子', 'お天気', '場所', '季節', '気持ち'].some(q => finishedAiTxt.includes(q))
+              ) {
+                const stepLabels = {
+                  topic: 'テーマや話題', place: '場所や舞台', weather: '季節やお天気、時間帯',
+                  people: '登場人物（どなたがいらっしゃったか）', details: '周りの様子や見えたもの', mood: 'その時のお気持ちや雰囲気'
+                };
+                const profile = state.currentProfile || DEFAULT_USER_PROFILE;
+                const nickname = formatUserNickname(profile.call_name);
+                const advPrompt = `聞き取りの途中です。${nickname}に向かって、「先ほどの続きですね！${stepLabels[col.activeStep] || '情景の様子'}について教えていただけますか？」と優しく問いかけて聞き取りを進めてください。`;
+                state.directLastAiPromptTime = Date.now();
+                ws.send(JSON.stringify({
+                  client_content: { turns: [{ role: 'user', parts: [{ text: advPrompt }] }], turn_complete: true }
+                }));
+              }
+
+              // (D) セーフティネット：AIが「今から描いてみますね」と宣言したのにツールを呼ばなかった場合
+              const drawExecWords = ['今からキャンバスに描', '今から描いてみます', 'キャンバスに描きますね', '絵にしてみますね', 'いま一生懸命描'];
+              if (
+                !toolWasCalled &&
+                !state.isDrawingMedia &&
+                col.status !== 'drawing' &&
+                (col.status === 'confirming' || col.status === 'ready') &&
+                drawExecWords.some(w => finishedAiTxt.includes(w))
+              ) {
+                logDiag('🎨 [直結セーフティネット] AIの描画宣言を検知したため確実に描画を起動します');
+                executeConfirmedDrawing();
+              }
             }
 
-            // 毎ターンの勝手な自動描画は行わず、情景収集と合意形成を優先
             if (!state.isAiSpeaking && !state.isDrawingMedia) {
               setAvatarState('listening');
             }
@@ -2247,6 +2706,7 @@ ${levelRules}
             const funcName = call.name;
             const args = call.args || {};
             const callId = call.id;
+            state.directToolCalledInTurn = true;
             logDiag(`AIツール呼び出し: ${funcName} (${args.japanese_title || ''})`);
 
             if (funcName === 'generate_memory_visual' || funcName === 'refine_memory_visual') {
@@ -2927,15 +3387,36 @@ ${levelRules}
 
             if (state.socket && state.socket.readyState === WebSocket.OPEN) {
               if (state.isDirectGeminiWs) {
-                // Gemini直結時はWeb Speech APIの確定テキストから情景抽出＆送信
-                updateSceneCollectorFromText(textToSend, 'user');
-                state.socket.send(JSON.stringify({
-                  client_content: {
-                    turns: [{ role: 'user', parts: [{ text: textToSend }] }],
-                    turn_complete: true
-                  }
-                }));
-                logDiag(`認識テキストを送信: 「${textToSend}」`);
+                // Gemini直結時：バックエンド(live_session.py)と同等にエコー除去・同音異義語補正を行い、
+                // 即座の二重送信は行わず、5.5秒後にGeminiが無反応だった場合のみフォールバック送信する！
+                const correctedText = correctJapaneseHomophonesJS(textToSend);
+                if (isEchoOfAiDirect(correctedText)) {
+                  logDiag(`[EchoGuard] 直結モードでAI音声エコーをブロックしました: 「${correctedText}」`);
+                  return;
+                }
+                state.directLastUserTranscriptTime = Date.now();
+                state.directUserTranscriptSeq = (state.directUserTranscriptSeq || 0) + 1;
+                const mySeq = state.directUserTranscriptSeq;
+                dom.userTranscriptText.textContent = `「${correctedText}」`;
+                updateSceneCollectorFromText(correctedText, 'user');
+
+                // 描画完了後（満足→保存確認→保存/終了）の処理
+                if (handleUserUtteranceAfterDrawnDirect(correctedText)) {
+                  return;
+                }
+                // 最終確認フェーズの描画承認検知（セーフティネット予約）
+                if (checkUserUtteranceForDrawApprovalDirect(correctedText)) {
+                  setTimeout(() => {
+                    const col = state.sceneCollector;
+                    if (state.isSessionActive && state.isDirectGeminiWs && !state.isDrawingMedia && (col.status === 'confirming' || col.status === 'ready') && col.drawConfirmedByUser) {
+                      logDiag('🎨 [直結セーフティネット] 承認検知後にツール呼び出しが無いため描画を起動します');
+                      executeConfirmedDrawing();
+                    }
+                  }, 3500);
+                }
+                // Gemini Liveの音声ストリーム処理を優先し、5.5秒無反応時のみテキスト補完送信
+                scheduleDirectFallbackIfGeminiMissedAudio(state.socket, correctedText, mySeq);
+                logDiag(`認識テキストを情景反映・監視登録（二重送信防止）: 「${correctedText}」`);
               } else {
                 // ローカルバックエンド接続時：Web Speech APIの確定テキストでも即座に6ステップ情景抽出を実行（2.5秒重複排除ガード付き）
                 updateSceneCollectorFromText(textToSend, 'user');
@@ -4039,96 +4520,221 @@ ${levelRules}
   async function generateStandaloneMemoryArtifact(args) {
     const profile = state.currentProfile || DEFAULT_USER_PROFILE;
     const sceneType = args.scene_type || 'past_memory';
-    const title = args.japanese_title || '思い出の風景';
-    const elements = args.visual_elements || args.updated_visual_elements || title;
+    const rawTitle = args.japanese_title || '思い出の風景';
+    const rawElements = args.visual_elements || args.updated_visual_elements || rawTitle;
+    const { cleanTitle, cleanElements } = sanitizeSceneElementsJS(rawTitle, rawElements);
     const ambientSound = args.ambient_sound || 'autumn_insects';
     const feedback = (args.user_feedback || '').trim();
     const isRefinement = !!args.is_refinement || !!feedback;
-    const finalPrompt = buildSafePromptJS(profile.dementia_level || 'mild', sceneType, elements);
+    const finalPrompt = buildSafePromptJS(profile.dementia_level || 'mild', sceneType, cleanElements);
 
     const artStyleKey = args.art_style || state.currentArtStyle || 'watercolor';
     const artStyle = ART_STYLES[artStyleKey] || ART_STYLES.watercolor;
 
     let mediaDataUrl = '';
+    let usedModelName = '';
     const apiKey = (state.sessionApiKey || '').trim();
 
     if (apiKey) {
-      // Step 0: Gemini 3.8 Flash によるオーダーメイド情景画（SVG）生成
-      // 外部画像サービスの Artists limit・レート制限に一切依存せず、Google公式APIで100%確実に話の内容を描画！
-      try {
-        if (dom.drawingSubtext) dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」でお話の情景を描いています（約2〜4秒）...`;
-        logDiag(`AI情景描画を開始します: 「${title}」 (画風: ${artStyle.name}) - 内容: 「${elements}」`);
+      // =========================================================================
+      // 0. 再描画モード（元SVGがある場合）：<g id="refinement-layer"> 差分レイヤー合成
+      //    backend/media_generator.py の refine_memory_visual_artifact と同一方式！
+      // =========================================================================
+      if (isRefinement && feedback && state.lastGeneratedSvgCode && state.lastGeneratedSvgCode.includes('</svg>')) {
+        try {
+          if (dom.drawingSubtext) dom.drawingSubtext.textContent = `元の絵を残したまま「${feedback}」を描き加えています...`;
+          logDiag(`🎨 [差分レイヤー再描画] 元SVGを保持して「${feedback}」を合成生成します`);
+          const origSvgCode = state.lastGeneratedSvgCode;
+          const refineSvgPrompt =
+            `以下は、ご本人の大切な思い出を描いた既存のSVGイラストコード（viewBox="0 0 800 600"）です。\n` +
+            `この元のSVGイラストの背景・建物・風景・色調・構図は【100%そのまま残し】、\n` +
+            `ご本人からの修正要望：「${feedback}」だけを既存のSVGに重ねて描き加えるための【追加レイヤー <g id="refinement-layer">...</g>】のみを出力してください。\n\n` +
+            `【元のSVGコード（座標・構図・背景の参照用）】\n${origSvgCode}\n\n` +
+            `【絶対厳守ルール】\n` +
+            `1. 元のSVGを書き直す必要はありません。既存の地面・道・校門・背景の座標（viewBox 800x600）に合わせて、新しく描き加える要素だけを含む \`<g id="refinement-layer"> ... </g>\` を1つ出力してください。\n` +
+            `2. 「${feedback}」が大勢の生徒や人物に関する指示である場合は、校門や通学路・前景〜中景の歩道上に、制服姿やカバンを持った人物（大勢なら10〜15人程度、遠近感をつけて）をはっきり視認できるサイズ（高さ40〜110px程度）と色彩で複数描画してください。\n` +
+            `3. 人物を描く場合は、温かみのある親しみやすいイラスト表現（後ろ姿・横向き・シンプルなシルエットやデフォルメ）で描いてください。\n` +
+            `4. \`<g id="refinement-layer">\` で始まり \`</g>\` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`;
 
-        const svgPrompt = `あなたは高齢者・回想法ケアのための${artStyle.svgRoleInstruction}です。
-ユーザーが語った思い出のお話に合わせて、指定された情景の【${artStyle.name}】風SVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
+          const refineModels = ['gemini-3.5-flash-lite', 'gemini-3.5-flash'];
+          for (const mName of refineModels) {
+            try {
+              logDiag(`差分レイヤー再描画を試行中 (${mName}): 「${feedback}」`);
+              const resRef = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${mName}:generateContent?key=${encodeURIComponent(apiKey)}`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    contents: [{ parts: [{ text: refineSvgPrompt }] }],
+                    generationConfig: { temperature: 0.25, maxOutputTokens: 8192 }
+                  }),
+                  signal: AbortSignal.timeout ? AbortSignal.timeout(120000) : undefined
+                }
+              );
+              recordApiCall(resRef.headers, resRef.status);
+              if (resRef.ok) {
+                const dataRef = await resRef.json();
+                let rawOut = (dataRef?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+                rawOut = rawOut.replace(/^```[a-zA-Z]*\s*/, '').replace(/\s*```$/, '').trim();
+
+                let candidateSvg = null;
+                const fullSvgMatch = rawOut.match(/<svg[\s\S]*?<\/svg>/i);
+                if (fullSvgMatch) {
+                  candidateSvg = fullSvgMatch[0];
+                } else {
+                  const gMatch = rawOut.match(/<g[\s\S]*?<\/g>/i);
+                  if (gMatch) {
+                    candidateSvg = origSvgCode.replace(/<\/svg\s*>/i, `\n  ${gMatch[0]}\n</svg>`);
+                  }
+                }
+                const validRefined = candidateSvg ? repairAndValidateSvgJS(candidateSvg) : null;
+                if (validRefined) {
+                  state.lastGeneratedSvgCode = validRefined;
+                  mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(validRefined)}`;
+                  usedModelName = `${mName} (差分レイヤー合成)`;
+                  dismissCanvasError();
+                  logDiag(`✅ Gemini (${mName}) による元構図保持・差分レイヤー再描画に成功しました！`);
+                  break;
+                } else {
+                  logDiag(`モデル ${mName} の差分レイヤー出力がXML検証を通過しませんでした。次を試行します。`);
+                }
+              } else {
+                logDiag(`差分レイヤーモデル ${mName} 応答ステータス: ${resRef.status}`);
+              }
+            } catch (rErr) {
+              logDiag(`差分レイヤーモデル ${mName} エラー: ${rErr.message}`);
+            }
+          }
+        } catch (refOuterErr) {
+          logDiag(`差分レイヤー再描画スキップ（通常描画へフォールバック）: ${refOuterErr.message}`);
+        }
+      }
+
+      // =========================================================================
+      // 1. Flash Image (gemini-2.5-flash-image) を試行（初回描画時、429なら即SVGへ）
+      // =========================================================================
+      if (!mediaDataUrl && !isRefinement) {
+        try {
+          if (dom.drawingSubtext) dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」で絵を描いています...`;
+          const resImg = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${encodeURIComponent(apiKey)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: finalPrompt }] }],
+                generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+              }),
+              signal: AbortSignal.timeout ? AbortSignal.timeout(18000) : undefined
+            }
+          );
+          recordApiCall(resImg.headers, resImg.status);
+          if (resImg.ok) {
+            const dataImg = await resImg.json();
+            const parts = dataImg?.candidates?.[0]?.content?.parts || [];
+            for (const part of parts) {
+              const inline = part.inlineData || part.inline_data;
+              if (inline && inline.data) {
+                const mime = inline.mimeType || inline.mime_type || 'image/png';
+                mediaDataUrl = `data:${mime};base64,${inline.data}`;
+                usedModelName = 'gemini-2.5-flash-image';
+                state.lastGeneratedSvgCode = '';
+                dismissCanvasError();
+                logDiag(`✅ gemini-2.5-flash-image による画像生成に成功しました！`);
+                break;
+              }
+            }
+          } else {
+            logDiag(`gemini-2.5-flash-image 応答ステータス: ${resImg.status}。高精細SVG生成へ移行します。`);
+          }
+        } catch (imgErr) {
+          logDiag(`gemini-2.5-flash-image スキップ (${imgErr.message})。高精細SVG生成へ移行します。`);
+        }
+      }
+
+      // =========================================================================
+      // 2. 高精細オーダーメイドSVG情景画生成（backend/media_generator.py と同一仕様）
+      //    gemini-3.5-flash 優先 / 180秒タイムアウト / maxOutputTokens 16384
+      // =========================================================================
+      if (!mediaDataUrl) {
+        try {
+          if (dom.drawingSubtext) dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」で細部まで丁寧に描いています（高精細モード）...`;
+          logDiag(`AI高精細情景描画を開始します: 「${cleanTitle}」 (画風: ${artStyle.name}) - 内容: 「${cleanElements}」`);
+
+          const styleDesc = artStyleKey === 'realistic'
+            ? '写実的でリアルな情景（精密な光と影、被写界深度、立体感）'
+            : artStyleKey === 'oil_painting'
+              ? '重厚な油絵風（力強い筆跡、深い陰影）'
+              : artStyleKey === 'colored_pencil'
+                ? '素朴で繊細な色鉛筆スケッチ風'
+                : '温かい水彩画風';
+
+          const svgPrompt = `あなたは高齢者・回想法ケアのための情景画専門アーティスト（${artStyle.svgRoleInstruction}）です。ユーザーが語った思い出やお話に合わせて、指定された情景の【${styleDesc}】SVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
-${elements}
+${cleanElements}
 
-【画風スタイル（最重要厳守）】:
-画風：${artStyle.name}
-表現方針：${artStyle.promptModifier}
-
-${isRefinement && feedback ? `【最重要：ユーザーからの絵の修正・変更指示（絶対厳守！）】
-ユーザーは直前の絵に対して「${feedback}」という明確な修正を求めています。
-前回の絵と矛盾する要素（例：青空から夕焼けへの変更、花の追加、特定モチーフの変更など）がある場合は、必ずこの修正指示を最優先で上書き・反映してください！
-夕焼けなら空全体を燃えるような茜色・黄金色のグラデーション（アーベントロート）にし、花ならテーブルや窓際に美しい花瓶とお花をはっきりと描いてください。` : ''}
+【画風方針】:
+${styleDesc}（${artStyle.promptModifier}）。モチーフの質感、奥行き、光と影のグラデーションや細部の描き込みを豊かに、丁寧かつ緻密に表現してください。
+${isRefinement && feedback ? `
+【最重要：ユーザーからの絵の修正・変更指示（絶対厳守！）】
+ユーザーは直前の絵に対して「${feedback}」という明確な修正を求めています。必ずこの修正指示を最優先で上書き・反映してください！` : ''}
 
 【画風特化造形ルール（${artStyle.name}）】
 ${artStyle.svgStyleRules}
 
-【必須造形ルール】
-1. ユーザーがお話しした具体的なモチーフ（山、夕焼け、海、学校、教室、喫茶店、花、柿、木製テーブル、窓、雪、川など）を省略せず、すべて目に見える形で魅力的に描いてください。
-   - 喫茶店が話題の場合：木目のテーブル、カップ、花瓶、温かい照明、窓際の光と影を豊かに描いてください。
-   - 柿が話題の場合：鮮やかなオレンジ色の柿の実、つややかな質感、葉、枝、澄んだ秋の青空を生き生きと描いてください。
-   - 山が話題の場合：鋭角な三角形やポリゴン（<polygon>）を使い、険しい岩肌や尖った山頂、雪渓をダイナミックに描いてください。
-2. <defs> 内に <linearGradient> や <radialGradient> を効果的に定義し、${artStyle.name}らしい深みのあるグラデーションを背景やモチーフに適用してください。
-3. 人物のリアルな顔は描かず、情景・静物・風景を主役にしてください。
-4. 必ず <svg viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全なSVGコードのみを出力してください。解説文やマークダウンのコード枠（\`\`\`xml 等）は一切含めないでください。`;
+【最重要造形ルール】
+1. ユーザーがお話しした具体的なモチーフ・特徴・造形（山、夕焼け、海、学校、校門、並木道、教室、喫茶店、花、柿、木製テーブル、窓、雪、川など）を100%忠実に、細部まで丁寧に描き込んでください。
+   - 建物・校門・並木道について語られている場合：レンガや木目の質感、屋根瓦や窓枠、木々の枝葉や木漏れ日、地面の陰影や落ち葉まで細かく表現してください。
+   - 山について語られている場合：鋭角な三角形・ギザギザの険しい岩峰・切り立った山頂・陰影・雪渓をシャープなポリゴンやパス（<polygon>, <path>）でダイナミックに描いてください。
+   - 庭やバラについて語られている場合：青空、木漏れ日、緑の芝生、白いウッドフェンス、鮮やかな真紅のバラ（立体的な花びら・蕾・葉）を豊かに描いてください。
+   - 喫茶店や店内について語られている場合：木目テーブル、コーヒー、クリームソーダ、ペンダントライト、窓などを描いてください。
+2. 背景やモチーフにはグラデーション（<linearGradient>, <radialGradient>）や柔らかいフィルターを効果的に使い、立体感と深みを与えてください。
+3. 【人物・にぎわいの描写ルール】情景に「生徒」「友達」「人」「大勢」などの人物が含まれる場合は、背景だけで終わらせず、必ず前景〜中景の道や校門・広場に【複数の人物（大勢なら8〜15人以上）】を後ろ姿・横向き・遠景の温かいイラスト調ではっきり大きく描いてください（制服・カバン・歩いている動き等も表現し、1つの \`<g id="people-layer">\` にまとめて描くと簡潔です）。
+4. <svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全な整形式SVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
 
-        // 503高負荷やクォータ制限時も即座に代替できるよう多段モデルフォールバックを適用
-        const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-flash'];
-        for (const modelName of candidateModels) {
-          try {
-            logDiag(`AI情景描画を試行中 (${modelName}): 「${title}」`);
-            const resSvg = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
-              {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  contents: [{ parts: [{ text: svgPrompt }] }],
-                  generationConfig: { temperature: 0.3, maxOutputTokens: 6000 }
-                }),
-                signal: AbortSignal.timeout ? AbortSignal.timeout(28000) : undefined
+          const candidateModels = ['gemini-3.5-flash', 'gemini-3.5-flash-lite'];
+          for (const modelName of candidateModels) {
+            try {
+              logDiag(`AI高精細SVG描画を試行中 (${modelName} / 最大180秒): 「${cleanTitle}」`);
+              const resSvg = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    contents: [{ parts: [{ text: svgPrompt }] }],
+                    generationConfig: { temperature: 0.3, maxOutputTokens: 16384 }
+                  }),
+                  signal: AbortSignal.timeout ? AbortSignal.timeout(180000) : undefined
+                }
+              );
+              recordApiCall(resSvg.headers, resSvg.status);
+              if (resSvg.ok) {
+                const dataSvg = await resSvg.json();
+                const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                const validSvg = repairAndValidateSvgJS(rawText);
+                if (validSvg) {
+                  state.lastGeneratedSvgCode = validSvg;
+                  mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(validSvg)}`;
+                  usedModelName = modelName;
+                  dismissCanvasError();
+                  logDiag(`✅ Gemini (${modelName}) による高精細オーダーメイド情景画(SVG)の描画＆XML検証に成功しました！`);
+                  break;
+                } else {
+                  logDiag(`⚠️ モデル ${modelName} のSVG出力がXML検証に失敗しました。次の候補モデルを試行します。`);
+                }
+              } else {
+                logDiag(`モデル ${modelName} 応答ステータス: ${resSvg.status}。次の候補モデルを試行します。`);
               }
-            );
-            recordApiCall(resSvg.headers, resSvg.status);
-            if (resSvg.ok) {
-              const dataSvg = await resSvg.json();
-              const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-              let svgMatch = rawText.match(/<svg[\s\S]*?<\/svg>/i);
-              // 万が一末尾タグ手前で切れていた場合の自己修復
-              if (!svgMatch && rawText.includes('<svg')) {
-                const startIdx = rawText.indexOf('<svg');
-                svgMatch = [rawText.slice(startIdx) + '\n</svg>'];
-              }
-              if (svgMatch && svgMatch[0]) {
-                const cleanSvg = svgMatch[0];
-                mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(cleanSvg)}`;
-                dismissCanvasError();
-                logDiag(`Gemini (${modelName}) によるオーダーメイド情景水彩画(SVG)の描画に成功しました！`);
-                break;
-              }
-            } else {
-              logDiag(`モデル ${modelName} 応答ステータス: ${resSvg.status}。次の候補モデルを試行します。`);
+            } catch (mErr) {
+              logDiag(`モデル ${modelName} エラー: ${mErr.message}。次の候補モデルを試行します。`);
             }
-          } catch (mErr) {
-            logDiag(`モデル ${modelName} エラー: ${mErr.message}。次の候補モデルを試行します。`);
           }
+        } catch (svgErr) {
+          logDiag(`Gemini SVG APIエラー: ${svgErr.message}`);
         }
-      } catch (svgErr) {
-        logDiag(`Gemini SVG API応答なし/タイムアウト: 即座にローカル水彩画エンジンで描画します (${svgErr.message})`);
       }
     }
 
@@ -4147,17 +4753,18 @@ ${artStyle.svgStyleRules}
       user_id: profile.user_id || 'default_user',
       created_at: new Date().toISOString(),
       scene_type: sceneType,
-      title: title,
-      visual_description: elements,
+      title: isRefinement ? `${cleanTitle.replace(' (修正版)', '')} (修正版)` : cleanTitle,
+      visual_description: cleanElements,
       media_format: 'image',
       media_url: mediaDataUrl,
       ambient_sound: ambientSound,
       is_fallback: isFallback,
-      is_blank: isBlank
+      is_blank: isBlank,
+      model_summary: usedModelName || 'なし'
     };
 
     state.sessionMemories.push(artifact);
-    state.sessionTopics.push(title);
+    state.sessionTopics.push(artifact.title);
     saveMemoryToLocalStorage(artifact);
     return artifact;
   }
@@ -4176,26 +4783,29 @@ ${artStyle.svgStyleRules}
   }
 
   async function handleDirectMediaGeneration(ws, callId, funcName, args) {
+    const mySeqId = ++state.drawSequenceId;
+    state.isDrawingMedia = true;
     try {
-      const mySeqId = ++state.drawSequenceId;
       const isRefinement = (funcName === 'refine_memory_visual') || !!args.user_feedback;
       const feedback = (args.user_feedback || '').trim();
       const latestUserTopic = state.sessionTopics[state.sessionTopics.length - 1] || '';
       const rawElements = args.visual_elements || args.updated_visual_elements || feedback || latestUserTopic;
+      const summaryStr = buildCollectorSummaryText();
 
       let combinedElements = '';
       if (isRefinement && feedback) {
-        // 修正指示がある場合は、前回の絵に対する変更点を絶対最優先で明記！
         combinedElements = `【最優先の修正指示（直前の絵をこの通りに変更・描き直し）】: ${feedback} / 【修正後の全体情景】: ${rawElements}`;
         state.lastDrawnUtterance = feedback;
       } else {
-        combinedElements = latestUserTopic
-          ? `【最新の会話内容（最優先）】: ${latestUserTopic} / 【情景描写】: ${rawElements}`
-          : rawElements;
+        const parts = [];
+        if (summaryStr) parts.push(`【聞き取り6ステップ要約】: ${summaryStr}`);
+        if (rawElements) parts.push(`【情景描写】: ${rawElements}`);
+        else if (latestUserTopic) parts.push(`【最新の会話内容】: ${latestUserTopic}`);
+        combinedElements = parts.join(' / ');
         if (latestUserTopic) state.lastDrawnUtterance = latestUserTopic;
       }
 
-      const finalTitle = args.japanese_title || (isRefinement && feedback ? `${feedback}に修正` : '') || latestUserTopic.slice(0, 18) || '思い出の風景';
+      const finalTitle = args.japanese_title || (isRefinement && feedback ? `${feedback}に修正` : '') || state.sceneCollector.topic || latestUserTopic.slice(0, 18) || '思い出の風景';
 
       const enrichedArgs = {
         ...args,
@@ -4208,6 +4818,9 @@ ${artStyle.svgStyleRules}
       const artifact = await generateStandaloneMemoryArtifact(enrichedArgs);
       if (mySeqId === state.drawSequenceId) {
         displayGeneratedMedia(artifact);
+        state.sceneCollector.status = 'drawn';
+        state.sceneCollector.isAwaitingConfirmation = false;
+        renderSceneCollectorUI();
       }
 
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -4217,7 +4830,13 @@ ${artStyle.svgStyleRules}
               {
                 id: callId,
                 name: funcName,
-                response: { output: { status: 'displayed_on_canvas', title: artifact.title } }
+                response: {
+                  output: {
+                    status: 'displayed_on_canvas',
+                    title: artifact.title,
+                    message: 'キャンバスに絵が表示されました。感想を尋ね、「この雰囲気でよいでしょうか？もし描き直したいところがあれば教えてくださいね」と優しく声をかけてください。'
+                  }
+                }
               }
             ]
           }
@@ -4225,7 +4844,14 @@ ${artStyle.svgStyleRules}
       }
     } catch (err) {
       console.error('Direct media generation error:', err);
-      setAvatarState('listening');
+    } finally {
+      state.isDrawingMedia = false;
+      dom.drawingOverlay?.classList.add('hidden');
+      if (mySeqId === state.drawSequenceId) {
+        updateDrawButtonsCooldownUI();
+        renderSceneCollectorUI();
+        setAvatarState('listening');
+      }
     }
   }
 
@@ -5992,6 +6618,8 @@ ${artStyle.svgStyleRules}
         const promptText = targetStep
           ? `ご本人が${STEP_LABELS[targetStep]}の修正・再聞き取りを希望されました。「かしこまりました！${STEP_LABELS[targetStep]}についてもう一度教えていただけますか？」と優しく声に出して尋ねてください。`
           : `ご本人が聞き取り内容の修正・再聞き取りを希望されました（現在の内容：${summaryStr}）。「かしこまりました！もう一度お伺いしますね。どの項目を修正・追加しましょうか？」と優しく声に出して尋ねてください。`;
+        state.directLastAiPromptTime = Date.now();
+        state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
         state.socket.send(JSON.stringify({
           client_content: {
             turns: [{ role: 'user', parts: [{ text: promptText }] }],
