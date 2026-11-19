@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_04';
-  const APP_VERSION_TITLE = '2026-11-19 escapeHtml未定義クラッシュ修正（updateExtractedWordsCard停止の根本解消）';
+  const APP_VERSION = 'v20261119_05';
+  const APP_VERSION_TITLE = '2026-11-19 確認まとめの途中途切れ・割り込み中断（interrupted）からの無条件自動完走リカバリー強化';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -1833,7 +1833,7 @@ ${levelRules}
     // ・すでにAIが確認質問を発話済みなら、20秒間無音が続いた場合に優しく催促発話する
     const isConfirmingPhase = sc.status === 'confirming' || sc.status === 'ready' || sc.aiHasAskedConfirmation;
     if (isConfirmingPhase) {
-      if (!sc.aiHasAskedConfirmation && silenceMs >= 4500 && !state.isAiSpeaking) {
+      if ((!sc.aiHasAskedConfirmation || !aiEndedWithQuestion) && silenceMs >= 4500 && !state.isAiSpeaking) {
         state.lastAiSpeechFinishedTime = now;
         state.currentSilenceSec = 0;
         triggerSilenceFollowUp('confirm_prompt_20s');
@@ -2639,10 +2639,23 @@ ${levelRules}
         const sc = msg.serverContent || msg.server_content;
         if (sc) {
           if (sc.interrupted) {
+            const partialAi = (state.currentAiTurnTranscript || '').trim();
             if (Date.now() < (state.directEchoGuardUntil || 0) || state.isAiSpeaking) {
               logDiag('[EchoGuard] AI発話中の誤割り込み(interrupted)を無視しました');
             } else {
               state.wasAiInterrupted = true;
+            }
+            // 確認まとめ中に割り込みで途切れた場合、turnCompleteが来なくても自動完走リカバリーを予約する
+            const col = state.sceneCollector;
+            if (
+              partialAi &&
+              (col.status === 'confirming' || col.status === 'ready') &&
+              !state.isDrawingMedia &&
+              !['よろしいですか', 'よろしいでしょうか', '描いてよろしい', '描いてもよろしい', '描きましょうか', '？', '?'].some(kw => partialAi.includes(kw))
+            ) {
+              state.lastAiUtteranceText = partialAi;
+              state.currentAiTurnTranscript = '';
+              recoverDirectTruncatedConfirmation(ws, partialAi);
             }
           }
 
@@ -2733,12 +2746,13 @@ ${levelRules}
               updateSceneCollectorFromText(finishedAiTxt, 'ai');
 
               const col = state.sceneCollector;
-              // (A) 確認まとめの途中途切れ・または⑥完了後に確認質問を言わずに終わった場合のリカバリー
+              // (A) 確認まとめの途中途切れ・または⑥完了後に確認質問を言わずに終わった場合は無条件でリカバリー
+              const isDrawAnnounce = ['今から描', '描いてみます', '絵にしてみます', '描き直します', '少しだけ待って'].some(w => finishedAiTxt.includes(w));
               if (
                 (col.status === 'confirming' || col.status === 'ready') &&
                 !state.isDrawingMedia &&
-                !['よろしいですか', 'よろしいでしょうか', '描いてよろしい', '描いてもよろしい', '描きましょうか', '？', '?'].some(kw => finishedAiTxt.includes(kw)) &&
-                (!col.aiHasAskedConfirmation || finishedAiTxt.includes('一通りお話を伺いました') || finishedAiTxt.includes('復唱します') || finishedAiTxt.includes('まとめます'))
+                !isDrawAnnounce &&
+                !['よろしいですか', 'よろしいでしょうか', '描いてよろしい', '描いてもよろしい', '描きましょうか', '？', '?'].some(kw => finishedAiTxt.includes(kw))
               ) {
                 recoverDirectTruncatedConfirmation(ws, finishedAiTxt);
               }
