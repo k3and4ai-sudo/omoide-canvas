@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_05';
-  const APP_VERSION_TITLE = '2026-11-19 確認まとめの途中途切れ・割り込み中断（interrupted）からの無条件自動完走リカバリー強化';
+  const APP_VERSION = 'v20261119_06';
+  const APP_VERSION_TITLE = '2026-11-19 入力済みステップの再質問ループ（①の繰り返し）を根本解消（未入力の次ステップへ自動進行）';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -1961,16 +1961,31 @@ ${levelRules}
             details: '「⑤様子についてお聞きします。周りにどんなものが見えましたか？」',
             mood: '「⑥雰囲気についてお聞きします。その時はどんなお気持ちでしたか？」'
           };
-          const qText = directStepQuestions[sc.activeStep] || directStepQuestions.topic;
-          if (reason === 'after_user_speech' && lastUserText) {
-            const stepPrefixMap = {
-              topic: '①テーマ', place: '②場所', weather: '③天候',
-              people: '④登場人物', details: '⑤様子', mood: '⑥雰囲気'
-            };
-            const sPrefix = stepPrefixMap[sc.activeStep] || 'お話の内容';
-            promptText = `お父さんが「${lastUserText}」とお話しになりました。まず「${sPrefix}について復唱します。${lastUserText}ですね。」と短く復唱してから、続けて ${qText} と声に出して尋ねてください。`;
+          const stepPrefixMap = {
+            topic: '①テーマ', place: '②場所', weather: '③天候',
+            people: '④登場人物', details: '⑤様子', mood: '⑥雰囲気'
+          };
+          const prevStep = sc.activeStep;
+          const nextPendingStep = (sc.stepStates[sc.activeStep] === 'filled' || sc.stepStates[sc.activeStep] === 'skipped')
+            ? (COLLECTOR_STEPS.find(s => sc.stepStates[s] === 'pending') || 'confirm')
+            : sc.activeStep;
+          if (nextPendingStep === 'confirm') {
+            sc.status = 'confirming';
+            sc.activeStep = 'confirm';
+            renderSceneCollectorUI();
+            promptText = `6ステップの聞き取りが一通り完了しました（${summaryStr}）。「一通りお話を伺いました！${summaryStr}、という内容でよろしいでしょうか？よろしければこのまま絵を描きますね！」と優しく声に出して確認してください。`;
           } else {
-            promptText = `続けて ${qText} と1文だけで優しく声に出して尋ねてください。`;
+            if (nextPendingStep !== sc.activeStep) {
+              sc.activeStep = nextPendingStep;
+              renderSceneCollectorUI();
+            }
+            const qText = directStepQuestions[nextPendingStep] || directStepQuestions.topic;
+            if (reason === 'after_user_speech' && lastUserText) {
+              const sPrefix = stepPrefixMap[prevStep] || 'お話の内容';
+              promptText = `お父さんが「${lastUserText}」とお話しになりました。まず「${sPrefix}について復唱します。${lastUserText}ですね。」と短く復唱してから、続けて ${qText} と声に出して尋ねてください。`;
+            } else {
+              promptText = `続けて ${qText} と1文だけで優しく声に出して尋ねてください。`;
+            }
           }
         }
         state.directLastAiPromptTime = Date.now();
@@ -2207,8 +2222,23 @@ ${levelRules}
       let promptText = '';
       if (sc.status === 'collecting') {
         const sPrefix = stepPrefixMap[savedStep] || 'お話の内容';
-        const nextQ = stepQuestions[sc.activeStep] || stepQuestions.topic;
-        promptText = `お父さんが「${text}」とお話しになりました。まず「${sPrefix}について復唱します。${text}ですね。」と短く復唱してから、続けて ${nextQ} と声に出して尋ねてください。`;
+        const nextPending = (sc.stepStates[sc.activeStep] === 'filled' || sc.stepStates[sc.activeStep] === 'skipped')
+          ? (COLLECTOR_STEPS.find(s => sc.stepStates[s] === 'pending') || 'confirm')
+          : sc.activeStep;
+        if (nextPending === 'confirm') {
+          sc.status = 'confirming';
+          sc.activeStep = 'confirm';
+          renderSceneCollectorUI();
+          const summaryStr = buildCollectorSummaryText();
+          promptText = `お父さんが「${text}」とお話しになりました。まず「${sPrefix}について復唱します。${text}ですね。」と短く復唱してから、「一通りお話を伺いました！${summaryStr}、という内容でよろしいでしょうか？」と尋ねてください。`;
+        } else {
+          if (nextPending !== sc.activeStep) {
+            sc.activeStep = nextPending;
+            renderSceneCollectorUI();
+          }
+          const nextQ = stepQuestions[nextPending] || stepQuestions.topic;
+          promptText = `お父さんが「${text}」とお話しになりました。まず「${sPrefix}について復唱します。${text}ですね。」と短く復唱してから、続けて ${nextQ} と声に出して尋ねてください。`;
+        }
       } else if (sc.status === 'confirming' || sc.status === 'ready') {
         if (checkUserUtteranceForDrawApprovalDirect(text)) {
           logDiag('🎨 [直結フォールバック] 確認フェーズの承認に対して無応答のため描画を起動します');
@@ -2270,8 +2300,22 @@ ${levelRules}
           details: '「⑤様子についてお聞きします。周りにどんなものが見えましたか？」',
           mood: '「⑥雰囲気についてお聞きします。その時はどんなお気持ちでしたか？」'
         };
-        const qText = stepQuestions[sc.activeStep] || stepQuestions.topic;
-        promptText = `お父さんが「${uText}」とお話しになりました。短く復唱してから、続けて ${qText} と声に出して尋ねてください。`;
+        const nextPending = (sc.stepStates[sc.activeStep] === 'filled' || sc.stepStates[sc.activeStep] === 'skipped')
+          ? (COLLECTOR_STEPS.find(s => sc.stepStates[s] === 'pending') || 'confirm')
+          : sc.activeStep;
+        if (nextPending === 'confirm') {
+          sc.status = 'confirming';
+          sc.activeStep = 'confirm';
+          renderSceneCollectorUI();
+          promptText = `お父さんが「${uText}」とお話しになりました。短く復唱してから、「一通りお話を伺いました！${summaryStr}、という内容でよろしいでしょうか？」と尋ねてください。`;
+        } else {
+          if (nextPending !== sc.activeStep) {
+            sc.activeStep = nextPending;
+            renderSceneCollectorUI();
+          }
+          const qText = stepQuestions[nextPending] || stepQuestions.topic;
+          promptText = `お父さんが「${uText}」とお話しになりました。短く復唱してから、続けて ${qText} と声に出して尋ねてください。`;
+        }
       } else {
         promptText = `お父さんが「${uText}」とお話しになりました。温かく共感して返答してください。`;
       }
@@ -2350,8 +2394,14 @@ ${levelRules}
       }
 
       let effectiveStep = sc.activeStep;
-      if (wasEchoTruncated && effectiveStep === scheduledStep) {
+      if (sc.stepStates[effectiveStep] === 'filled' || sc.stepStates[effectiveStep] === 'skipped') {
+        effectiveStep = COLLECTOR_STEPS.find(s => sc.stepStates[s] === 'pending') || 'confirm';
+      } else if (wasEchoTruncated && effectiveStep === scheduledStep) {
         effectiveStep = nextStepMap[scheduledStep] || scheduledStep;
+      }
+      if (effectiveStep !== 'confirm' && effectiveStep !== sc.activeStep) {
+        sc.activeStep = effectiveStep;
+        renderSceneCollectorUI();
       }
       const q = stepQuestions[effectiveStep] || stepQuestions.topic;
       let recMsg = '';
