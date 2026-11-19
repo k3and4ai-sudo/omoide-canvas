@@ -1703,16 +1703,20 @@ ${levelRules}
     }
   }
 
-  function activateSessionUI() {
+  function activateSessionUI(isReconnect = false) {
     state.isConnected = true;
     state.isSessionActive = true;
-    state.sessionStartTime = Date.now();
+    state.sessionStartTime = isReconnect && state.sessionStartTime ? state.sessionStartTime : Date.now();
     state.lastUserSpeechActivityTime = Date.now();
     state.lastAiSpeechFinishedTime = Date.now();
     state.isUserTranscribing = false;
     state.currentSilenceSec = 0;
     state.hasUnansweredUserTurn = false;
-    state.hasCompletedInitialGreeting = false;
+    if (!isReconnect) {
+      state.hasCompletedInitialGreeting = false;
+    } else {
+      state.hasCompletedInitialGreeting = true;
+    }
     state.followUpCountSinceLastUserSpeech = 0;
     if (state.audioContextIn && state.audioContextIn.state === 'suspended') {
       state.audioContextIn.resume();
@@ -1722,7 +1726,9 @@ ${levelRules}
     dom.btnSessionToggle.classList.add('active');
     dom.btnSessionToggle.innerHTML = '<span class="btn-icon">⏹️</span><span class="btn-text">お話を終了する</span>';
     dom.sessionHint.textContent = 'ボタンを押すと、いつでもお話を終了できます';
-    dom.userTranscriptText.textContent = '「お話しください...（声が文字になります）」';
+    if (!isReconnect) {
+      dom.userTranscriptText.textContent = '「お話しください...（声が文字になります）」';
+    }
     setAvatarState('listening');
     if (!state.oscilloscopeAnimId) {
       startOscilloscope();
@@ -1811,8 +1817,6 @@ ${levelRules}
     //    （直結モードは5.5秒フォールバックと競合しないよう10.0秒、バックエンド接続時は12.0秒で二重発火防止）
     const userWaitMs = state.isDirectGeminiWs ? 10000 : 12000;
     if (state.hasUnansweredUserTurn && userSilenceMs >= userWaitMs && !state.isAiSpeaking) {
-      state.lastAiSpeechFinishedTime = now;
-      state.currentSilenceSec = 0;
       triggerSilenceFollowUp('after_user_speech');
       return;
     }
@@ -1834,25 +1838,19 @@ ${levelRules}
     const isConfirmingPhase = sc.status === 'confirming' || sc.status === 'ready' || sc.aiHasAskedConfirmation;
     if (isConfirmingPhase) {
       if ((!sc.aiHasAskedConfirmation || !aiEndedWithQuestion) && silenceMs >= 4500 && !state.isAiSpeaking) {
-        state.lastAiSpeechFinishedTime = now;
-        state.currentSilenceSec = 0;
         triggerSilenceFollowUp('confirm_prompt_20s');
         return;
       }
       if (silenceMs >= 20000 && !state.isAiSpeaking) {
-        state.lastAiSpeechFinishedTime = now;
-        state.currentSilenceSec = 0;
         triggerSilenceFollowUp('confirm_prompt_20s');
         return;
       }
       return;
     }
 
-    // (2b) 通常会話（idle）の場合：お父さんがゆっくりお話しできるよう15秒待機
+    // (2b) 通常会話（idle）の場合：お父さんがゆっくりお話しできるよう15秒待機（最大2回まで優しく声かけ）
     if (sc.status === 'idle') {
-      if (silenceMs >= 15000 && followUpCount === 0) {
-        state.lastAiSpeechFinishedTime = now;
-        state.currentSilenceSec = 0;
+      if ((followUpCount === 0 && silenceMs >= 15000) || (followUpCount === 1 && silenceMs >= 35000)) {
         triggerSilenceFollowUp('idle_silence');
         return;
       }
@@ -1860,28 +1858,22 @@ ${levelRules}
     }
 
     // (2c) 聞き取り中（collecting）：
-    // ・AIの直前の発話が質問で終わっていない（途中中断等）：無音3.0秒で次の質問を促す
-    // ・現在ステップの質問がまだAIから出ていない：無音3.0秒で直ちに質問させる
+    // ・AIの直前の発話が質問で終わっていない（途中中断等）：無音で次の質問を促す
+    // ・現在ステップの質問がまだAIから出ていない：直ちに質問させる
     // ・すでに現在ステップの質問をAIが投げかけてお父さんの返答を待っている最中：
-    //   文章が途切れても最後までじっくり聞くため、20秒間無音が続いた場合のみ1回優しく催促する
+    //   文章が途切れても最後までじっくり聞くため、20秒間無音が続いた場合のみ優しく催促する
     if (sc.status === 'collecting') {
       const alreadyAskedStep = aiEndedWithQuestion && didAiAskCurrentStep(lastAiText, sc.activeStep);
       const collectWaitMs = state.isDirectGeminiWs ? 8000 : 12000;
       if ((!aiEndedWithQuestion || state.wasAiInterrupted) && silenceMs >= collectWaitMs && followUpCount === 0) {
-        state.lastAiSpeechFinishedTime = now;
-        state.currentSilenceSec = 0;
         triggerSilenceFollowUp('ai_no_question');
         return;
       }
       if (!alreadyAskedStep && silenceMs >= collectWaitMs && followUpCount === 0) {
-        state.lastAiSpeechFinishedTime = now;
-        state.currentSilenceSec = 0;
         triggerSilenceFollowUp('listening_next_step');
         return;
       }
       if (silenceMs >= 20000) {
-        state.lastAiSpeechFinishedTime = now;
-        state.currentSilenceSec = 0;
         triggerSilenceFollowUp('listening_stall_20s');
         return;
       }
@@ -1907,6 +1899,8 @@ ${levelRules}
     }
 
     const now = Date.now();
+    state.lastAiSpeechFinishedTime = now;
+    state.currentSilenceSec = 0;
     state.lastFollowUpTriggerTime = now;
     state.hasUnansweredUserTurn = false;
     state.wasAiInterrupted = false;
@@ -2568,9 +2562,9 @@ ${levelRules}
           realtimeInputConfig: {
             automatic_activity_detection: {
               disabled: false,
-              start_of_speech_sensitivity: 'START_SENSITIVITY_LOW',
+              start_of_speech_sensitivity: 'START_SENSITIVITY_HIGH',
               end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
-              prefix_padding_ms: 200,
+              prefix_padding_ms: 500,
               silence_duration_ms: 2200
             }
           },
@@ -2642,7 +2636,8 @@ ${levelRules}
         // 1. セットアップ完了通知
         if (msg.setupComplete !== undefined || msg.setup_complete !== undefined) {
           setupCompleted = true;
-          activateSessionUI();
+          state.directReconnectAttempts = 0;
+          activateSessionUI(isReconnect);
           const cleanName = (profile.call_name || 'お父さん').replace(/\s*さん$/, '');
           const pName = partner.name || 'さくら';
           dom.avatarContainer.setAttribute('data-gender', partner.gender || '女性');
@@ -2942,20 +2937,29 @@ ${levelRules}
         clearInterval(state.keepaliveIntervalId);
         state.keepaliveIntervalId = null;
       }
-      // ユーザーが終了ボタンを押しておらず、放置タイムアウト等で切れた場合は自動再接続！
-      if (!state.userRequestedStop && state.isSessionActive && setupCompleted) {
-        logDiag('長時間経過によるセッション更新のため、自動再接続しています...');
-        setTimeout(() => {
-          if (!state.userRequestedStop && state.isSessionActive) {
-            connectDirectGeminiLiveWebSocket(true);
-          }
-        }, 800);
-        return;
+      // ユーザーが終了ボタンを押しておらず、放置タイムアウト等で切れた場合は最大3回まで自動再接続！
+      if (!state.userRequestedStop && state.isSessionActive) {
+        const attempts = (state.directReconnectAttempts || 0) + 1;
+        if (setupCompleted || attempts <= 3) {
+          state.directReconnectAttempts = setupCompleted ? 0 : attempts;
+          const retryDelayMs = setupCompleted ? 800 : Math.min(4000, attempts * 1200);
+          logDiag(`接続が切断されました (code=${ev.code})。自動再接続しています... (試行 ${attempts})`);
+          setTimeout(() => {
+            if (!state.userRequestedStop && state.isSessionActive) {
+              connectDirectGeminiLiveWebSocket(true);
+            }
+          }, retryDelayMs);
+          return;
+        }
       }
       if (!setupCompleted) {
         logDiag(`Gemini Live 接続が閉じられました (code=${ev.code})`);
       }
       stopSessionCleanup();
+      if (!state.userRequestedStop) {
+        updateStatus('接続が切れました。「お話をはじめる」を押して再開してください。', false);
+        setAvatarState('idle');
+      }
     };
 
     ws.onerror = (err) => {
