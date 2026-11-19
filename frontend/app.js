@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_12';
-  const APP_VERSION_TITLE = '2026-11-19 追い打ち二重返答による聞き取り潰し根絶・描画中マイク遮断でフライング確認防止・503回避高速描画';
+  const APP_VERSION = 'v20261119_13';
+  const APP_VERSION_TITLE = '2026-11-19 WebAudioノードGC回収によるマイク無音化を根絶・直結無音フレーム間引き最適化・AudioContext自動復帰';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -3169,9 +3169,17 @@ ${levelRules}
       try { state.micSourceNode.disconnect(); } catch (e) {}
       state.micSourceNode = null;
     }
+    if (state.audioFilterNode) {
+      try { state.audioFilterNode.disconnect(); } catch (e) {}
+      state.audioFilterNode = null;
+    }
     if (state.processorNode) {
       try { state.processorNode.disconnect(); } catch (e) {}
       state.processorNode = null;
+    }
+    if (state.zeroGainNode) {
+      try { state.zeroGainNode.disconnect(); } catch (e) {}
+      state.zeroGainNode = null;
     }
     if (state.analyserNode) {
       try { state.analyserNode.disconnect(); } catch (e) {}
@@ -3273,6 +3281,7 @@ ${levelRules}
       const isAboveFloor = (rms >= (preset.rms * 0.7)) || (isRecognizingUser && rms >= 0.0006);
 
       if (isAboveFloor) {
+        vadSilenceChunks = 0;
         if (voiceHangoverChunks <= 0 && preSpeechRingBuffer.length > 0) {
           for (const preBuf of preSpeechRingBuffer) {
             sendPcmAudioChunk(preBuf);
@@ -3283,6 +3292,7 @@ ${levelRules}
         state.lastVoiceActiveTime = Date.now();
         sendPcmAudioChunk(pcm16.buffer);
       } else if (voiceHangoverChunks > 0) {
+        vadSilenceChunks = 0;
         voiceHangoverChunks--;
         sendPcmAudioChunk(pcm16.buffer);
       } else {
@@ -3290,13 +3300,18 @@ ${levelRules}
         if (preSpeechRingBuffer.length > 16) {
           preSpeechRingBuffer.shift();
         }
-        // 周囲音・テレビ音カット時：Gemini Liveに完全無音（0x00）を送信し、VAD発話を即座に終了させて返答を促す
-        const zeroPcm = new Int16Array(downsampledData.length);
-        sendPcmAudioChunk(zeroPcm.buffer);
+        vadSilenceChunks++;
+        // 発話終了直後の約3秒間（150チャンク）は毎フレーム無音を送ってGemini VADに発話終了を確実に伝え、
+        // それ以降の長い無音中は直結WebSocketの過密送信を防ぐため約0.5秒に1回へ間引く
+        if (!state.isDirectGeminiWs || vadSilenceChunks <= 150 || (vadSilenceChunks % 24 === 0)) {
+          const zeroPcm = new Int16Array(downsampledData.length);
+          sendPcmAudioChunk(zeroPcm.buffer);
+        }
       }
     };
 
     // 120Hz ハイパスフィルター（エアコン・空調・テレビの低域・反響ノイズをカット）
+    // ※GC回収によるマイク音声経路切断を防ぐため必ず state に参照保持する
     let audioFilterNode = null;
     try {
       audioFilterNode = audioContext.createBiquadFilter();
@@ -3305,15 +3320,17 @@ ${levelRules}
       audioFilterNode.Q.value = 0.707;
       source.connect(audioFilterNode);
       audioFilterNode.connect(processor);
+      state.audioFilterNode = audioFilterNode;
     } catch (e) {
       source.connect(processor);
     }
 
-    // マイクスルー（ハウリング）防止用の無音GainNodeを介してdestinationへ接続
+    // マイクスルー（ハウリング）防止用の無音GainNodeを介してdestinationへ接続（GC防止のため state 保持）
     const zeroGain = audioContext.createGain();
     zeroGain.gain.value = 0;
     processor.connect(zeroGain);
     zeroGain.connect(audioContext.destination);
+    state.zeroGainNode = zeroGain;
     state.processorNode = processor;
   }
 
