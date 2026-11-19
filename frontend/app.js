@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_14';
-  const APP_VERSION_TITLE = '2026-11-19 自動再接続時の聞き取り済み文脈引き継ぎ・標準モード生PCM送信で聞き取り精度向上・語尾途切れ防止余韻450ms化';
+  const APP_VERSION = 'v20261120_01';
+  const APP_VERSION_TITLE = '2026-11-20 直結PCM品質改善(4096/平均化ダウンサンプル)・VAD応答改善・不要リカバリー抑止・文字起こし無反応時の自動再接続復旧';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -154,6 +154,10 @@
     directLastAiPromptTime: 0,      // 直結モード時の自動リカバリー/催促プロンプト最終送信時刻
     directToolCalledInTurn: false,  // 直結モード時の当該ターン内ツール呼び出し有無
     directEchoGuardUntil: 0,        // 直結モード時のエコーガード終了時刻 (ms)
+    directPcmSentChunks: 0,         // 直結モード時の送信済みPCMチャンク数（VAD無反応検知用）
+    directLastMicSpeechRmsTime: 0,  // 直結モード時のマイク音声検知（RMS>=0.008）最終時刻
+    directLastMicPeakRms: 0,        // 直結モード時の直近マイクピークRMS
+    directLastVadRecoveryTime: 0,   // 直結モード時のVAD無反応自動再接続の最終実行時刻
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
     aiSpeechEndTimer: null,         // AI発話終了判定タイマー
     noiseGateMode: 'normal',        // 現在の周囲音対策モード（標準感度デフォルト）
@@ -1808,6 +1812,32 @@ ${levelRules}
 
     state.currentSilenceSec = silenceMs / 1000;
 
+    // (0) 直結モード専用：マイク音声(RMS)は送信しているのに Gemini Live から文字起こしもAI返答も一切来ない
+    //     「VAD無反応（デフ）状態」を自動検知して、文脈を引き継いだままWebSocketを再接続復旧する
+    if (
+      state.isDirectGeminiWs &&
+      state.socket &&
+      state.socket.readyState === WebSocket.OPEN &&
+      (sc.status === 'collecting' || sc.status === 'confirming' || sc.status === 'ready') &&
+      state.directPcmSentChunks > 20 &&
+      state.directLastMicSpeechRmsTime > lastAiEnd + 500 &&
+      (now - state.directLastMicSpeechRmsTime) >= 4500 &&
+      (now - Math.max(state.directLastGeminiInputTime || 0, lastAiEnd)) >= 12000 &&
+      (now - (state.directLastVadRecoveryTime || 0)) >= 25000
+    ) {
+      state.directLastVadRecoveryTime = now;
+      const peakStr = (state.directLastMicPeakRms || 0).toFixed(4);
+      logDiag(`⚠️ [VAD無反応検知] マイク音声送信中(chunks=${state.directPcmSentChunks}, peakRMS=${peakStr})だがGemini文字起こし応答がないため自動再接続して復旧します (step=${sc.activeStep})`);
+      state.directLastMicSpeechRmsTime = 0;
+      state.directLastMicPeakRms = 0;
+      try {
+        state.socket.close(4000, 'vad_stall_recovery');
+      } catch (e) {
+        connectDirectGeminiLiveWebSocket(true);
+      }
+      return;
+    }
+
     // フォローアップ送信直後の最低待機（直結モードもバックエンド同等リカバリー搭載のため10.0秒統一）
     const minCooldownMs = state.isDirectGeminiWs ? 9000 : 10000;
     if (sinceLastFollowUp < minCooldownMs) {
@@ -1877,7 +1907,7 @@ ${levelRules}
         triggerSilenceFollowUp('listening_next_step');
         return;
       }
-      if (silenceMs >= 30000 && followUpCount === 0) {
+      if (silenceMs >= 30000 && followUpCount < 2) {
         triggerSilenceFollowUp('listening_stall_20s');
         return;
       }
@@ -2612,9 +2642,9 @@ ${levelRules}
             automatic_activity_detection: {
               disabled: false,
               start_of_speech_sensitivity: 'START_SENSITIVITY_HIGH',
-              end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
+              end_of_speech_sensitivity: 'END_SENSITIVITY_HIGH',
               prefix_padding_ms: 500,
-              silence_duration_ms: 2200
+              silence_duration_ms: 1200
             }
           },
           tools: [
@@ -2686,6 +2716,9 @@ ${levelRules}
         if (msg.setupComplete !== undefined || msg.setup_complete !== undefined) {
           setupCompleted = true;
           state.directReconnectAttempts = 0;
+          state.directPcmSentChunks = 0;
+          state.directLastMicSpeechRmsTime = 0;
+          state.directLastMicPeakRms = 0;
           activateSessionUI(isReconnect);
           const cleanName = (profile.call_name || 'お父さん').replace(/\s*さん$/, '');
           const pName = partner.name || 'さくら';
@@ -2841,6 +2874,7 @@ ${levelRules}
                 state.followUpCountSinceLastUserSpeech = 0;
                 state.sessionTopics.push(uText);
                 dom.userTranscriptText.textContent = `「${uText}」`;
+                logDiag(`🎤 [直結文字起こし] 「${uText}」`);
                 updateSceneCollectorFromText(uText, 'user');
                 // 描画完了後（満足→保存確認→保存/終了）の判定
                 if (!handleUserUtteranceAfterDrawnDirect(uText)) {
@@ -2889,7 +2923,7 @@ ${levelRules}
               else if (
                 col.status === 'collecting' &&
                 !state.isDrawingMedia &&
-                !/(?:でしょうか|ますか|ましょうか|ですか|かな|教えて|聞かせて|？|\?)/.test(finishedAiTxt) &&
+                !/(?:でしょうか|ますか|ましょうか|ですか|かな|教えて|聞かせて|お聞きします|どうでした|いかが|どなた|どんな|？|\?)/.test(finishedAiTxt) &&
                 !['今から描', '描いてみます', '絵にしてみます', '描き直します'].some(w => finishedAiTxt.includes(w))
               ) {
                 recoverDirectCollectingQuestion(ws, finishedAiTxt);
@@ -3230,8 +3264,8 @@ ${levelRules}
     const source = state.micSourceNode || audioContext.createMediaStreamSource(state.micStream);
     const actualSampleRate = audioContext.sampleRate;
 
-    // バッファサイズ 1024 サンプル（約21ms〜64ms毎）で超低遅延ストリーミング
-    const bufferSize = 1024;
+    // バッファサイズ 4096 サンプル（48kHzで約85ms毎・約11.7fps）でGemini Live推奨チャンク幅に最適化
+    const bufferSize = 4096;
     const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
     const chunkMs = (bufferSize / actualSampleRate) * 1000;
 
@@ -3263,15 +3297,20 @@ ${levelRules}
 
       const inputData = e.inputBuffer.getChannelData(0);
 
-      // デバイスのサンプルレート（例: 48000Hz）から 16000Hz へダウンサンプリング
+      // デバイスのサンプルレート（例: 48000Hz）から 16000Hz へ区間平均化ダウンサンプリング（エイリアシング防止・子音認識精度向上）
       let downsampledData = inputData;
       if (actualSampleRate !== SAMPLE_RATE_IN) {
         const ratio = actualSampleRate / SAMPLE_RATE_IN;
-        const newLength = Math.round(inputData.length / ratio);
+        const newLength = Math.floor(inputData.length / ratio);
         downsampledData = new Float32Array(newLength);
         for (let i = 0; i < newLength; i++) {
-          const idx = Math.min(inputData.length - 1, Math.floor(i * ratio));
-          downsampledData[i] = inputData[idx];
+          const startIdx = Math.floor(i * ratio);
+          const endIdx = Math.min(inputData.length, Math.max(startIdx + 1, Math.floor((i + 1) * ratio)));
+          let acc = 0;
+          for (let j = startIdx; j < endIdx; j++) {
+            acc += inputData[j];
+          }
+          downsampledData[i] = acc / (endIdx - startIdx);
         }
       }
 
@@ -3306,6 +3345,13 @@ ${levelRules}
       // ・テレビ・周囲音カット（tv_cut / strict / ultra）選択時のみRMSしきい値ゲートを適用する
       if (state.noiseGateMode === 'normal') {
         state.lastVoiceActiveTime = Date.now();
+        state.directPcmSentChunks = (state.directPcmSentChunks || 0) + 1;
+        if (rms > (state.directLastMicPeakRms || 0)) {
+          state.directLastMicPeakRms = rms;
+        }
+        if (rms >= 0.008) {
+          state.directLastMicSpeechRmsTime = Date.now();
+        }
         sendPcmAudioChunk(pcm16.buffer);
         return;
       }
@@ -5580,7 +5626,7 @@ ${artStyle.svgStyleRules}
     source.start(state.nextPlaybackTime);
     state.nextPlaybackTime += audioBuffer.duration;
 
-    // ハードウェアレベルでの再生完了イベント（タイマーと二重で保護し、最後のチャンク終了後に余韻450msを待って語尾途切れ・エコー回り込みを防止）
+    // ハードウェアレベルでの再生完了イベント（タイマーと二重で保護し、最後のチャンク終了後に余韻220msを待って語尾途切れと語頭欠けを両立）
     source.onended = () => {
       if (ctx.currentTime >= state.nextPlaybackTime - 0.05) {
         setTimeout(() => {
@@ -5594,7 +5640,7 @@ ${artStyle.svgStyleRules}
               state.socket.send(JSON.stringify({ type: 'ai_speech_ended' }));
             }
           }
-        }, 450);
+        }, 220);
       }
     };
 
@@ -5610,8 +5656,8 @@ ${artStyle.svgStyleRules}
     if (state.aiSpeechEndTimer) {
       clearTimeout(state.aiSpeechEndTimer);
     }
-    // スピーカーからの出音余韻マージン（450ms: 語尾がスピーカーから出切る前にマイクが開いて自己割り込みするのを防止）
-    const remainingMs = Math.max(150, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 450);
+    // スピーカーからの出音余韻マージン（220ms: 語尾途切れを防ぎつつユーザーの話し始め欠けを最小化）
+    const remainingMs = Math.max(150, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 220);
     state.aiSpeechEndTimer = setTimeout(() => {
       state.isAiSpeaking = false;
       state.lastAiSpeechFinishedTime = Date.now();
