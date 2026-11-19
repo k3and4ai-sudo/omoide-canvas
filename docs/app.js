@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_09';
-  const APP_VERSION_TITLE = '2026-11-19 描画後の変更・置換修正（例：犬を白いマルチーズに変更）自動再描画セーフティネット＆SVG要素置換対応＋クォータ誤表示解消';
+  const APP_VERSION = 'v20261119_10';
+  const APP_VERSION_TITLE = '2026-11-19 ⑥完了後の即時確認移行・同じセリフ連呼防止・完成直後の保存確認誤爆ガード';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -1841,11 +1841,11 @@ ${levelRules}
     // ・すでにAIが確認質問を発話済みなら、20秒間無音が続いた場合に優しく催促発話する
     const isConfirmingPhase = sc.status === 'confirming' || sc.status === 'ready' || sc.aiHasAskedConfirmation;
     if (isConfirmingPhase) {
-      if ((!sc.aiHasAskedConfirmation || !aiEndedWithQuestion) && silenceMs >= 4500 && !state.isAiSpeaking) {
+      if ((!sc.aiHasAskedConfirmation || !aiEndedWithQuestion) && silenceMs >= 5500 && followUpCount === 0 && !state.isAiSpeaking) {
         triggerSilenceFollowUp('confirm_prompt_20s');
         return;
       }
-      if (silenceMs >= 20000 && !state.isAiSpeaking) {
+      if (silenceMs >= 30000 && followUpCount === 0 && !state.isAiSpeaking) {
         triggerSilenceFollowUp('confirm_prompt_20s');
         return;
       }
@@ -1865,10 +1865,10 @@ ${levelRules}
     // ・AIの直前の発話が質問で終わっていない（途中中断等）：無音で次の質問を促す
     // ・現在ステップの質問がまだAIから出ていない：直ちに質問させる
     // ・すでに現在ステップの質問をAIが投げかけてお父さんの返答を待っている最中：
-    //   文章が途切れても最後までじっくり聞くため、20秒間無音が続いた場合のみ優しく催促する
+    //   お父さんがゆっくり考えて答えられるよう30秒間無音が続いた場合のみ1回だけ優しく催促する
     if (sc.status === 'collecting') {
       const alreadyAskedStep = aiEndedWithQuestion && didAiAskCurrentStep(lastAiText, sc.activeStep);
-      const collectWaitMs = state.isDirectGeminiWs ? 8000 : 12000;
+      const collectWaitMs = state.isDirectGeminiWs ? 10000 : 12000;
       if ((!aiEndedWithQuestion || state.wasAiInterrupted) && silenceMs >= collectWaitMs && followUpCount === 0) {
         triggerSilenceFollowUp('ai_no_question');
         return;
@@ -1877,7 +1877,7 @@ ${levelRules}
         triggerSilenceFollowUp('listening_next_step');
         return;
       }
-      if (silenceMs >= 20000) {
+      if (silenceMs >= 30000 && followUpCount === 0) {
         triggerSilenceFollowUp('listening_stall_20s');
         return;
       }
@@ -2209,6 +2209,11 @@ ${levelRules}
       return true;
     }
     if (!hasModify && approvalWords.some(w => clean.toLowerCase().includes(w)) && sc.status === 'drawn' && !sc.isAwaitingSaveConfirmation) {
+      // 描画完了直後（6秒以内）は、描画前の「それでいいです」や完成案内音声の回り込みによる誤爆を完全防止
+      if (Date.now() - (state.drawnCompletedAt || 0) < 6000) {
+        logDiag(`🛡️ [直結] 描画完了直後のため満足→保存確認の誤発動をブロックしました: 「${clean}」`);
+        return true;
+      }
       logDiag(`✨ [直結] 絵への満足・肯定を検知。保存確認へ移行します: 「${clean}」`);
       promptSaveConfirmationAfterApproval();
       return true;
@@ -2357,18 +2362,23 @@ ${levelRules}
   }
 
   function recoverDirectTruncatedConfirmation(ws, truncatedText) {
+    if ((state.directConfirmRecoveryCount || 0) >= 1) return;
+    if (Date.now() - (state.directLastConfirmRecoveryTime || 0) < 12000) return;
     const scheduledAiTurn = state.aiTurnCounter || 0;
     const attemptRecovery = (retryCount) => {
       const sc = state.sceneCollector;
       if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
       if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') return;
       if ((state.aiTurnCounter || 0) > scheduledAiTurn || (state.currentAiTurnTranscript || '').trim()) return;
+      if ((state.directConfirmRecoveryCount || 0) >= 1) return;
       if (state.isAiSpeaking) {
         if (retryCount < 5) {
           setTimeout(() => attemptRecovery(retryCount + 1), 1500);
         }
         return;
       }
+      state.directConfirmRecoveryCount = (state.directConfirmRecoveryCount || 0) + 1;
+      state.directLastConfirmRecoveryTime = Date.now();
       const profile = state.currentProfile || DEFAULT_USER_PROFILE;
       const nickname = formatUserNickname(profile.call_name);
       const summaryCtx = buildCollectorSummaryText() || state.sessionTopics.slice(-6).join('、');
@@ -2379,7 +2389,7 @@ ${levelRules}
         `そのあとで必ず${nickname}に向かって「この内容で絵を描いてもよろしいでしょうか？」と尋ねてください。`;
       state.directLastAiPromptTime = Date.now();
       state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4500);
-      logDiag(`🔄 [直結] 確認まとめ途中途切れを自動リカバリーします`);
+      logDiag(`🔄 [直結] 確認まとめ途中途切れを自動リカバリーします (1回限り)`);
       ws.send(JSON.stringify({
         client_content: {
           turns: [{ role: 'user', parts: [{ text: recoveryPrompt }] }],
@@ -2387,13 +2397,16 @@ ${levelRules}
         }
       }));
     };
-    setTimeout(() => attemptRecovery(0), 1200);
+    setTimeout(() => attemptRecovery(0), 2500);
   }
 
   function recoverDirectCollectingQuestion(ws, completedAiTurn) {
     const sc = state.sceneCollector;
     const scheduledAiTurn = state.aiTurnCounter || 0;
     const scheduledStep = sc.activeStep;
+    if (state.directLastCollectRecoveryStep === scheduledStep && (Date.now() - (state.directLastCollectRecoveryTime || 0) < 20000)) {
+      return;
+    }
     const wasEchoTruncated = completedAiTurn.includes('復唱') && !completedAiTurn.includes('お聞きします') && !completedAiTurn.includes('ですね');
     const lastUserUtt = (state.lastUserUtteranceText || '').trim();
     const summaryCtx = buildCollectorSummaryText() || state.sessionTopics.slice(-6).join('、');
@@ -2424,6 +2437,11 @@ ${levelRules}
       } else if (wasEchoTruncated && effectiveStep === scheduledStep) {
         effectiveStep = nextStepMap[scheduledStep] || scheduledStep;
       }
+      if (state.directLastCollectRecoveryStep === effectiveStep && (Date.now() - (state.directLastCollectRecoveryTime || 0) < 20000)) {
+        return;
+      }
+      state.directLastCollectRecoveryStep = effectiveStep;
+      state.directLastCollectRecoveryTime = Date.now();
       if (effectiveStep !== 'confirm' && effectiveStep !== sc.activeStep) {
         sc.activeStep = effectiveStep;
         renderSceneCollectorUI();
@@ -2454,7 +2472,7 @@ ${levelRules}
         }
       }));
     };
-    setTimeout(() => attemptRecovery(0), 2000);
+    setTimeout(() => attemptRecovery(0), 3500);
   }
 
   function sanitizeSceneElementsJS(title, elements) {
@@ -5752,6 +5770,10 @@ ${artStyle.svgStyleRules}
 
     const isBlank = !!(mediaData.is_blank || !mediaData.media_url);
     state.currentArtifact = mediaData;
+    state.drawnCompletedAt = Date.now();
+    state.currentUserTurnTranscript = '';
+    state.pendingUserTranscript = '';
+    state.directConfirmRecoveryCount = 0;
     state.sceneCollector.status = 'drawn';
     state.sceneCollector.activeStep = 'drawn';
     state.sceneCollector.aiHasAskedConfirmation = false;
@@ -5763,13 +5785,13 @@ ${artStyle.svgStyleRules}
     state.lastFollowUpTriggerTime = Date.now();
 
     // 【描画完了時の音声確約ガード】
-    // ローカルバックエンド接続時（Gemini Live音声）はGemini側が直接発話するため、
-    // フォールバックは通信障害時のセーフティネットとして7秒待機（二重発話防止）
+    // ローカルバックエンド接続時およびGemini直結モード時はGemini側が直接発話するため、
+    // フォールバックは通信障害時のセーフティネットとして8秒待機（二重発話・早すぎる確認防止）
     if (state.drawnSpeechFallbackTimer) {
       clearTimeout(state.drawnSpeechFallbackTimer);
       state.drawnSpeechFallbackTimer = null;
     }
-    const fallbackDelay = (state.isSimulation || !state.hasLocalBackend) ? 2000 : 7000;
+    const fallbackDelay = (state.isSimulation && !state.isDirectGeminiWs) ? 2000 : 8000;
     state.drawnSpeechFallbackTimer = setTimeout(() => {
       state.drawnSpeechFallbackTimer = null;
       if (!state.isAiSpeaking && state.sceneCollector.status === 'drawn') {
@@ -6461,12 +6483,18 @@ ${artStyle.svgStyleRules}
             logDiag(`✅ 【${def.label}】の復唱内容を確定・抽出: 「${phrase}」`);
             didUpdate = true;
 
-            // 復唱確定によりステップを前進
+            // 復唱確定によりステップを前進（全6項目完了なら即座に確認フェーズへ移行）
             const nextPending = findNextPendingStep(def.step);
             if (nextPending) {
               sc.activeStep = nextPending;
               sc.turnTargetStep = nextPending;
               logDiag(`➡️ さくらさんの復唱確定により「${STEP_LABELS[def.step]}」完了 → 次の項目へ進行: 「${STEP_LABELS[nextPending]}」`);
+            } else if (sc.status === 'collecting') {
+              sc.status = 'confirming';
+              sc.activeStep = 'confirm';
+              sc.turnTargetStep = 'confirm';
+              state.directConfirmRecoveryCount = 0;
+              logDiag(`➡️ さくらさんの復唱確定により全6項目が完了 → 内容確認フェーズへ移行しました`);
             }
           }
         }
@@ -7980,6 +8008,10 @@ ${artStyle.svgStyleRules}
       const hasExplicitRedrawWord = /(?:直して|なおして|変えて|変更|修正|描き直|書き直|追加|足して|入れて|置いて|消して|なくして|もっと|違う|ちがう|にして|にしたい|描いて)/.test(clean);
       const isAtmosphereApproved = !hasExplicitRedrawWord && !sc.aiHasAskedRefine && /(?:この雰囲気|こんな感じ|これでいい|これで良い|このままでいい|このままで良い|このまま|これで|いい雰囲気|良い雰囲気|いい感じ|良い感じ|バッチリ|ばっちり|気に入|素敵|いいですね|良いですね|大丈夫|よいです|いいです|良いです|いいよ|良いよ|はい|うん|ええ|OK|オッケー|問題ない|問題ありません|間違いありません)/.test(clean);
       if (isAtmosphereApproved) {
+        if (Date.now() - (state.drawnCompletedAt || 0) < 6000) {
+          logDiag(`🛡️ 描画完了直後のため満足→保存確認の誤発動をブロックしました: 「${clean}」`);
+          return;
+        }
         promptSaveConfirmationAfterApproval();
         return;
       }
