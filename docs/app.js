@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_11';
-  const APP_VERSION_TITLE = '2026-11-19 直結モード文字起こし中フラグ連動・標準ノイズゲート感度改善・無応答救済高速化・二重保存防止';
+  const APP_VERSION = 'v20261119_12';
+  const APP_VERSION_TITLE = '2026-11-19 追い打ち二重返答による聞き取り潰し根絶・描画中マイク遮断でフライング確認防止・503回避高速描画';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -2303,7 +2303,7 @@ ${levelRules}
       if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
       if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') return;
       if (seq !== state.directInputTransSeq) return;
-      if (Date.now() - (state.directLastGeminiInputTime || 0) < 3000) return;
+      if (Date.now() - (state.directLastGeminiInputTime || 0) < 5000) return;
       if ((state.lastAiSpeechFinishedTime || 0) >= startTime) return;
       if (state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
       if (Date.now() - (state.directLastAiPromptTime || 0) < 7000) return;
@@ -2351,14 +2351,14 @@ ${levelRules}
       }
       state.directLastAiPromptTime = Date.now();
       state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
-      logDiag(`🔄 [直結応答保証] inputTranscription後4.5秒無応答のためAI応答を促します (status=${sc.status})`);
+      logDiag(`🔄 [直結応答保証] inputTranscription後6.0秒無応答のためAI応答を促します (status=${sc.status})`);
       ws.send(JSON.stringify({
         client_content: {
           turns: [{ role: 'user', parts: [{ text: promptText }] }],
           turn_complete: true
         }
       }));
-    }, 3500);
+    }, 6000);
   }
 
   function recoverDirectTruncatedConfirmation(ws, truncatedText) {
@@ -3216,8 +3216,9 @@ ${levelRules}
 
       if (!state.isSessionActive || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
 
-      // AI発話中（および発話直後のエコー残響期間）はマイク入力を完全に破棄して送信しない（バージイン誤検知の完全遮断）
-      if (state.isAiSpeaking) {
+      // AI発話中または描画生成中（isDrawingMedia）はマイク入力を破棄して送信しない
+      // （バージイン誤検知および描画途中のフライング「これでいいですか？」発話を完全遮断）
+      if (state.isAiSpeaking || state.isDrawingMedia) {
         preSpeechRingBuffer = [];
         voiceHangoverChunks = 0;
         isSpeakingUtterance = false;
@@ -4795,7 +4796,8 @@ ${levelRules}
               `4. \`<g id="refinement-layer">\` で始まり \`</g>\` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`
             );
 
-          const refineModels = isReplacementModify
+          const preferLiteDueTo503 = (Date.now() - (state.gemini35Flash503At || 0)) < 5 * 60 * 1000;
+          const refineModels = (isReplacementModify && !preferLiteDueTo503)
             ? ['gemini-3.5-flash', 'gemini-3.5-flash-lite']
             : ['gemini-3.5-flash-lite', 'gemini-3.5-flash'];
           const refineMaxTokens = isReplacementModify ? 16384 : 8192;
@@ -4842,6 +4844,9 @@ ${levelRules}
                   logDiag(`モデル ${mName} の差分レイヤー出力がXML検証を通過しませんでした。次を試行します。`);
                 }
               } else {
+                if (mName === 'gemini-3.5-flash' && resRef.status === 503) {
+                  state.gemini35Flash503At = Date.now();
+                }
                 logDiag(`差分レイヤーモデル ${mName} 応答ステータス: ${resRef.status}`);
               }
             } catch (rErr) {
@@ -4936,7 +4941,10 @@ ${artStyle.svgStyleRules}
 3. 【人物・にぎわいの描写ルール】情景に「生徒」「友達」「人」「大勢」などの人物が含まれる場合は、背景だけで終わらせず、必ず前景〜中景の道や校門・広場に【複数の人物（大勢なら8〜15人以上）】を後ろ姿・横向き・遠景の温かいイラスト調ではっきり大きく描いてください（制服・カバン・歩いている動き等も表現し、1つの \`<g id="people-layer">\` にまとめて描くと簡潔です）。
 4. <svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全な整形式SVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
 
-          const candidateModels = ['gemini-3.5-flash', 'gemini-3.5-flash-lite'];
+          const preferLiteInitial = (Date.now() - (state.gemini35Flash503At || 0)) < 5 * 60 * 1000;
+          const candidateModels = preferLiteInitial
+            ? ['gemini-3.5-flash-lite', 'gemini-3.5-flash']
+            : ['gemini-3.5-flash', 'gemini-3.5-flash-lite'];
           for (const modelName of candidateModels) {
             try {
               logDiag(`AI高精細SVG描画を試行中 (${modelName} / 最大180秒): 「${cleanTitle}」`);
@@ -4968,6 +4976,9 @@ ${artStyle.svgStyleRules}
                   logDiag(`⚠️ モデル ${modelName} のSVG出力がXML検証に失敗しました。次の候補モデルを試行します。`);
                 }
               } else {
+                if (modelName === 'gemini-3.5-flash' && resSvg.status === 503) {
+                  state.gemini35Flash503At = Date.now();
+                }
                 logDiag(`モデル ${modelName} 応答ステータス: ${resSvg.status}。次の候補モデルを試行します。`);
               }
             } catch (mErr) {
@@ -7404,6 +7415,21 @@ ${artStyle.svgStyleRules}
     sc.status = 'drawn';
     renderSceneCollectorUI();
     setAvatarState('listening');
+
+    // 直結モード時は修正版の完成直後にGemini Liveへ通知して、さくらさん本人の声で確認してもらう
+    if (state.isDirectGeminiWs && state.socket && state.socket.readyState === WebSocket.OPEN && state.hasDrawnImage) {
+      state.directLastAiPromptTime = Date.now();
+      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4500);
+      state.socket.send(JSON.stringify({
+        client_content: {
+          turns: [{
+            role: 'user',
+            parts: [{ text: `「${feedback}」を反映した修正版の絵がキャンバスに表示されました。「お父さん、描き直した絵が画面に浮かびましたよ！こんな雰囲気でよろしいでしょうか？」と温かく声をかけて感想を聞いてください。` }]
+          }],
+          turn_complete: true
+        }
+      }));
+    }
   }
 
   /**
