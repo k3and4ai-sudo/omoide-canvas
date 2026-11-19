@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_08';
-  const APP_VERSION_TITLE = '2026-11-19 2項目完了後のフォローアップ遮断バグ解消・復唱エコー誤ブロック修正・順方向ステップ探索';
+  const APP_VERSION = 'v20261119_09';
+  const APP_VERSION_TITLE = '2026-11-19 描画後の変更・置換修正（例：犬を白いマルチーズに変更）自動再描画セーフティネット＆SVG要素置換対応＋クォータ誤表示解消';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -420,6 +420,10 @@
       tracker.isRateLimited = true;
       tracker.rateLimitedAt = Date.now();
       tracker.lastErrorMsg = '429 Quota Exceeded (一時制限)';
+    } else if (status >= 200 && status < 300) {
+      tracker.isRateLimited = false;
+      tracker.rateLimitedAt = 0;
+      tracker.lastErrorMsg = '';
     } else if (status >= 400) {
       tracker.lastErrorMsg = errorMsg || `HTTP ${status}`;
     }
@@ -2078,6 +2082,7 @@ ${levelRules}
     t = t.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)った/g, '$1を飼った');
     t = t.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)って/g, '$1を飼って');
     t = t.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)いたい/g, '$1を飼いたい');
+    t = t.replace(/丸\s*チーズ/g, 'マルチーズ');
     return t;
   }
 
@@ -2187,9 +2192,22 @@ ${levelRules}
       return true;
     }
 
-    const modifyWords = ['直して', '変えて', '変更', '修正', '描き直', '書き直', '追加', '足して', '入れて', '置いて', '消して', 'なくして', 'もっと', '違う', 'ちがう', 'やり直し', 'もう一度'];
-    const hasModify = modifyWords.some(w => clean.includes(w));
+    const modifyWords = ['直して', '変えて', '変更', '修正', '描き直', '書き直', '追加', '足して', '入れて', '置いて', '消して', 'なくして', 'もっと', '違う', 'ちがう', 'やり直し', 'もう一度', 'にして'];
+    const hasModify = modifyWords.some(w => clean.includes(w)) || !!detectModificationIntent(clean);
     const approvalWords = ['このまま', 'これでいい', 'これで良い', 'この雰囲気', 'こんな感じ', 'いいです', '良いです', 'よいです', 'いいよ', '良いよ', 'バッチリ', 'ばっちり', '大丈夫', '問題ない', '変えなくていい', '修正なし', '直さなくていい', '気に入', '素敵', 'いいですね', '良いですね', 'はい', 'うん', 'ええ', 'オッケー', 'ok', 'これでお願い', 'これで頼む'];
+    if (hasModify && sc.status === 'drawn' && !state.isDrawingMedia) {
+      logDiag(`🎨 [直結] 描画後の修正指示を検知: 「${clean}」（ツール未呼出時の自動再描画を予約）`);
+      handleUserModificationDetected(clean);
+      const scheduledFeedback = clean;
+      if (state.pendingDirectRefineTimer) clearTimeout(state.pendingDirectRefineTimer);
+      state.pendingDirectRefineTimer = setTimeout(() => {
+        if (state.isSessionActive && state.isDirectGeminiWs && !state.isDrawingMedia && state.sceneCollector.status === 'drawn') {
+          logDiag(`🎨 [直結セーフティネット] 修正指示後にツール呼び出しが無いため再描画を起動します: 「${scheduledFeedback}」`);
+          executeRefineDrawing(scheduledFeedback);
+        }
+      }, 3500);
+      return true;
+    }
     if (!hasModify && approvalWords.some(w => clean.toLowerCase().includes(w)) && sc.status === 'drawn' && !sc.isAwaitingSaveConfirmation) {
       logDiag(`✨ [直結] 絵への満足・肯定を検知。保存確認へ移行します: 「${clean}」`);
       promptSaveConfirmationAfterApproval();
@@ -4711,29 +4729,52 @@ ${levelRules}
 
     if (apiKey) {
       // =========================================================================
-      // 0. 再描画モード（元SVGがある場合）：<g id="refinement-layer"> 差分レイヤー合成
-      //    backend/media_generator.py の refine_memory_visual_artifact と同一方式！
+      // 0. 再描画モード（元SVGがある場合）：
+      //    ・置換・変更・色変更・削除系（「犬を白いマルチーズに変更」等）→ 元SVGの該当要素を書き換えた完全SVG出力
+      //    ・純粋な追加系（「生徒を増やして」「花を足して」等）→ <g id="refinement-layer"> 差分レイヤー合成
       // =========================================================================
       if (isRefinement && feedback && state.lastGeneratedSvgCode && state.lastGeneratedSvgCode.includes('</svg>')) {
         try {
-          if (dom.drawingSubtext) dom.drawingSubtext.textContent = `元の絵を残したまま「${feedback}」を描き加えています...`;
-          logDiag(`🎨 [差分レイヤー再描画] 元SVGを保持して「${feedback}」を合成生成します`);
-          const origSvgCode = state.lastGeneratedSvgCode;
-          const refineSvgPrompt =
-            `以下は、ご本人の大切な思い出を描いた既存のSVGイラストコード（viewBox="0 0 800 600"）です。\n` +
-            `この元のSVGイラストの背景・建物・風景・色調・構図は【100%そのまま残し】、\n` +
-            `ご本人からの修正要望：「${feedback}」だけを既存のSVGに重ねて描き加えるための【追加レイヤー <g id="refinement-layer">...</g>】のみを出力してください。\n\n` +
-            `【元のSVGコード（座標・構図・背景の参照用）】\n${origSvgCode}\n\n` +
-            `【絶対厳守ルール】\n` +
-            `1. 元のSVGを書き直す必要はありません。既存の地面・道・校門・背景の座標（viewBox 800x600）に合わせて、新しく描き加える要素だけを含む \`<g id="refinement-layer"> ... </g>\` を1つ出力してください。\n` +
-            `2. 「${feedback}」が大勢の生徒や人物に関する指示である場合は、校門や通学路・前景〜中景の歩道上に、制服姿やカバンを持った人物（大勢なら10〜15人程度、遠近感をつけて）をはっきり視認できるサイズ（高さ40〜110px程度）と色彩で複数描画してください。\n` +
-            `3. 人物を描く場合は、温かみのある親しみやすいイラスト表現（後ろ姿・横向き・シンプルなシルエットやデフォルメ）で描いてください。\n` +
-            `4. \`<g id="refinement-layer">\` で始まり \`</g>\` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`;
+          const isReplacementModify = /(?:変え|変更|にして|じゃなく|ではなく|消し|なくし|取り除|白く|白い|赤く|赤い|青く|青い|黒く|黒い|茶色|黄色|ピンク|マルチーズ|柴犬|プードル|猫|色)/.test(feedback)
+            && !/(?:増やし|追加|足して|描き足)/.test(feedback);
 
-          const refineModels = ['gemini-3.5-flash-lite', 'gemini-3.5-flash'];
+          if (dom.drawingSubtext) {
+            dom.drawingSubtext.textContent = isReplacementModify
+              ? `元の背景・構図を残したまま「${feedback}」へ変更しています...`
+              : `元の絵を残したまま「${feedback}」を描き加えています...`;
+          }
+          logDiag(`🎨 [${isReplacementModify ? '要素置換SVG再描画' : '差分レイヤー再描画'}] 元SVGを保持して「${feedback}」を反映します`);
+          const origSvgCode = state.lastGeneratedSvgCode;
+          const refineSvgPrompt = isReplacementModify
+            ? (
+              `以下は、ご本人の大切な思い出を描いた既存のSVGイラストコード（viewBox="0 0 800 600"）です。\n` +
+              `この元のSVGの背景・部屋・風景・配置・色調は【そのまま維持】しつつ、\n` +
+              `ご本人からの変更要望：「${feedback}」に該当する対象モチーフ（例：犬の種類・毛色・色・形など）のSVG要素だけを確実に書き換えた【完全な <svg>...</svg>】を出力してください。\n\n` +
+              `【元のSVGコード】\n${origSvgCode}\n\n` +
+              `【絶対厳守ルール】\n` +
+              `1. 変更前の古いモチーフ（例：変更前の茶色い犬など）は必ず削除または置き換え、変更後のモチーフ（「${feedback}」、例：白いふわふわのマルチーズなら真っ白で丸みのある毛並み・垂れ耳・小さな黒い目と鼻・可愛らしい小型犬のシルエット）をはっきり分かりやすく描いてください。\n` +
+              `2. 変更対象以外の背景・建物・家具・構図は元のSVGコードをそのまま活かしてください。\n` +
+              `3. \`<svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">\` で始まり \`</svg>\` で終わる完全な整形式SVGコードのみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`
+            )
+            : (
+              `以下は、ご本人の大切な思い出を描いた既存のSVGイラストコード（viewBox="0 0 800 600"）です。\n` +
+              `この元のSVGイラストの背景・建物・風景・色調・構図は【100%そのまま残し】、\n` +
+              `ご本人からの修正要望：「${feedback}」だけを既存のSVGに重ねて描き加えるための【追加レイヤー <g id="refinement-layer">...</g>】のみを出力してください。\n\n` +
+              `【元のSVGコード（座標・構図・背景の参照用）】\n${origSvgCode}\n\n` +
+              `【絶対厳守ルール】\n` +
+              `1. 元のSVGを書き直す必要はありません。既存の地面・道・校門・背景の座標（viewBox 800x600）に合わせて、新しく描き加える要素だけを含む \`<g id="refinement-layer"> ... </g>\` を1つ出力してください。\n` +
+              `2. 「${feedback}」が大勢の生徒や人物に関する指示である場合は、校門や通学路・前景〜中景の歩道上に、制服姿やカバンを持った人物（大勢なら10〜15人程度、遠近感をつけて）をはっきり視認できるサイズ（高さ40〜110px程度）と色彩で複数描画してください。\n` +
+              `3. 人物を描く場合は、温かみのある親しみやすいイラスト表現（後ろ姿・横向き・シンプルなシルエットやデフォルメ）で描いてください。\n` +
+              `4. \`<g id="refinement-layer">\` で始まり \`</g>\` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`
+            );
+
+          const refineModels = isReplacementModify
+            ? ['gemini-3.5-flash', 'gemini-3.5-flash-lite']
+            : ['gemini-3.5-flash-lite', 'gemini-3.5-flash'];
+          const refineMaxTokens = isReplacementModify ? 16384 : 8192;
           for (const mName of refineModels) {
             try {
-              logDiag(`差分レイヤー再描画を試行中 (${mName}): 「${feedback}」`);
+              logDiag(`${isReplacementModify ? '要素置換SVG再描画' : '差分レイヤー再描画'}を試行中 (${mName}): 「${feedback}」`);
               const resRef = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/models/${mName}:generateContent?key=${encodeURIComponent(apiKey)}`,
                 {
@@ -4741,9 +4782,9 @@ ${levelRules}
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     contents: [{ parts: [{ text: refineSvgPrompt }] }],
-                    generationConfig: { temperature: 0.25, maxOutputTokens: 8192 }
+                    generationConfig: { temperature: 0.25, maxOutputTokens: refineMaxTokens }
                   }),
-                  signal: AbortSignal.timeout ? AbortSignal.timeout(120000) : undefined
+                  signal: AbortSignal.timeout ? AbortSignal.timeout(150000) : undefined
                 }
               );
               recordApiCall(resRef.headers, resRef.status);
@@ -7183,7 +7224,7 @@ ${artStyle.svgStyleRules}
   function detectModificationIntent(rawText) {
     if (!state.hasDrawnImage) return null;
     if (!rawText || typeof rawText !== 'string') return null;
-    const clean = rawText.replace(/[「」『』]/g, '').trim();
+    const clean = rawText.replace(/[「」『』]/g, '').replace(/[。、！？!?\s]+$/g, '').trim();
     if (clean.length < 2) return null;
     if (/(にします|にしよう|にするよ|にするね)/.test(clean)) return null;
 
@@ -7191,9 +7232,9 @@ ${artStyle.svgStyleRules}
     if (/(これでいい|これで良い|この雰囲気でよい|このままでいい|このままがいい|バッチリ|大丈夫|いいよ)/.test(clean)) return null;
 
     const modPatterns = [
-      /(.+?)(?:にしてほしい|にしてくれ|にしてください|に変えてほしい|に変えてくれ|に変えてください|に描き直して|に描きかえて|に書き直して)$/,
+      /(.+?)(?:にしてほしい|にしてくれ|にしてください|にして|に変えてほしい|に変えてくれ|に変えてください|に変えて|に変更してほしい|に変更してください|に変更して|に変えたい|に描き直して|に描きかえて|に書き直して)$/,
       /(.+?)(?:を追加して|を足して|を置いて|を入れて|を描き足して|を書き足して|を描いてみて)$/,
-      /(?:もっと|もうちょっと)(.+?)(?:にして|に変えて)$/,
+      /(?:もっと|もうちょっと)(.+?)(?:にして|に変えて|に変更して)$/,
       /(?:もう一度|もう一回|新しく)(.+?)(?:描いて|描き直して|書いて|書き直して)$/,
       /(.+?)(?:に修正して|を修正して|に直して|を描き直して|を書き直して)$/,
       /(?:修正したい|直したい|描き直したい|書き直したい|描き直してみたい|書き直してみたい|変更したい|やり直したい)(.+)?$/
@@ -7204,12 +7245,12 @@ ${artStyle.svgStyleRules}
       if (match) return clean;
     }
 
-    if (/(?:描き直して|描きかえて|書き直して|描き直したい|書き直したい|描き直してみたい|書き直してみたい|修正して|直してほしい|直したい|変えてみて|修正したい|変更したい|やり直したい|ちょっと修正|ちょっと書き直|ちょっと描き直)/.test(clean)) {
+    if (/(?:描き直して|描きかえて|書き直して|描き直したい|書き直したい|描き直してみたい|書き直してみたい|修正して|直してほしい|直したい|変えてみて|変えて|変更して|修正したい|変更したい|やり直したい|ちょっと修正|ちょっと書き直|ちょっと描き直)/.test(clean)) {
       return clean;
     }
 
-    // 「大勢の生徒が〜歩いている」「校門が見えるように」など描画完了後の情景言及
-    if (state.sceneCollector.status === 'drawn' && clean.length >= 4 && /(歩いて|見えて|あって|いて|置いて|飾って|晴れて|赤く|青く)/.test(clean)) {
+    // 「大勢の生徒が〜歩いている」「校門が見えるように」「白いマルチーズ」など描画完了後の情景言及
+    if (state.sceneCollector.status === 'drawn' && clean.length >= 4 && /(歩いて|見えて|あって|いて|置いて|飾って|晴れて|赤く|青く|白く|白い|黒く|黒い|茶色|マルチーズ)/.test(clean)) {
       return clean;
     }
 
