@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_10';
-  const APP_VERSION_TITLE = '2026-11-19 ⑥完了後の即時確認移行・同じセリフ連呼防止・完成直後の保存確認誤爆ガード';
+  const APP_VERSION = 'v20261119_11';
+  const APP_VERSION_TITLE = '2026-11-19 直結モード文字起こし中フラグ連動・標準ノイズゲート感度改善・無応答救済高速化・二重保存防止';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -62,7 +62,7 @@
     tv_cut: { rms: 0.0040, vuThresholdPercent: 8,  hangoverMs: 450, eosSilenceMs: 650, label: 'テレビ・周囲音カット' },
     strict: { rms: 0.0100, vuThresholdPercent: 18, hangoverMs: 300, eosSilenceMs: 700, label: '強めカット（テレビ大音量）' },
     ultra:  { rms: 0.0220, vuThresholdPercent: 35, hangoverMs: 250, eosSilenceMs: 750, label: '超強力カット（口元近接専用）' },
-    normal: { rms: 0.0018, vuThresholdPercent: 3,  hangoverMs: 550, eosSilenceMs: 650, label: '標準感度（推奨・静かなお部屋）' }
+    normal: { rms: 0.0009, vuThresholdPercent: 2,  hangoverMs: 650, eosSilenceMs: 650, label: '標準感度（推奨・静かなお部屋）' }
   };
 
   // 画風スタイル定義（水彩画・リアル・油絵・色鉛筆スケッチ）
@@ -2303,7 +2303,7 @@ ${levelRules}
       if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
       if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') return;
       if (seq !== state.directInputTransSeq) return;
-      if (Date.now() - (state.directLastGeminiInputTime || 0) < 4000) return;
+      if (Date.now() - (state.directLastGeminiInputTime || 0) < 3000) return;
       if ((state.lastAiSpeechFinishedTime || 0) >= startTime) return;
       if (state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
       if (Date.now() - (state.directLastAiPromptTime || 0) < 7000) return;
@@ -2358,7 +2358,7 @@ ${levelRules}
           turn_complete: true
         }
       }));
-    }, 4500);
+    }, 3500);
   }
 
   function recoverDirectTruncatedConfirmation(ws, truncatedText) {
@@ -2771,8 +2771,17 @@ ${levelRules}
           const inputTrans = sc.inputTranscription || sc.input_transcription;
           if (inputTrans && inputTrans.text) {
             state.currentUserTurnTranscript += inputTrans.text;
-            state.lastUserSpeechActivityTime = Date.now();
-            state.directLastGeminiInputTime = Date.now();
+            const nowTs = Date.now();
+            state.lastUserSpeechActivityTime = nowTs;
+            state.directLastGeminiInputTime = nowTs;
+            state.isUserTranscribing = true;
+            state.userSpeakingUntil = nowTs + 1200;
+            state.currentSilenceSec = 0;
+            state.followUpCountSinceLastUserSpeech = 0;
+            if (state.directInputTransEndTimer) clearTimeout(state.directInputTransEndTimer);
+            state.directInputTransEndTimer = setTimeout(() => {
+              state.isUserTranscribing = false;
+            }, 1200);
             state.directInputTransSeq = (state.directInputTransSeq || 0) + 1;
             const cleanUserTxt = correctJapaneseHomophonesJS(state.currentUserTurnTranscript.trim());
             if (cleanUserTxt) {
@@ -6918,12 +6927,18 @@ ${artStyle.svgStyleRules}
    * 絵の保存確認に基づき、（保存する場合は保存してから）絵画モードを終了し通常会話（idle）へ移行する
    */
   async function handleSaveAndFinishDrawingMode(shouldSave = true) {
-    const sc = state.sceneCollector;
-    const finishedTopic = sc.topic || dom.captionTitle?.textContent || '思い出の絵';
-
-    if (shouldSave && state.hasDrawnImage) {
-      await saveCurrentCanvasImage();
+    if (state.isSavingAndFinishing || (Date.now() - (state.lastSaveFinishTime || 0) < 2500)) {
+      return;
     }
+    state.isSavingAndFinishing = true;
+    state.lastSaveFinishTime = Date.now();
+    try {
+      const sc = state.sceneCollector;
+      const finishedTopic = sc.topic || dom.captionTitle?.textContent || '思い出の絵';
+
+      if (shouldSave && state.hasDrawnImage) {
+        await saveCurrentCanvasImage();
+      }
 
     // 6ステップ聞き取り・絵画モードをリセットして通常会話（idle）へ戻す
     sc.topic = '';
@@ -6958,6 +6973,7 @@ ${artStyle.svgStyleRules}
     renderSceneCollectorUI();
 
     // 絵画モード終了直後に無音タイマー（ai_no_question）が暴発してセリフが重複するのを防ぐためクールダウン設定
+    const isAiAlreadyAnswering = state.isAiSpeaking || (Date.now() - (state.lastAiSpeechFinishedTime || 0) < 3500);
     state.lastFollowUpTriggerTime = Date.now();
     state.followUpCountSinceLastUserSpeech = 1;
     state.lastAiSpeechFinishedTime = Date.now();
@@ -6967,8 +6983,6 @@ ${artStyle.svgStyleRules}
       ? `💾 「${finishedTopic}」を保存し、絵画モードを終了して通常会話に移行しました。`
       : `💬 保存せずに絵画モードを終了し、通常会話に移行しました。`
     );
-
-    const isAiAlreadyAnswering = state.isAiSpeaking || (Date.now() - (state.lastAiSpeechFinishedTime || 0) < 6000);
 
     if (state.isSimulation && !state.hasLocalBackend) {
       const msg = shouldSave
@@ -6997,6 +7011,9 @@ ${artStyle.svgStyleRules}
           already_spoken: isAiAlreadyAnswering
         }));
       }
+    }
+    } finally {
+      state.isSavingAndFinishing = false;
     }
   }
 
