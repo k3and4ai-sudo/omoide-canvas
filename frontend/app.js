@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_02';
-  const APP_VERSION_TITLE = '2026-11-19 直結モード⑥聞き取り後〜確認・描画開始の停止を完全解消（確認発話自動誘導・inputTranscription後無応答救済・描画開始/完了音声連携）';
+  const APP_VERSION = 'v20261119_03';
+  const APP_VERSION_TITLE = '2026-11-19 直結モードの初回挨拶完了フラグ設定（無音タイマー0秒固定解消）＆復唱途切れリカバリーの音声再生待ちリトライ対応';
 
   function enforceVersionBadgeDisplay() {
     try {
@@ -2279,11 +2279,18 @@ ${levelRules}
   }
 
   function recoverDirectTruncatedConfirmation(ws, truncatedText) {
-    setTimeout(() => {
+    const scheduledAiTurn = state.aiTurnCounter || 0;
+    const attemptRecovery = (retryCount) => {
       const sc = state.sceneCollector;
       if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
       if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') return;
-      if (state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
+      if ((state.aiTurnCounter || 0) > scheduledAiTurn || (state.currentAiTurnTranscript || '').trim()) return;
+      if (state.isAiSpeaking) {
+        if (retryCount < 5) {
+          setTimeout(() => attemptRecovery(retryCount + 1), 1500);
+        }
+        return;
+      }
       const profile = state.currentProfile || DEFAULT_USER_PROFILE;
       const nickname = formatUserNickname(profile.call_name);
       const summaryCtx = buildCollectorSummaryText() || state.sessionTopics.slice(-6).join('、');
@@ -2301,12 +2308,13 @@ ${levelRules}
           turn_complete: true
         }
       }));
-    }, 800);
+    };
+    setTimeout(() => attemptRecovery(0), 1200);
   }
 
   function recoverDirectCollectingQuestion(ws, completedAiTurn) {
     const sc = state.sceneCollector;
-    const scheduledTime = Date.now();
+    const scheduledAiTurn = state.aiTurnCounter || 0;
     const scheduledStep = sc.activeStep;
     const wasEchoTruncated = completedAiTurn.includes('復唱') && !completedAiTurn.includes('お聞きします') && !completedAiTurn.includes('ですね');
     const lastUserUtt = (state.lastUserUtteranceText || '').trim();
@@ -2321,10 +2329,16 @@ ${levelRules}
     };
     const nextStepMap = { topic: 'place', place: 'weather', weather: 'people', people: 'details', details: 'mood', mood: 'confirm' };
 
-    setTimeout(() => {
+    const attemptRecovery = (retryCount) => {
       if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
       if (sc.status !== 'collecting' || state.isDrawingMedia) return;
-      if ((state.lastAiSpeechFinishedTime || 0) > scheduledTime || state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
+      if ((state.aiTurnCounter || 0) > scheduledAiTurn || (state.currentAiTurnTranscript || '').trim()) return;
+      if (state.isAiSpeaking) {
+        if (retryCount < 5) {
+          setTimeout(() => attemptRecovery(retryCount + 1), 1500);
+        }
+        return;
+      }
 
       let effectiveStep = sc.activeStep;
       if (wasEchoTruncated && effectiveStep === scheduledStep) {
@@ -2355,7 +2369,8 @@ ${levelRules}
           turn_complete: true
         }
       }));
-    }, 2000);
+    };
+    setTimeout(() => attemptRecovery(0), 2000);
   }
 
   function sanitizeSceneElementsJS(title, elements) {
@@ -2699,6 +2714,8 @@ ${levelRules}
             state.directToolCalledInTurn = false;
 
             if (finishedAiTxt) {
+              state.hasCompletedInitialGreeting = true;
+              state.aiTurnCounter = (state.aiTurnCounter || 0) + 1;
               state.lastAiUtteranceText = finishedAiTxt;
               state.lastAiSpeechFinishedTime = Date.now();
               state.hasUnansweredUserTurn = false;
