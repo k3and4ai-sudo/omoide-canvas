@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_13';
-  const APP_VERSION_TITLE = '2026-11-19 WebAudioノードGC回収によるマイク無音化を根絶・直結無音フレーム間引き最適化・AudioContext自動復帰';
+  const APP_VERSION = 'v20261119_14';
+  const APP_VERSION_TITLE = '2026-11-19 自動再接続時の聞き取り済み文脈引き継ぎ・標準モード生PCM送信で聞き取り精度向上・語尾途切れ防止余韻450ms化';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -2725,6 +2725,32 @@ ${levelRules}
             }));
           } else {
             logDiag('セッションを自動再接続しました（対話を継続できます）。');
+            // 再接続後の記憶喪失（①〜⑥の聞き直し）を防ぐため、現在の聞き取り済み内容と現在ステップを引き継ぐ
+            const col = state.sceneCollector;
+            const summaryStr = buildCollectorSummaryText();
+            if (col.status === 'collecting' || col.status === 'confirming' || col.status === 'ready' || col.status === 'drawn') {
+              const stepLabels = {
+                topic: '①テーマ・話題', place: '②場所・舞台', weather: '③天候・明暗',
+                people: '④登場人物', details: '⑤見えたもの・様子', mood: '⑥気分・雰囲気', confirm: '最終確認'
+              };
+              const curLabel = stepLabels[col.activeStep] || col.activeStep;
+              const filledList = COLLECTOR_STEPS
+                .filter(s => col.stepStates[s] === 'filled' || col.stepStates[s] === 'skipped')
+                .map(s => stepLabels[s])
+                .join('、');
+              const ctxPrompt = col.status === 'drawn'
+                ? `【システム引き継ぎ】通信が一瞬再接続されました。現在、キャンバスにはすでに絵が表示されています（内容：${summaryStr}）。初回挨拶や①からの聞き直しは絶対に行わず、絵の感想や修正・保存のお話をそのまま続けてください。`
+                : col.status === 'confirming' || col.status === 'ready'
+                  ? `【システム引き継ぎ】通信が一瞬再接続されました。①〜⑥の聞き取りはすべて完了しています（内容：${summaryStr}）。①から聞き直すことは絶対に行わず、最終確認から続けてください。`
+                  : `【システム引き継ぎ】通信が一瞬再接続されました。すでに聞き取り済みの項目（${filledList || 'なし'}：${summaryStr}）は絶対に聞き直さず、現在のステップ【${curLabel}】からそのまま聞き取りを続けてください。`;
+              ws.send(JSON.stringify({
+                client_content: {
+                  turns: [{ role: 'user', parts: [{ text: ctxPrompt }] }],
+                  turn_complete: false
+                }
+              }));
+              logDiag(`📌 自動再接続後に現在の文脈（status=${col.status}, step=${col.activeStep}）を引き継ぎました`);
+            }
           }
           return;
         }
@@ -3275,8 +3301,15 @@ ${levelRules}
       }
 
       // 【重要】ノイズゲート判定：
-      // 1. RMS音量が設定しきい値以上（肉声の取りこぼし防止のため実効感度を最適化）
-      // 2. またはブラウザ音声認識（Web Speech API）がユーザー発話を検知中（小声・遠いマイクでも確実に肉声を通す）
+      // ・「標準感度（静かなお部屋：normal）」は語頭欠け（「犬」→「N」等）と聞き取り漏れを防ぐため、
+      //   AI発話中・描画中以外はそのまま生PCM音声をGemini Liveへ送信する！
+      // ・テレビ・周囲音カット（tv_cut / strict / ultra）選択時のみRMSしきい値ゲートを適用する
+      if (state.noiseGateMode === 'normal') {
+        state.lastVoiceActiveTime = Date.now();
+        sendPcmAudioChunk(pcm16.buffer);
+        return;
+      }
+
       const isRecognizingUser = (state.userSpeakingUntil > Date.now()) || state.isUserTranscribing;
       const isAboveFloor = (rms >= (preset.rms * 0.7)) || (isRecognizingUser && rms >= 0.0006);
 
@@ -3300,13 +3333,8 @@ ${levelRules}
         if (preSpeechRingBuffer.length > 16) {
           preSpeechRingBuffer.shift();
         }
-        vadSilenceChunks++;
-        // 発話終了直後の約3秒間（150チャンク）は毎フレーム無音を送ってGemini VADに発話終了を確実に伝え、
-        // それ以降の長い無音中は直結WebSocketの過密送信を防ぐため約0.5秒に1回へ間引く
-        if (!state.isDirectGeminiWs || vadSilenceChunks <= 150 || (vadSilenceChunks % 24 === 0)) {
-          const zeroPcm = new Int16Array(downsampledData.length);
-          sendPcmAudioChunk(zeroPcm.buffer);
-        }
+        const zeroPcm = new Int16Array(downsampledData.length);
+        sendPcmAudioChunk(zeroPcm.buffer);
       }
     };
 
@@ -5552,7 +5580,7 @@ ${artStyle.svgStyleRules}
     source.start(state.nextPlaybackTime);
     state.nextPlaybackTime += audioBuffer.duration;
 
-    // ハードウェアレベルでの再生完了イベント（タイマーと二重で保護し、最後のチャンク終了後に余韻を待ってマイクを解放）
+    // ハードウェアレベルでの再生完了イベント（タイマーと二重で保護し、最後のチャンク終了後に余韻450msを待って語尾途切れ・エコー回り込みを防止）
     source.onended = () => {
       if (ctx.currentTime >= state.nextPlaybackTime - 0.05) {
         setTimeout(() => {
@@ -5566,7 +5594,7 @@ ${artStyle.svgStyleRules}
               state.socket.send(JSON.stringify({ type: 'ai_speech_ended' }));
             }
           }
-        }, 150);
+        }, 450);
       }
     };
 
@@ -5582,8 +5610,8 @@ ${artStyle.svgStyleRules}
     if (state.aiSpeechEndTimer) {
       clearTimeout(state.aiSpeechEndTimer);
     }
-    // スピーカーからの出音余韻マージン（150ms: 相手の問いかけ直後の「はい」「うん」の即答を逃さない）
-    const remainingMs = Math.max(100, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 150);
+    // スピーカーからの出音余韻マージン（450ms: 語尾がスピーカーから出切る前にマイクが開いて自己割り込みするのを防止）
+    const remainingMs = Math.max(150, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 450);
     state.aiSpeechEndTimer = setTimeout(() => {
       state.isAiSpeaking = false;
       state.lastAiSpeechFinishedTime = Date.now();
