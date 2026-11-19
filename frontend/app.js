@@ -17,8 +17,17 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_03';
-  const APP_VERSION_TITLE = '2026-11-19 直結モードの初回挨拶完了フラグ設定（無音タイマー0秒固定解消）＆復唱途切れリカバリーの音声再生待ちリトライ対応';
+  const APP_VERSION = 'v20261119_04';
+  const APP_VERSION_TITLE = '2026-11-19 escapeHtml未定義クラッシュ修正（updateExtractedWordsCard停止の根本解消）';
+
+  function escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
 
   function enforceVersionBadgeDisplay() {
     try {
