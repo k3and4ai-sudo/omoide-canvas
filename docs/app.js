@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_01';
-  const APP_VERSION_TITLE = '2026-11-19 GitHub Pages直結モードをローカルPCバックエンド同等品質へ完全統合（高精細SVG/差分レイヤー再描画/会話リカバリー・エコー除去）';
+  const APP_VERSION = 'v20261119_02';
+  const APP_VERSION_TITLE = '2026-11-19 直結モード⑥聞き取り後〜確認・描画開始の停止を完全解消（確認発話自動誘導・inputTranscription後無応答救済・描画開始/完了音声連携）';
 
   function enforceVersionBadgeDisplay() {
     try {
@@ -1819,11 +1819,17 @@ ${levelRules}
 
     const followUpCount = state.followUpCountSinceLastUserSpeech || 0;
 
-    // (2a) 【ユーザー要件・最重要】描画確認フェーズ（confirming / ready / aiHasAskedConfirmation）での返答待ち20秒催促：
-    // さくらさんが「この内容で絵を描いてもよろしいでしょうか？」と尋ねてから20秒間無音が続いた場合、
-    // 自発的に「お父さん、こちらの内容で絵を描き始めてもよろしいでしょうか？」と優しく催促発話する
+    // (2a) 【ユーザー要件・最重要】描画確認フェーズ（confirming / ready / aiHasAskedConfirmation）での返答待ち催促：
+    // ・まだ一度もAIが確認質問を発話していない（!sc.aiHasAskedConfirmation）場合は、4.5秒無音で即座に確認発話を促す！
+    // ・すでにAIが確認質問を発話済みなら、20秒間無音が続いた場合に優しく催促発話する
     const isConfirmingPhase = sc.status === 'confirming' || sc.status === 'ready' || sc.aiHasAskedConfirmation;
     if (isConfirmingPhase) {
+      if (!sc.aiHasAskedConfirmation && silenceMs >= 4500 && !state.isAiSpeaking) {
+        state.lastAiSpeechFinishedTime = now;
+        state.currentSilenceSec = 0;
+        triggerSilenceFollowUp('confirm_prompt_20s');
+        return;
+      }
       if (silenceMs >= 20000 && !state.isAiSpeaking) {
         state.lastAiSpeechFinishedTime = now;
         state.currentSilenceSec = 0;
@@ -2171,11 +2177,11 @@ ${levelRules}
       if (seq !== state.directUserTranscriptSeq) return;
       // 4.5秒以内に継続発話があった場合は話し途中なので遮らない
       if (Date.now() - (state.directLastUserTranscriptTime || 0) < 4500) return;
-      // すでにGeminiが音声認識または返答した、あるいは直近プロンプト送信直後なら二重送信しない
-      if ((state.directLastGeminiInputTime || 0) >= startTime - 500) return;
+      // すでにAIが返答した、またはAI発話中・直近プロンプト送信直後なら二重送信しない
+      // （※GeminiがinputTranscriptionだけ返して無言になったケースも救済するため、directLastGeminiInputTimeではスキップしない）
       if ((state.lastAiSpeechFinishedTime || 0) >= startTime) return;
       if (state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
-      if (Date.now() - (state.directLastAiPromptTime || 0) < 8500) return;
+      if (Date.now() - (state.directLastAiPromptTime || 0) < 7000) return;
 
       const stepPrefixMap = {
         topic: '①テーマ', place: '②場所', weather: '③天候',
@@ -2195,8 +2201,17 @@ ${levelRules}
         const nextQ = stepQuestions[sc.activeStep] || stepQuestions.topic;
         promptText = `お父さんが「${text}」とお話しになりました。まず「${sPrefix}について復唱します。${text}ですね。」と短く復唱してから、続けて ${nextQ} と声に出して尋ねてください。`;
       } else if (sc.status === 'confirming' || sc.status === 'ready') {
+        if (checkUserUtteranceForDrawApprovalDirect(text)) {
+          logDiag('🎨 [直結フォールバック] 確認フェーズの承認に対して無応答のため描画を起動します');
+          executeConfirmedDrawing();
+          return;
+        }
         const summaryStr = buildCollectorSummaryText();
-        promptText = `お父さんが「${text}」とお話しになりました。現在の内容（${summaryStr}）について優しく返答してください。`;
+        if (!sc.aiHasAskedConfirmation) {
+          promptText = `6ステップの聞き取りが一通り完了しました（${summaryStr}）。「一通りお話を伺いました！${summaryStr}、という内容でよろしいでしょうか？もし修正したいところがあればもう一度お伺いしますね。よろしければこのまま絵を描きますね！」と優しく声に出して確認してください。`;
+        } else {
+          promptText = `お父さんが「${text}」とお話しになりました。現在の内容（${summaryStr}）で絵を描いてもよいか、優しく返答してください。`;
+        }
       } else {
         promptText = `お父さんが「${text}」とお話しになりました。温かく共感して返答してください。`;
       }
@@ -2210,6 +2225,57 @@ ${levelRules}
         }
       }));
     }, 5500);
+  }
+
+  function scheduleDirectEnsureAiResponseAfterInput(ws, seq) {
+    const startTime = Date.now();
+    setTimeout(() => {
+      const sc = state.sceneCollector;
+      if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') return;
+      if (seq !== state.directInputTransSeq) return;
+      if (Date.now() - (state.directLastGeminiInputTime || 0) < 4000) return;
+      if ((state.lastAiSpeechFinishedTime || 0) >= startTime) return;
+      if (state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
+      if (Date.now() - (state.directLastAiPromptTime || 0) < 7000) return;
+
+      const uText = correctJapaneseHomophonesJS((state.currentUserTurnTranscript || state.lastUserUtteranceText || '').trim());
+      if (!uText || isEchoOfAiDirect(uText)) return;
+
+      if ((sc.status === 'confirming' || sc.status === 'ready') && checkUserUtteranceForDrawApprovalDirect(uText)) {
+        logDiag('🎨 [直結応答保証] inputTranscription後の無応答を検知し、描画を起動します');
+        executeConfirmedDrawing();
+        return;
+      }
+
+      const summaryStr = buildCollectorSummaryText();
+      let promptText = '';
+      if ((sc.status === 'confirming' || sc.status === 'ready') && !sc.aiHasAskedConfirmation) {
+        promptText = `6ステップの聞き取りが一通り完了しました（${summaryStr}）。「一通りお話を伺いました！${summaryStr}、という内容でよろしいでしょうか？よろしければこのまま絵を描きますね！」と優しく声に出して確認してください。`;
+      } else if (sc.status === 'collecting') {
+        const stepQuestions = {
+          topic: '「①テーマについてお聞きします。どんな思い出の絵を描きましょうか？」',
+          place: '「②場所についてお聞きします。そこはどんな場所や舞台でしたか？」',
+          weather: '「③天候についてお聞きします。その時の季節やお天気はどうでしたか？」',
+          people: '「④登場人物についてお聞きします。そこにはどなたがいらっしゃいましたか？」',
+          details: '「⑤様子についてお聞きします。周りにどんなものが見えましたか？」',
+          mood: '「⑥雰囲気についてお聞きします。その時はどんなお気持ちでしたか？」'
+        };
+        const qText = stepQuestions[sc.activeStep] || stepQuestions.topic;
+        promptText = `お父さんが「${uText}」とお話しになりました。短く復唱してから、続けて ${qText} と声に出して尋ねてください。`;
+      } else {
+        promptText = `お父さんが「${uText}」とお話しになりました。温かく共感して返答してください。`;
+      }
+      state.directLastAiPromptTime = Date.now();
+      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
+      logDiag(`🔄 [直結応答保証] inputTranscription後4.5秒無応答のためAI応答を促します (status=${sc.status})`);
+      ws.send(JSON.stringify({
+        client_content: {
+          turns: [{ role: 'user', parts: [{ text: promptText }] }],
+          turn_complete: true
+        }
+      }));
+    }, 4500);
   }
 
   function recoverDirectTruncatedConfirmation(ws, truncatedText) {
@@ -2581,6 +2647,7 @@ ${levelRules}
             if (cleanUserTxt) {
               dom.userTranscriptText.textContent = `「${cleanUserTxt}」`;
             }
+            scheduleDirectEnsureAiResponseAfterInput(ws, state.directInputTransSeq);
           }
 
           const outputTrans = sc.outputTranscription || sc.output_transcription;
@@ -2640,12 +2707,12 @@ ${levelRules}
               updateSceneCollectorFromText(finishedAiTxt, 'ai');
 
               const col = state.sceneCollector;
-              // (A) 確認まとめの途中途切れリカバリー
+              // (A) 確認まとめの途中途切れ・または⑥完了後に確認質問を言わずに終わった場合のリカバリー
               if (
                 (col.status === 'confirming' || col.status === 'ready') &&
                 !state.isDrawingMedia &&
-                (finishedAiTxt.includes('一通りお話を伺いました') || finishedAiTxt.includes('復唱します') || finishedAiTxt.includes('まとめます')) &&
-                !['よろしいですか', 'よろしいでしょうか', '描いてよろしい', '描いてもよろしい', '描きましょうか', '？', '?'].some(kw => finishedAiTxt.includes(kw))
+                !['よろしいですか', 'よろしいでしょうか', '描いてよろしい', '描いてもよろしい', '描きましょうか', '？', '?'].some(kw => finishedAiTxt.includes(kw)) &&
+                (!col.aiHasAskedConfirmation || finishedAiTxt.includes('一通りお話を伺いました') || finishedAiTxt.includes('復唱します') || finishedAiTxt.includes('まとめます'))
               ) {
                 recoverDirectTruncatedConfirmation(ws, finishedAiTxt);
               }
@@ -6803,12 +6870,36 @@ ${artStyle.svgStyleRules}
       sc.isAwaitingConfirmation = true;
       sc.activeStep = 'confirm';
       logDiag('✨ 6ステップの聞き取りが一通り完了しました！内容確認へ移行します。');
-      if (!sc.aiHasAskedConfirmation && state.hasLocalBackend && !state.isDirectGeminiWs && state.socket && state.socket.readyState === WebSocket.OPEN) {
-        logDiag('📢 さくらさんへ内容確認の発話をリクエストします');
-        state.socket.send(JSON.stringify({
-          type: 'request_ask_confirmation',
-          summary: buildCollectorSummaryText()
-        }));
+      if (!sc.aiHasAskedConfirmation && state.socket && state.socket.readyState === WebSocket.OPEN) {
+        if (state.isDirectGeminiWs) {
+          const summaryForConfirm = buildCollectorSummaryText();
+          setTimeout(() => {
+            if (!state.isSessionActive || !state.isDirectGeminiWs || state.isDrawingMedia) return;
+            if (sc.aiHasAskedConfirmation || (sc.status !== 'confirming' && sc.status !== 'ready')) return;
+            if (state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
+            if (!state.socket || state.socket.readyState !== WebSocket.OPEN) return;
+            state.directLastAiPromptTime = Date.now();
+            state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4500);
+            logDiag('📢 [直結] 6ステップ完了に伴いさくらさんへ確認まとめ発話をリクエストします');
+            state.socket.send(JSON.stringify({
+              client_content: {
+                turns: [{
+                  role: 'user',
+                  parts: [{
+                    text: `6ステップの聞き取りが一通り完了しました（${summaryForConfirm}）。「一通りお話を伺いました！${summaryForConfirm}、という内容でよろしいでしょうか？よろしければこのまま絵を描きますね！」と優しく声に出して確認してください。`
+                  }]
+                }],
+                turn_complete: true
+              }
+            }));
+          }, 1800);
+        } else if (state.hasLocalBackend) {
+          logDiag('📢 さくらさんへ内容確認の発話をリクエストします');
+          state.socket.send(JSON.stringify({
+            type: 'request_ask_confirmation',
+            summary: buildCollectorSummaryText()
+          }));
+        }
       }
     }
     sc.lastStepAdvanceAiTurn = state.aiTurnCounter;
@@ -8219,11 +8310,37 @@ ${artStyle.svgStyleRules}
     }
 
     logDiag(`合意形成・確定によりキャンバス描画を実行します: 「${topic}」`);
+    if (state.isDirectGeminiWs && state.socket && state.socket.readyState === WebSocket.OPEN && !state.isAiSpeaking) {
+      const lastAi = (state.lastAiUtteranceText || '').trim();
+      const alreadyAnnounced = ['今から描', '描いてみます', '絵にしてみます', '少しだけ待って'].some(w => lastAi.includes(w));
+      if (!alreadyAnnounced) {
+        state.directLastAiPromptTime = Date.now();
+        state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
+        state.socket.send(JSON.stringify({
+          client_content: {
+            turns: [{ role: 'user', parts: [{ text: `ご本人が承認されました。「承知いたしました！それでは「${topic}」を今からキャンバスに描いてみますね。少しだけ待っていてください！」と1文だけで優しく伝えてください。ツールは呼ばないでください。` }] }],
+            turn_complete: true
+          }
+        }));
+      }
+    }
+
     await triggerSceneDrawingForTopic(topic, combinedElements);
 
     sc.status = 'drawn';
     renderSceneCollectorUI();
     setAvatarState('listening');
+
+    if (state.isDirectGeminiWs && state.socket && state.socket.readyState === WebSocket.OPEN) {
+      state.directLastAiPromptTime = Date.now();
+      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
+      state.socket.send(JSON.stringify({
+        client_content: {
+          turns: [{ role: 'user', parts: [{ text: `「${topic}」の絵がキャンバスに描き上がりました。「お待たせいたしました！絵が描き上がりましたよ。いかがでしょうか？この雰囲気でよいでしょうか、それとも描き直したいところはありますか？」と優しく声をかけてください。` }] }],
+          turn_complete: true
+        }
+      }));
+    }
   }
 
   // ============================================================================
