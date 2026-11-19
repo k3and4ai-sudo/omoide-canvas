@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261119_07';
-  const APP_VERSION_TITLE = '2026-11-19 直結モード発話検知感度HIGH化・無音フォローアップ即死バグ修正・自動再接続強化';
+  const APP_VERSION = 'v20261119_08';
+  const APP_VERSION_TITLE = '2026-11-19 2項目完了後のフォローアップ遮断バグ解消・復唱エコー誤ブロック修正・順方向ステップ探索';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -1880,6 +1880,19 @@ ${levelRules}
     }
   }
 
+  function findNextPendingStepForward(sc, currentStep) {
+    if (!sc || !sc.stepStates) return 'confirm';
+    const curIdx = COLLECTOR_STEPS.indexOf(currentStep);
+    if (curIdx >= 0) {
+      for (let i = curIdx + 1; i < COLLECTOR_STEPS.length; i++) {
+        if (sc.stepStates[COLLECTOR_STEPS[i]] === 'pending') {
+          return COLLECTOR_STEPS[i];
+        }
+      }
+    }
+    return COLLECTOR_STEPS.find(s => sc.stepStates[s] === 'pending') || 'confirm';
+  }
+
   function triggerSilenceFollowUp(reason) {
     const sc = state.sceneCollector;
     // 描画中（drawing）、描画完了後（drawn）は完全遮断
@@ -1887,9 +1900,9 @@ ${levelRules}
       return;
     }
 
-    // 確認中（confirming）は20秒催促（confirm_prompt_20s）のみ通過を許可
-    const isBannerOpen = dom.collectorActionBanner && !dom.collectorActionBanner.classList.contains('hidden');
-    if (reason !== 'confirm_prompt_20s' && (sc.status === 'confirming' || sc.status === 'ready' || isBannerOpen || sc.aiHasAskedConfirmation)) {
+    // 確認中（confirming / ready）は20秒催促（confirm_prompt_20s）のみ通過を許可
+    // ※2項目以上で早期表示される描画バナー（collectorActionBanner）は collecting 中も開くため、遮断条件に含めない
+    if (reason !== 'confirm_prompt_20s' && (sc.status === 'confirming' || sc.status === 'ready' || sc.aiHasAskedConfirmation)) {
       return;
     }
 
@@ -1961,7 +1974,7 @@ ${levelRules}
           };
           const prevStep = sc.activeStep;
           const nextPendingStep = (sc.stepStates[sc.activeStep] === 'filled' || sc.stepStates[sc.activeStep] === 'skipped')
-            ? (COLLECTOR_STEPS.find(s => sc.stepStates[s] === 'pending') || 'confirm')
+            ? findNextPendingStepForward(sc, sc.activeStep)
             : sc.activeStep;
           if (nextPendingStep === 'confirm') {
             sc.status = 'confirming';
@@ -2068,7 +2081,7 @@ ${levelRules}
     return t;
   }
 
-  function isEchoOfAiDirect(userText) {
+  function isEchoOfAiDirect(userText, excludeCurrentAi = false) {
     if (!userText) return true;
     const cleanUser = String(userText).trim().replace(/[\s。、！？・?!\n\r]/g, '');
     if (!cleanUser) return true;
@@ -2092,7 +2105,7 @@ ${levelRules}
     }
 
     const candidates = [];
-    if (state.currentAiTurnTranscript) candidates.push(state.currentAiTurnTranscript);
+    if (!excludeCurrentAi && state.currentAiTurnTranscript) candidates.push(state.currentAiTurnTranscript);
     if (state.lastAiUtteranceText) candidates.push(state.lastAiUtteranceText);
     for (const hist of recentList) {
       if (hist && !candidates.includes(hist)) candidates.push(hist);
@@ -2217,7 +2230,7 @@ ${levelRules}
       if (sc.status === 'collecting') {
         const sPrefix = stepPrefixMap[savedStep] || 'お話の内容';
         const nextPending = (sc.stepStates[sc.activeStep] === 'filled' || sc.stepStates[sc.activeStep] === 'skipped')
-          ? (COLLECTOR_STEPS.find(s => sc.stepStates[s] === 'pending') || 'confirm')
+          ? findNextPendingStepForward(sc, sc.activeStep)
           : sc.activeStep;
         if (nextPending === 'confirm') {
           sc.status = 'confirming';
@@ -2295,7 +2308,7 @@ ${levelRules}
           mood: '「⑥雰囲気についてお聞きします。その時はどんなお気持ちでしたか？」'
         };
         const nextPending = (sc.stepStates[sc.activeStep] === 'filled' || sc.stepStates[sc.activeStep] === 'skipped')
-          ? (COLLECTOR_STEPS.find(s => sc.stepStates[s] === 'pending') || 'confirm')
+          ? findNextPendingStepForward(sc, sc.activeStep)
           : sc.activeStep;
         if (nextPending === 'confirm') {
           sc.status = 'confirming';
@@ -2389,7 +2402,7 @@ ${levelRules}
 
       let effectiveStep = sc.activeStep;
       if (sc.stepStates[effectiveStep] === 'filled' || sc.stepStates[effectiveStep] === 'skipped') {
-        effectiveStep = COLLECTOR_STEPS.find(s => sc.stepStates[s] === 'pending') || 'confirm';
+        effectiveStep = findNextPendingStepForward(sc, effectiveStep);
       } else if (wasEchoTruncated && effectiveStep === scheduledStep) {
         effectiveStep = nextStepMap[scheduledStep] || scheduledStep;
       }
@@ -2750,7 +2763,7 @@ ${levelRules}
               const rawUText = state.currentUserTurnTranscript.trim();
               state.currentUserTurnTranscript = '';
               const uText = correctJapaneseHomophonesJS(rawUText);
-              if (!isEchoOfAiDirect(uText)) {
+              if (!isEchoOfAiDirect(uText, true)) {
                 state.lastUserUtteranceText = uText;
                 state.lastUserSpeechActivityTime = Date.now();
                 state.hasUnansweredUserTurn = true;
