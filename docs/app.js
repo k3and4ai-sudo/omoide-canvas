@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261120_02';
-  const APP_VERSION_TITLE = '2026-11-20 VAD無反応検知の誤発火防止(28秒・連続発話8チャンク以上)・再接続引き継ぎをsystemInstructionへ直注入・既確定ステップへの逆戻り防止・相槌「素敵」誤抽出防止';
+  const APP_VERSION = 'v20261120_03';
+  const APP_VERSION_TITLE = '2026-11-20 音声送信診断ログ追加(ctx/track/chunks/RMS)・idle状態でのVAD無反応自動復旧・AudioContext自動resume強化';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -1819,7 +1819,7 @@ ${levelRules}
       state.isDirectGeminiWs &&
       state.socket &&
       state.socket.readyState === WebSocket.OPEN &&
-      (sc.status === 'collecting' || sc.status === 'confirming' || sc.status === 'ready') &&
+      (sc.status === 'idle' || sc.status === 'collecting' || sc.status === 'confirming' || sc.status === 'ready') &&
       state.directPcmSentChunks > 20 &&
       (state.directMicSpeechChunksSinceLastInput || 0) >= 8 &&
       state.directLastMicSpeechRmsTime > lastAiEnd + 1500 &&
@@ -1959,7 +1959,13 @@ ${levelRules}
     const lastUserText = (state.lastUserUtteranceText || '').trim();
     const lastAiText = (state.lastAiUtteranceText || '').trim();
     const summaryStr = buildCollectorSummaryText();
+    const audioTrackState = state.micStream?.getAudioTracks?.()[0]?.readyState || 'none';
+    const audioMuted = state.micStream?.getAudioTracks?.()[0]?.muted;
+    const ctxState = state.audioContextIn?.state || 'none';
     logDiag(`⏱️ 会話が3秒以上途切れたためフォローアップ質問を実行 (${reason}, step=${sc.activeStep}, status=${sc.status})`);
+    if (state.isDirectGeminiWs) {
+      logDiag(`📡 [音声送信診断] ctx=${ctxState}, sr=${state.audioContextIn?.sampleRate || 0}, track=${audioTrackState}(muted=${audioMuted}), chunks=${state.directPcmSentChunks || 0}, speechChunks=${state.directMicSpeechChunksSinceLastInput || 0}, peakRMS=${(state.directLastMicPeakRms || 0).toFixed(4)}, isAiSpeaking=${state.isAiSpeaking}`);
+    }
 
     if (state.isSimulation && !state.hasLocalBackend) {
       const profile = state.currentProfile || DEFAULT_USER_PROFILE;
@@ -2752,6 +2758,9 @@ ${levelRules}
           state.directMicSpeechChunksSinceLastInput = 0;
           state.directLastMicSpeechRmsTime = 0;
           state.directLastMicPeakRms = 0;
+          if (state.audioContextIn && state.audioContextIn.state === 'suspended') {
+            try { state.audioContextIn.resume(); } catch (e) {}
+          }
           activateSessionUI(isReconnect);
           const cleanName = (profile.call_name || 'お父さん').replace(/\s*さん$/, '');
           const pName = partner.name || 'さくら';
