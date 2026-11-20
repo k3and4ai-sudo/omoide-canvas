@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261120_03';
-  const APP_VERSION_TITLE = '2026-11-20 音声送信診断ログ追加(ctx/track/chunks/RMS)・idle状態でのVAD無反応自動復旧・AudioContext自動resume強化';
+  const APP_VERSION = 'v20261120_04';
+  const APP_VERSION_TITLE = '2026-11-20 AI発話途中中断を根絶(turnComplete完了までisAiSpeaking保護)・SVG描画UIタイムアウト150秒化・白いチーズ→白いマルチーズ補正';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -159,6 +159,8 @@
     directLastMicSpeechRmsTime: 0,  // 直結モード時のマイク音声検知（RMS>=0.008）最終時刻
     directLastMicPeakRms: 0,        // 直結モード時の直近マイクピークRMS
     directLastVadRecoveryTime: 0,   // 直結モード時のVAD無反応自動再接続の最終実行時刻
+    isDirectAiTurnStreaming: false, // 直結モードでAIの1発話ターン（turnComplete前）をストリーミング中
+    directAiTurnStartedAt: 0,       // 直結モードでAI発話ターン開始時刻（25秒フェイルセーフ用）
     isAiSpeaking: false,            // AIが発話中（エコー防止用フラグ）
     aiSpeechEndTimer: null,         // AI発話終了判定タイマー
     noiseGateMode: 'normal',        // 現在の周囲音対策モード（標準感度デフォルト）
@@ -2122,6 +2124,7 @@ ${levelRules}
     t = t.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)って/g, '$1を飼って');
     t = t.replace(/(犬|猫|ペット|小鳥|柴犬|ワンちゃん|わんちゃん|ネコ|ねこ|子犬|子猫)\s*を?\s*(買|か)いたい/g, '$1を飼いたい');
     t = t.replace(/丸\s*チーズ/g, 'マルチーズ');
+    t = t.replace(/白い\s*チーズ(?:のような模様)?/g, '白いマルチーズ');
     return t;
   }
 
@@ -2758,6 +2761,8 @@ ${levelRules}
           state.directMicSpeechChunksSinceLastInput = 0;
           state.directLastMicSpeechRmsTime = 0;
           state.directLastMicPeakRms = 0;
+          state.isDirectAiTurnStreaming = false;
+          state.directAiTurnStartedAt = 0;
           if (state.audioContextIn && state.audioContextIn.state === 'suspended') {
             try { state.audioContextIn.resume(); } catch (e) {}
           }
@@ -2834,6 +2839,7 @@ ${levelRules}
         const sc = msg.serverContent || msg.server_content;
         if (sc) {
           if (sc.interrupted) {
+            state.isDirectAiTurnStreaming = false;
             const partialAi = (state.currentAiTurnTranscript || '').trim();
             if (Date.now() < (state.directEchoGuardUntil || 0) || state.isAiSpeaking) {
               logDiag('[EchoGuard] AI発話中の誤割り込み(interrupted)を無視しました');
@@ -2856,6 +2862,10 @@ ${levelRules}
 
           const modelTurn = sc.modelTurn || sc.model_turn;
           if (modelTurn && Array.isArray(modelTurn.parts)) {
+            if (!state.isDirectAiTurnStreaming) {
+              state.isDirectAiTurnStreaming = true;
+              state.directAiTurnStartedAt = Date.now();
+            }
             for (const part of modelTurn.parts) {
               const inlineData = part.inlineData || part.inline_data;
               if (inlineData && inlineData.data) {
@@ -2894,6 +2904,11 @@ ${levelRules}
 
           const outputTrans = sc.outputTranscription || sc.output_transcription;
           if (outputTrans && outputTrans.text) {
+            if (!state.isDirectAiTurnStreaming) {
+              state.isDirectAiTurnStreaming = true;
+              state.directAiTurnStartedAt = Date.now();
+            }
+            state.isAiSpeaking = true;
             state.currentAiTurnTranscript += outputTrans.text;
             state.lastAiSpeechFinishedTime = Date.now();
             state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 2600);
@@ -2905,6 +2920,23 @@ ${levelRules}
           }
 
           if (sc.turnComplete || sc.turn_complete) {
+            // AIの1発話ターン送信が完了：再生残時間＋250ms余韻の後に確実にマイクを解放
+            state.isDirectAiTurnStreaming = false;
+            if (state.isAiSpeaking) {
+              const ctxOut = state.audioContextOut;
+              const remPlayMs = (ctxOut && state.nextPlaybackTime > ctxOut.currentTime)
+                ? (state.nextPlaybackTime - ctxOut.currentTime) * 1000
+                : 0;
+              if (state.aiSpeechEndTimer) clearTimeout(state.aiSpeechEndTimer);
+              state.aiSpeechEndTimer = setTimeout(() => {
+                if (state.isDirectAiTurnStreaming) return;
+                state.isAiSpeaking = false;
+                state.lastAiSpeechFinishedTime = Date.now();
+                if (!state.isDrawingMedia) {
+                  setAvatarState('listening');
+                }
+              }, Math.max(250, remPlayMs + 250));
+            }
             // 1. ユーザー自身の発話テキスト（認識できた場合）をエコー除去・同音異義語補正して処理
             if (state.currentUserTurnTranscript.trim()) {
               const rawUText = state.currentUserTurnTranscript.trim();
@@ -3231,6 +3263,8 @@ ${levelRules}
       window.speechSynthesis.cancel();
     }
     state.isAiSpeaking = false;
+    state.isDirectAiTurnStreaming = false;
+    state.directAiTurnStartedAt = 0;
     state.pendingUserTranscript = '';
     state.currentAiTurnTranscript = '';
     state.currentUserTurnTranscript = '';
@@ -5670,10 +5704,13 @@ ${artStyle.svgStyleRules}
     source.start(state.nextPlaybackTime);
     state.nextPlaybackTime += audioBuffer.duration;
 
-    // ハードウェアレベルでの再生完了イベント（タイマーと二重で保護し、最後のチャンク終了後に余韻220msを待って語尾途切れと語頭欠けを両立）
+    // ハードウェアレベルでの再生完了イベント（タイマーと二重で保護し、直結モードではturnComplete到着前のチャンク間ギャップによる途中中断を完全防止）
     source.onended = () => {
       if (ctx.currentTime >= state.nextPlaybackTime - 0.05) {
         setTimeout(() => {
+          if (state.isDirectGeminiWs && state.isDirectAiTurnStreaming && (Date.now() - (state.directAiTurnStartedAt || 0) < 25000)) {
+            return;
+          }
           if (ctx.currentTime >= state.nextPlaybackTime - 0.05) {
             state.isAiSpeaking = false;
             state.lastAiSpeechFinishedTime = Date.now();
@@ -5684,7 +5721,7 @@ ${artStyle.svgStyleRules}
               state.socket.send(JSON.stringify({ type: 'ai_speech_ended' }));
             }
           }
-        }, 220);
+        }, 250);
       }
     };
 
@@ -5700,9 +5737,12 @@ ${artStyle.svgStyleRules}
     if (state.aiSpeechEndTimer) {
       clearTimeout(state.aiSpeechEndTimer);
     }
-    // スピーカーからの出音余韻マージン（220ms: 語尾途切れを防ぎつつユーザーの話し始め欠けを最小化）
-    const remainingMs = Math.max(150, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 220);
+    // スピーカーからの出音余韻マージン（直結モードはturnComplete完了まで保護し、最大25秒フェイルセーフ）
+    const remainingMs = Math.max(250, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 250);
     state.aiSpeechEndTimer = setTimeout(() => {
+      if (state.isDirectGeminiWs && state.isDirectAiTurnStreaming && (Date.now() - (state.directAiTurnStartedAt || 0) < 25000)) {
+        return;
+      }
       state.isAiSpeaking = false;
       state.lastAiSpeechFinishedTime = Date.now();
       if (!state.isDrawingMedia) {
@@ -5797,9 +5837,9 @@ ${artStyle.svgStyleRules}
   function updateDrawingTimerDisplay() {
     const elapsedSec = Math.floor((Date.now() - drawingStartTime) / 1000);
 
-    // 万一サーバー通信が途切れて75秒以上経過した場合のフェイルセーフ（SVG生成60秒タイムアウトに対応）
-    if (elapsedSec >= 75 && state.isDrawingMedia) {
-      logDiag('描画タイムアウト（75秒経過）: セーフティネットにより描画オーバーレイを自動解除します。');
+    // 万一サーバー通信が途切れて150秒以上経過した場合のフェイルセーフ（高精細SVG生成の最大180秒タイムアウトに対応）
+    if (elapsedSec >= 150 && state.isDrawingMedia) {
+      logDiag('描画タイムアウト（150秒経過）: セーフティネットにより描画オーバーレイを自動解除します。');
       stopDrawingProgress();
       if (state.sceneCollector && state.sceneCollector.status === 'drawing') {
         state.sceneCollector.status = 'ready';
