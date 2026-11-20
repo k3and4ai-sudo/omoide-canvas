@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261120_04';
-  const APP_VERSION_TITLE = '2026-11-20 AI発話途中中断を根絶(turnComplete完了までisAiSpeaking保護)・SVG描画UIタイムアウト150秒化・白いチーズ→白いマルチーズ補正';
+  const APP_VERSION = 'v20261120_05';
+  const APP_VERSION_TITLE = '2026-11-20 自己エコーループ根絶(ハードウェア出力遅延+550msハードミュート＆直後600ms残響リバーブゲート)';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -2920,13 +2920,17 @@ ${levelRules}
           }
 
           if (sc.turnComplete || sc.turn_complete) {
-            // AIの1発話ターン送信が完了：再生残時間＋250ms余韻の後に確実にマイクを解放
+            // AIの1発話ターン送信が完了：再生残時間＋ハードウェア出力遅延＋550ms余韻の後にマイクを解放（自己エコーループ根絶）
             state.isDirectAiTurnStreaming = false;
             if (state.isAiSpeaking) {
               const ctxOut = state.audioContextOut;
               const remPlayMs = (ctxOut && state.nextPlaybackTime > ctxOut.currentTime)
                 ? (state.nextPlaybackTime - ctxOut.currentTime) * 1000
                 : 0;
+              const hwLatencyMs = ctxOut
+                ? Math.min(400, ((ctxOut.outputLatency || 0) + (ctxOut.baseLatency || 0)) * 1000)
+                : 0;
+              const releaseDelayMs = Math.max(550, remPlayMs + hwLatencyMs + 550);
               if (state.aiSpeechEndTimer) clearTimeout(state.aiSpeechEndTimer);
               state.aiSpeechEndTimer = setTimeout(() => {
                 if (state.isDirectAiTurnStreaming) return;
@@ -2935,7 +2939,7 @@ ${levelRules}
                 if (!state.isDrawingMedia) {
                   setAvatarState('listening');
                 }
-              }, Math.max(250, remPlayMs + 250));
+              }, releaseDelayMs);
             }
             // 1. ユーザー自身の発話テキスト（認識できた場合）をエコー除去・同音異義語補正して処理
             if (state.currentUserTurnTranscript.trim()) {
@@ -3421,13 +3425,21 @@ ${levelRules}
       //   AI発話中・描画中以外はそのまま生PCM音声をGemini Liveへ送信する！
       // ・テレビ・周囲音カット（tv_cut / strict / ultra）選択時のみRMSしきい値ゲートを適用する
       if (state.noiseGateMode === 'normal') {
-        state.lastVoiceActiveTime = Date.now();
+        const nowMs = Date.now();
+        // AI発話終了直後の600ms間のみ、スピーカー残響（小音量の自己エコー）を無音化し、
+        // 近接した人の声（RMS >= 0.015）だけを通す2段目残響ゲートを適用
+        if ((nowMs - (state.lastAiSpeechFinishedTime || 0)) < 600 && rms < 0.015) {
+          const zeroPcm = new Int16Array(downsampledData.length);
+          sendPcmAudioChunk(zeroPcm.buffer);
+          return;
+        }
+        state.lastVoiceActiveTime = nowMs;
         state.directPcmSentChunks = (state.directPcmSentChunks || 0) + 1;
         if (rms > (state.directLastMicPeakRms || 0)) {
           state.directLastMicPeakRms = rms;
         }
         if (rms >= 0.008) {
-          state.directLastMicSpeechRmsTime = Date.now();
+          state.directLastMicSpeechRmsTime = nowMs;
           state.directMicSpeechChunksSinceLastInput = (state.directMicSpeechChunksSinceLastInput || 0) + 1;
         }
         sendPcmAudioChunk(pcm16.buffer);
@@ -5704,7 +5716,9 @@ ${artStyle.svgStyleRules}
     source.start(state.nextPlaybackTime);
     state.nextPlaybackTime += audioBuffer.duration;
 
-    // ハードウェアレベルでの再生完了イベント（タイマーと二重で保護し、直結モードではturnComplete到着前のチャンク間ギャップによる途中中断を完全防止）
+    // ハードウェアレベルでの再生完了イベント（直結モードではturnComplete到着前の中断防止＋ハードウェア出力遅延＋550ms余韻で自己エコー根絶）
+    const hwLatencyMs = Math.min(400, ((ctx.outputLatency || 0) + (ctx.baseLatency || 0)) * 1000);
+    const tailGuardMs = Math.round(550 + hwLatencyMs);
     source.onended = () => {
       if (ctx.currentTime >= state.nextPlaybackTime - 0.05) {
         setTimeout(() => {
@@ -5721,7 +5735,7 @@ ${artStyle.svgStyleRules}
               state.socket.send(JSON.stringify({ type: 'ai_speech_ended' }));
             }
           }
-        }, 250);
+        }, tailGuardMs);
       }
     };
 
@@ -5737,8 +5751,8 @@ ${artStyle.svgStyleRules}
     if (state.aiSpeechEndTimer) {
       clearTimeout(state.aiSpeechEndTimer);
     }
-    // スピーカーからの出音余韻マージン（直結モードはturnComplete完了まで保護し、最大25秒フェイルセーフ）
-    const remainingMs = Math.max(250, (state.nextPlaybackTime - ctx.currentTime) * 1000 + 250);
+    // スピーカーからの出音余韻マージン（直結モードはturnComplete完了＋ハードウェア遅延＋550msまで保護）
+    const remainingMs = Math.max(tailGuardMs, (state.nextPlaybackTime - ctx.currentTime) * 1000 + tailGuardMs);
     state.aiSpeechEndTimer = setTimeout(() => {
       if (state.isDirectGeminiWs && state.isDirectAiTurnStreaming && (Date.now() - (state.directAiTurnStartedAt || 0) < 25000)) {
         return;
