@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261120_05';
+  const APP_VERSION = 'v20261124_01';
   const APP_VERSION_TITLE = '2026-11-20 自己エコーループ根絶(ハードウェア出力遅延+550msハードミュート＆直後600ms残響リバーブゲート)';
 
   function escapeHtml(str) {
@@ -2040,14 +2040,11 @@ ${levelRules}
             }
           }
         }
-        state.directLastAiPromptTime = Date.now();
-        state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
-        state.socket.send(JSON.stringify({
-          client_content: {
-            turns: [{ role: 'user', parts: [{ text: promptText }] }],
-            turn_complete: true
-          }
-        }));
+        if (isAiCurrentlySpeakingOrPlaying()) {
+          logDiag('🛡️ AI発話・再生中のため無音フォローアップ送信をスキップしました');
+          return;
+        }
+        sendDirectClientContentSafely(state.socket, promptText, { echoGuardMs: 4000 });
       } else {
         state.socket.send(JSON.stringify({
           type: 'prompt_followup',
@@ -2276,7 +2273,7 @@ ${levelRules}
       // すでにAIが返答した、またはAI発話中・直近プロンプト送信直後なら二重送信しない
       // （※GeminiがinputTranscriptionだけ返して無言になったケースも救済するため、directLastGeminiInputTimeではスキップしない）
       if ((state.lastAiSpeechFinishedTime || 0) >= startTime) return;
-      if (state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
+      if (isAiCurrentlySpeakingOrPlaying() || (state.currentAiTurnTranscript || '').trim()) return;
       if (Date.now() - (state.directLastAiPromptTime || 0) < 7000) return;
 
       const stepPrefixMap = {
@@ -2326,15 +2323,8 @@ ${levelRules}
       } else {
         promptText = `お父さんが「${text}」とお話しになりました。温かく共感して返答してください。`;
       }
-      state.directLastAiPromptTime = Date.now();
-      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
       logDiag(`🔄 [直結] Gemini無反応のため5.5秒フォールバック送信: 「${text}」`);
-      ws.send(JSON.stringify({
-        client_content: {
-          turns: [{ role: 'user', parts: [{ text: promptText }] }],
-          turn_complete: true
-        }
-      }));
+      sendDirectClientContentSafely(ws, promptText, { echoGuardMs: 4000 });
     }, 5500);
   }
 
@@ -2347,7 +2337,7 @@ ${levelRules}
       if (seq !== state.directInputTransSeq) return;
       if (Date.now() - (state.directLastGeminiInputTime || 0) < 5000) return;
       if ((state.lastAiSpeechFinishedTime || 0) >= startTime) return;
-      if (state.isAiSpeaking || (state.currentAiTurnTranscript || '').trim()) return;
+      if (isAiCurrentlySpeakingOrPlaying() || (state.currentAiTurnTranscript || '').trim()) return;
       if (Date.now() - (state.directLastAiPromptTime || 0) < 7000) return;
 
       const uText = correctJapaneseHomophonesJS((state.currentUserTurnTranscript || state.lastUserUtteranceText || '').trim());
@@ -2391,15 +2381,8 @@ ${levelRules}
       } else {
         promptText = `お父さんが「${uText}」とお話しになりました。温かく共感して返答してください。`;
       }
-      state.directLastAiPromptTime = Date.now();
-      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
       logDiag(`🔄 [直結応答保証] inputTranscription後6.0秒無応答のためAI応答を促します (status=${sc.status})`);
-      ws.send(JSON.stringify({
-        client_content: {
-          turns: [{ role: 'user', parts: [{ text: promptText }] }],
-          turn_complete: true
-        }
-      }));
+      sendDirectClientContentSafely(ws, promptText, { echoGuardMs: 4000 });
     }, 6000);
   }
 
@@ -2413,8 +2396,8 @@ ${levelRules}
       if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') return;
       if ((state.aiTurnCounter || 0) > scheduledAiTurn || (state.currentAiTurnTranscript || '').trim()) return;
       if ((state.directConfirmRecoveryCount || 0) >= 1) return;
-      if (state.isAiSpeaking) {
-        if (retryCount < 5) {
+      if (isAiCurrentlySpeakingOrPlaying()) {
+        if (retryCount < 8) {
           setTimeout(() => attemptRecovery(retryCount + 1), 1500);
         }
         return;
@@ -2429,17 +2412,11 @@ ${levelRules}
         `これまで伺った全項目：\n${summaryCtx}\n\n` +
         `直前の発言「${truncatedText.slice(-45)}」の続きから、残りの項目（①〜⑥のうちまだ復唱していない項目）をすべて最後まで簡潔に声に出して復唱し、` +
         `そのあとで必ず${nickname}に向かって「この内容で絵を描いてもよろしいでしょうか？」と尋ねてください。`;
-      state.directLastAiPromptTime = Date.now();
-      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4500);
       logDiag(`🔄 [直結] 確認まとめ途中途切れを自動リカバリーします (1回限り)`);
-      ws.send(JSON.stringify({
-        client_content: {
-          turns: [{ role: 'user', parts: [{ text: recoveryPrompt }] }],
-          turn_complete: true
-        }
-      }));
+      sendDirectClientContentSafely(ws, recoveryPrompt, { echoGuardMs: 4500 });
     };
-    setTimeout(() => attemptRecovery(0), 2500);
+    const initialConfirmDelay = Math.max(2500, Math.round(getRemainingAiPlaybackMs() + 2000));
+    setTimeout(() => attemptRecovery(0), initialConfirmDelay);
   }
 
   function recoverDirectCollectingQuestion(ws, completedAiTurn) {
@@ -2466,8 +2443,8 @@ ${levelRules}
       if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
       if (sc.status !== 'collecting' || state.isDrawingMedia) return;
       if ((state.aiTurnCounter || 0) > scheduledAiTurn || (state.currentAiTurnTranscript || '').trim()) return;
-      if (state.isAiSpeaking) {
-        if (retryCount < 5) {
+      if (isAiCurrentlySpeakingOrPlaying()) {
+        if (retryCount < 8) {
           setTimeout(() => attemptRecovery(retryCount + 1), 1500);
         }
         return;
@@ -2504,17 +2481,11 @@ ${levelRules}
       } else {
         recMsg = `続けて ${q} と1文だけで短く声に出して尋ねてください。`;
       }
-      state.directLastAiPromptTime = Date.now();
-      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
       logDiag(`🔄 [直結] 聞き取り途中途切れを自動リカバリー (echo_cut=${wasEchoTruncated}, step=${effectiveStep})`);
-      ws.send(JSON.stringify({
-        client_content: {
-          turns: [{ role: 'user', parts: [{ text: recMsg }] }],
-          turn_complete: true
-        }
-      }));
+      sendDirectClientContentSafely(ws, recMsg, { echoGuardMs: 4000 });
     };
-    setTimeout(() => attemptRecovery(0), 3500);
+    const initialCollectDelay = Math.max(3500, Math.round(getRemainingAiPlaybackMs() + 2800));
+    setTimeout(() => attemptRecovery(0), initialCollectDelay);
   }
 
   function sanitizeSceneElementsJS(title, elements) {
@@ -2612,6 +2583,58 @@ ${levelRules}
     return null;
   }
 
+  function isAiCurrentlySpeakingOrPlaying() {
+    if (state.isAiSpeaking) return true;
+    if (state.isDirectGeminiWs && state.isDirectAiTurnStreaming && (Date.now() - (state.directAiTurnStartedAt || 0) < 25000)) {
+      return true;
+    }
+    if (state.audioContextOut && state.nextPlaybackTime > state.audioContextOut.currentTime + 0.05) {
+      return true;
+    }
+    return false;
+  }
+
+  function getRemainingAiPlaybackMs() {
+    if (!state.audioContextOut) return 0;
+    return Math.max(0, (state.nextPlaybackTime - state.audioContextOut.currentTime) * 1000);
+  }
+
+  /**
+   * Gemini Live直結モードでAI発話・再生中の割り込み中断を絶対に起こさずに client_content を安全送信する
+   */
+  function sendDirectClientContentSafely(ws, text, opts = {}) {
+    if (!ws || !text) return;
+    const cancelOnNewAiTurn = opts.cancelOnNewAiTurn !== false;
+    const echoGuardMs = opts.echoGuardMs || 4000;
+    const maxWaitRetries = opts.maxWaitRetries || 16; // 最大約12.8秒待機
+    const scheduledAiTurn = state.aiTurnCounter || 0;
+
+    const trySend = (retry) => {
+      if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (state.isDrawingMedia && !opts.allowDuringDrawing) return;
+      if (cancelOnNewAiTurn && (state.aiTurnCounter || 0) > scheduledAiTurn) return;
+
+      if (isAiCurrentlySpeakingOrPlaying()) {
+        if (retry < maxWaitRetries) {
+          const waitMs = Math.min(1200, Math.max(500, getRemainingAiPlaybackMs() + 250));
+          setTimeout(() => trySend(retry + 1), waitMs);
+        } else {
+          logDiag('🛡️ AI発話継続中のため割り込みプロンプト送信をキャンセルしました');
+        }
+        return;
+      }
+      state.directLastAiPromptTime = Date.now();
+      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + echoGuardMs);
+      ws.send(JSON.stringify({
+        client_content: {
+          turns: [{ role: 'user', parts: [{ text }] }],
+          turn_complete: true
+        }
+      }));
+    };
+    trySend(0);
+  }
+
   function connectDirectGeminiLiveWebSocket(isReconnect = false) {
     state.isDirectGeminiWs = true;
     state.isSimulation = false;
@@ -2683,9 +2706,9 @@ ${levelRules}
             automatic_activity_detection: {
               disabled: false,
               start_of_speech_sensitivity: 'START_SENSITIVITY_HIGH',
-              end_of_speech_sensitivity: 'END_SENSITIVITY_HIGH',
+              end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
               prefix_padding_ms: 500,
-              silence_duration_ms: 1200
+              silence_duration_ms: 1600
             }
           },
           tools: [
@@ -2920,7 +2943,7 @@ ${levelRules}
           }
 
           if (sc.turnComplete || sc.turn_complete) {
-            // AIの1発話ターン送信が完了：再生残時間＋ハードウェア出力遅延＋550ms余韻の後にマイクを解放（自己エコーループ根絶）
+            // AIの1発話ターン送信が完了：再生残時間＋ハードウェア出力遅延＋350ms余韻の後にマイクを解放
             state.isDirectAiTurnStreaming = false;
             if (state.isAiSpeaking) {
               const ctxOut = state.audioContextOut;
@@ -2928,9 +2951,9 @@ ${levelRules}
                 ? (state.nextPlaybackTime - ctxOut.currentTime) * 1000
                 : 0;
               const hwLatencyMs = ctxOut
-                ? Math.min(400, ((ctxOut.outputLatency || 0) + (ctxOut.baseLatency || 0)) * 1000)
+                ? Math.min(350, ((ctxOut.outputLatency || 0) + (ctxOut.baseLatency || 0)) * 1000)
                 : 0;
-              const releaseDelayMs = Math.max(550, remPlayMs + hwLatencyMs + 550);
+              const releaseDelayMs = Math.max(350, remPlayMs + hwLatencyMs + 350);
               if (state.aiSpeechEndTimer) clearTimeout(state.aiSpeechEndTimer);
               state.aiSpeechEndTimer = setTimeout(() => {
                 if (state.isDirectAiTurnStreaming) return;
@@ -3021,10 +3044,7 @@ ${levelRules}
                 const profile = state.currentProfile || DEFAULT_USER_PROFILE;
                 const nickname = formatUserNickname(profile.call_name);
                 const advPrompt = `聞き取りの途中です。${nickname}に向かって、「先ほどの続きですね！${stepLabels[col.activeStep] || '情景の様子'}について教えていただけますか？」と優しく問いかけて聞き取りを進めてください。`;
-                state.directLastAiPromptTime = Date.now();
-                ws.send(JSON.stringify({
-                  client_content: { turns: [{ role: 'user', parts: [{ text: advPrompt }] }], turn_complete: true }
-                }));
+                sendDirectClientContentSafely(ws, advPrompt, { echoGuardMs: 4000 });
               }
 
               // (D) セーフティネット：AIが「今から描いてみますね」と宣言したのにツールを呼ばなかった場合
@@ -3092,18 +3112,13 @@ ${levelRules}
               dismissCanvasError();
 
               // 情景情報を情景メモに統合
-              state.sceneCollector.topic = rawTitle;
+              // ※重要: ユーザー発話から既に埋まっている①話題や⑤見えたもの・様子(details)を、
+              //   AIのツール引数(args.visual_elements等)で勝手に上書き・追加しない！（話していない要素の混入を完全防止）
+              if (!state.sceneCollector.topic && rawTitle && rawTitle !== '思い出の情景') {
+                state.sceneCollector.topic = rawTitle;
+              }
               if (feedback) {
                 state.sceneCollector.details.add(`【修正指示】${feedback}`);
-              }
-              if (rawElements) {
-                const parts = rawElements.split(/[、,，/]/);
-                parts.forEach(p => {
-                  const cp = p.trim();
-                  if (cp.length >= 2 && cp.length <= 15 && !cp.includes('描きたい情景') && !cp.includes('会話')) {
-                    state.sceneCollector.details.add(cp);
-                  }
-                });
               }
 
               // AIツールによる描画開始：直ちに情景の聞き取りを中止して描画フェーズへ移行！
@@ -3365,14 +3380,21 @@ ${levelRules}
 
       if (!state.isSessionActive || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
 
-      // AI発話中または描画生成中（isDrawingMedia）はマイク入力を破棄して送信しない
-      // （バージイン誤検知および描画途中のフライング「これでいいですか？」発話を完全遮断）
+      // AI発話中または描画生成中（isDrawingMedia）は実音声を遮断する
+      // （直結モードでは無音PCMを間引き送信してGemini LiveのVADパイプラインを温めたまま維持し、発話開始の聞き取り遅延を防止）
       if (state.isAiSpeaking || state.isDrawingMedia) {
         preSpeechRingBuffer = [];
         voiceHangoverChunks = 0;
         isSpeakingUtterance = false;
         chunksSentInUtterance = 0;
         vadSilenceChunks = 0;
+        if (state.isDirectGeminiWs && !state.isDrawingMedia) {
+          state.directSilentKeepaliveCount = (state.directSilentKeepaliveCount || 0) + 1;
+          if (state.directSilentKeepaliveCount % 3 === 0) {
+            const silentLen = Math.max(160, Math.floor(e.inputBuffer.length / (actualSampleRate / SAMPLE_RATE_IN)));
+            sendPcmAudioChunk(new Int16Array(silentLen).buffer);
+          }
+        }
         return;
       }
 
@@ -3426,9 +3448,9 @@ ${levelRules}
       // ・テレビ・周囲音カット（tv_cut / strict / ultra）選択時のみRMSしきい値ゲートを適用する
       if (state.noiseGateMode === 'normal') {
         const nowMs = Date.now();
-        // AI発話終了直後の600ms間のみ、スピーカー残響（小音量の自己エコー）を無音化し、
-        // 近接した人の声（RMS >= 0.015）だけを通す2段目残響ゲートを適用
-        if ((nowMs - (state.lastAiSpeechFinishedTime || 0)) < 600 && rms < 0.015) {
+        // AI発話終了直後の350ms間のみ、微弱なスピーカー残響（RMS < 0.0055）を無音化し、
+        // 通常の話し声（RMS >= 0.0055）は即座に通してマイクの聞き取りやすさを確保
+        if ((nowMs - (state.lastAiSpeechFinishedTime || 0)) < 350 && rms < 0.0055) {
           const zeroPcm = new Int16Array(downsampledData.length);
           sendPcmAudioChunk(zeroPcm.buffer);
           return;
@@ -5124,23 +5146,35 @@ ${artStyle.svgStyleRules}
 
           const preferLiteInitial = (Date.now() - (state.gemini35Flash503At || 0)) < 5 * 60 * 1000;
           const candidateModels = preferLiteInitial
-            ? ['gemini-3.5-flash-lite', 'gemini-3.5-flash']
-            : ['gemini-3.5-flash', 'gemini-3.5-flash-lite'];
+            ? ['gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash']
+            : ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-3.5-flash-lite'];
+          const modelAttemptLogs = [];
           for (const modelName of candidateModels) {
             try {
-              logDiag(`AI高精細SVG描画を試行中 (${modelName} / 最大180秒): 「${cleanTitle}」`);
-              const resSvg = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
-                {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    contents: [{ parts: [{ text: svgPrompt }] }],
-                    generationConfig: { temperature: 0.3, maxOutputTokens: 16384 }
-                  }),
-                  signal: AbortSignal.timeout ? AbortSignal.timeout(180000) : undefined
+              logDiag(`AI高精細SVG描画を試行中 (${modelName} / 最大55秒): 「${cleanTitle}」`);
+              const requestSvg = (useThinkingZero) => {
+                const genCfg = { temperature: 0.3, maxOutputTokens: 8192 };
+                if (useThinkingZero) {
+                  genCfg.thinkingConfig = { thinkingBudget: 0 };
                 }
-              );
+                return fetch(
+                  `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
+                  {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      contents: [{ parts: [{ text: svgPrompt }] }],
+                      generationConfig: genCfg
+                    }),
+                    signal: AbortSignal.timeout ? AbortSignal.timeout(55000) : undefined
+                  }
+                );
+              };
+              let resSvg = await requestSvg(true);
+              if (resSvg.status === 400) {
+                logDiag(`モデル ${modelName} が thinkingConfig 非対応(400)のため通常設定で再試行します`);
+                resSvg = await requestSvg(false);
+              }
               recordApiCall(resSvg.headers, resSvg.status);
               if (resSvg.ok) {
                 const dataSvg = await resSvg.json();
@@ -5154,17 +5188,25 @@ ${artStyle.svgStyleRules}
                   logDiag(`✅ Gemini (${modelName}) による高精細オーダーメイド情景画(SVG)の描画＆XML検証に成功しました！`);
                   break;
                 } else {
+                  modelAttemptLogs.push(`❌ ${modelName}: SVG検証エラー`);
                   logDiag(`⚠️ モデル ${modelName} のSVG出力がXML検証に失敗しました。次の候補モデルを試行します。`);
                 }
               } else {
                 if (modelName === 'gemini-3.5-flash' && resSvg.status === 503) {
                   state.gemini35Flash503At = Date.now();
                 }
+                modelAttemptLogs.push(`❌ ${modelName}: HTTP ${resSvg.status}`);
                 logDiag(`モデル ${modelName} 応答ステータス: ${resSvg.status}。次の候補モデルを試行します。`);
               }
             } catch (mErr) {
+              modelAttemptLogs.push(`❌ ${modelName}: ${mErr.name === 'TimeoutError' ? 'タイムアウト(55秒)' : mErr.message}`);
               logDiag(`モデル ${modelName} エラー: ${mErr.message}。次の候補モデルを試行します。`);
             }
+          }
+          if (!mediaDataUrl && modelAttemptLogs.length > 0) {
+            state.lastSvgErrorDetails = modelAttemptLogs.join('\n');
+          } else {
+            state.lastSvgErrorDetails = '';
           }
         } catch (svgErr) {
           logDiag(`Gemini SVG APIエラー: ${svgErr.message}`);
@@ -5194,7 +5236,8 @@ ${artStyle.svgStyleRules}
       ambient_sound: ambientSound,
       is_fallback: isFallback,
       is_blank: isBlank,
-      model_summary: usedModelName || 'なし'
+      model_summary: usedModelName || 'なし',
+      error_details: isBlank ? (state.lastSvgErrorDetails || '') : ''
     };
 
     state.sessionMemories.push(artifact);
@@ -5250,14 +5293,33 @@ ${artStyle.svgStyleRules}
       };
 
       const artifact = await generateStandaloneMemoryArtifact(enrichedArgs);
+      const isBlankArtifact = !!(artifact && (artifact.is_blank || !artifact.media_url));
       if (mySeqId === state.drawSequenceId) {
         displayGeneratedMedia(artifact);
-        state.sceneCollector.status = 'drawn';
-        state.sceneCollector.isAwaitingConfirmation = false;
+        if (isBlankArtifact) {
+          // タイムアウト・描画失敗時は「描画完了」にせず確認待ちへ戻し、いつでも再描画できるようにする
+          state.sceneCollector.status = 'confirming';
+          state.sceneCollector.activeStep = 'confirm';
+          state.sceneCollector.isAwaitingConfirmation = true;
+        } else {
+          state.sceneCollector.status = 'drawn';
+          state.sceneCollector.isAwaitingConfirmation = false;
+        }
         renderSceneCollectorUI();
       }
 
       if (ws && ws.readyState === WebSocket.OPEN) {
+        const responseOutput = isBlankArtifact
+          ? {
+              status: 'drawing_failed_timeout',
+              title: artifact.title,
+              message: '申し訳ありません。AIモデルの混雑またはタイムアウトのため、今回は絵を描画できずキャンバスは白紙のままです。「絵が浮かびました」「完成しました」とは絶対に言わないでください。「ごめんなさい、少し混み合っていて今回は絵が描けませんでした。もう一度描いてみましょうか、それともこのままお話を続けましょうか？」と優しく正直にお伝えください。'
+            }
+          : {
+              status: 'displayed_on_canvas',
+              title: artifact.title,
+              message: 'キャンバスに絵が表示されました。感想を尋ね、「この雰囲気でよいでしょうか？もし描き直したいところがあれば教えてくださいね」と優しく声をかけてください。'
+            };
         ws.send(JSON.stringify({
           tool_response: {
             function_responses: [
@@ -5265,11 +5327,7 @@ ${artStyle.svgStyleRules}
                 id: callId,
                 name: funcName,
                 response: {
-                  output: {
-                    status: 'displayed_on_canvas',
-                    title: artifact.title,
-                    message: 'キャンバスに絵が表示されました。感想を尋ね、「この雰囲気でよいでしょうか？もし描き直したいところがあれば教えてくださいね」と優しく声をかけてください。'
-                  }
+                  output: responseOutput
                 }
               }
             ]
@@ -5716,9 +5774,9 @@ ${artStyle.svgStyleRules}
     source.start(state.nextPlaybackTime);
     state.nextPlaybackTime += audioBuffer.duration;
 
-    // ハードウェアレベルでの再生完了イベント（直結モードではturnComplete到着前の中断防止＋ハードウェア出力遅延＋550ms余韻で自己エコー根絶）
-    const hwLatencyMs = Math.min(400, ((ctx.outputLatency || 0) + (ctx.baseLatency || 0)) * 1000);
-    const tailGuardMs = Math.round(550 + hwLatencyMs);
+    // ハードウェアレベルでの再生完了イベント（直結モードではturnComplete到着前の中断防止＋ハードウェア出力遅延＋350ms余韻）
+    const hwLatencyMs = Math.min(350, ((ctx.outputLatency || 0) + (ctx.baseLatency || 0)) * 1000);
+    const tailGuardMs = Math.round(350 + hwLatencyMs);
     source.onended = () => {
       if (ctx.currentTime >= state.nextPlaybackTime - 0.05) {
         setTimeout(() => {
@@ -5983,38 +6041,50 @@ ${artStyle.svgStyleRules}
     state.currentUserTurnTranscript = '';
     state.pendingUserTranscript = '';
     state.directConfirmRecoveryCount = 0;
-    state.sceneCollector.status = 'drawn';
-    state.sceneCollector.activeStep = 'drawn';
-    state.sceneCollector.aiHasAskedConfirmation = false;
-    state.sceneCollector.isAwaitingConfirmation = false;
-    state.sceneCollector.drawConfirmedByUser = false;
-    state.sceneCollector.isAwaitingSaveConfirmation = false;
-    // 描画完了直後にサーバーから「画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？」の音声が届くまで無音タイマーを抑制
+    if (isBlank) {
+      // タイムアウト・描画失敗時は「描画完了」にせず確認状態へ戻し、完了メッセージや音声フォールバックを一切出さない
+      state.sceneCollector.status = 'confirming';
+      state.sceneCollector.activeStep = 'confirm';
+      state.sceneCollector.aiHasAskedConfirmation = true;
+      state.sceneCollector.isAwaitingConfirmation = true;
+      state.sceneCollector.drawConfirmedByUser = false;
+      state.sceneCollector.isAwaitingSaveConfirmation = false;
+    } else {
+      state.sceneCollector.status = 'drawn';
+      state.sceneCollector.activeStep = 'drawn';
+      state.sceneCollector.aiHasAskedConfirmation = false;
+      state.sceneCollector.isAwaitingConfirmation = false;
+      state.sceneCollector.drawConfirmedByUser = false;
+      state.sceneCollector.isAwaitingSaveConfirmation = false;
+    }
+    // 描画結果の案内音声が届くまで無音タイマーを抑制
     state.lastAiSpeechFinishedTime = Date.now() + 6000;
     state.lastFollowUpTriggerTime = Date.now();
 
-    // 【描画完了時の音声確約ガード】
-    // ローカルバックエンド接続時およびGemini直結モード時はGemini側が直接発話するため、
-    // フォールバックは通信障害時のセーフティネットとして8秒待機（二重発話・早すぎる確認防止）
+    // 【描画完了時の音声確約ガード】※実際に絵が描けた（!isBlank）時のみ起動する！
     if (state.drawnSpeechFallbackTimer) {
       clearTimeout(state.drawnSpeechFallbackTimer);
       state.drawnSpeechFallbackTimer = null;
     }
-    const fallbackDelay = (state.isSimulation && !state.isDirectGeminiWs) ? 2000 : 8000;
-    state.drawnSpeechFallbackTimer = setTimeout(() => {
-      state.drawnSpeechFallbackTimer = null;
-      if (!state.isAiSpeaking && state.sceneCollector.status === 'drawn') {
-        const rawName = (state.currentProfile?.call_name || 'お父さん').replace(/\s*さん$/, '');
-        const suffix = rawName.endsWith('お父さん') || rawName.endsWith('お母さん') || rawName.endsWith('ちゃん') || rawName.endsWith('先生') ? '' : 'さん';
-        const nickname = `${rawName}${suffix}`;
-        const fallbackMsg = `${nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？`;
-        logDiag(`📢 描画完了の音声フォールバックを起動: ${fallbackMsg}`);
-        speakTextWithWebSpeech(fallbackMsg);
-      }
-    }, fallbackDelay);
+    if (!isBlank) {
+      const fallbackDelay = (state.isSimulation && !state.isDirectGeminiWs) ? 2000 : 8000;
+      state.drawnSpeechFallbackTimer = setTimeout(() => {
+        state.drawnSpeechFallbackTimer = null;
+        if (!state.isAiSpeaking && state.sceneCollector.status === 'drawn' && state.hasDrawnImage) {
+          const rawName = (state.currentProfile?.call_name || 'お父さん').replace(/\s*さん$/, '');
+          const suffix = rawName.endsWith('お父さん') || rawName.endsWith('お母さん') || rawName.endsWith('ちゃん') || rawName.endsWith('先生') ? '' : 'さん';
+          const nickname = `${rawName}${suffix}`;
+          const fallbackMsg = `${nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？`;
+          logDiag(`📢 描画完了の音声フォールバックを起動: ${fallbackMsg}`);
+          speakTextWithWebSpeech(fallbackMsg);
+        }
+      }, fallbackDelay);
+    }
 
     if (dom.refineHintText) {
-      dom.refineHintText.textContent = '💡 絵が完成しました！「この雰囲気でよい」とお話しいただくか、保存して通常会話に戻れます';
+      dom.refineHintText.textContent = isBlank
+        ? '⚠️ タイムアウトまたは混雑のため描画できませんでした（白紙）。「もう一度描いて」とお話しいただくか、下のボタンから再試行できます'
+        : '💡 絵が完成しました！「この雰囲気でよい」とお話しいただくか、保存して通常会話に戻れます';
     }
 
     if (isBlank) {
@@ -6134,14 +6204,16 @@ ${artStyle.svgStyleRules}
       stopSyntheticAmbientSound();
     }
 
-    state.sceneCollector.status = 'drawn';
+    state.sceneCollector.status = isBlank ? 'confirming' : 'drawn';
     renderSceneCollectorUI();
     setAvatarState('listening');
     logDiag(`情景処理完了: ${title} (白紙=${isBlank})`);
 
-    // 描画完了時刻を記録し、最小描画間隔（2分 = 120秒）のクールダウンタイマーを開始
-    state.lastDrawTime = Date.now();
-    startDrawCooldownTimer();
+    // 実際に描画成功した場合のみクールダウンタイマーを開始（失敗時は即座に再試行可能にする）
+    if (!isBlank) {
+      state.lastDrawTime = Date.now();
+      startDrawCooldownTimer();
+    }
   }
 
   function getSoundLabel(type) {
@@ -7076,14 +7148,8 @@ ${artStyle.svgStyleRules}
         const promptText = targetStep
           ? `ご本人が${STEP_LABELS[targetStep]}の修正・再聞き取りを希望されました。「かしこまりました！${STEP_LABELS[targetStep]}についてもう一度教えていただけますか？」と優しく声に出して尋ねてください。`
           : `ご本人が聞き取り内容の修正・再聞き取りを希望されました（現在の内容：${summaryStr}）。「かしこまりました！もう一度お伺いしますね。どの項目を修正・追加しましょうか？」と優しく声に出して尋ねてください。`;
-        state.directLastAiPromptTime = Date.now();
-        state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
-        state.socket.send(JSON.stringify({
-          client_content: {
-            turns: [{ role: 'user', parts: [{ text: promptText }] }],
-            turn_complete: true
-          }
-        }));
+        // AI発話・再生中であれば中断させず、話し終わりを待ってから安全に送信する
+        sendDirectClientContentSafely(state.socket, promptText, { echoGuardMs: 4000, cancelOnNewAiTurn: false });
       } else {
         state.socket.send(JSON.stringify({
           type: 're_listen',
