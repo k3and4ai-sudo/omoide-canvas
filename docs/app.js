@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_03';
+  const APP_VERSION = 'v20261124_04';
   const APP_VERSION_TITLE = '2026-11-20 自己エコーループ根絶(ハードウェア出力遅延+550msハードミュート＆直後600ms残響リバーブゲート)';
 
   function escapeHtml(str) {
@@ -1449,10 +1449,10 @@ ${levelRules}
    ・⑥雰囲気：「⑥雰囲気についてお聞きします。その時はどんなお気持ちや雰囲気でしたか？」 → 復唱：「⑥雰囲気について復唱します。〇〇ですね。」
    （※日常の雑談の言葉は絵のディテールに混ぜないでください）
 3. 描画前の最終確認（①〜⑥まとめ復唱 ＋ 合意形成ステップ）：
-   ⑥雰囲気の復唱が終わったら、必ず「一通りお話を伺いました。」に続けて、①テーマ〜⑥雰囲気までの内容を短い文で順番に確認復唱し、最後に「この内容で絵を描いてもよろしいでしょうか？」と尋ねてください。
+   ⑥雰囲気の復唱が終わったら、必ず「一通りお話を伺いました。」に続けて、①テーマ〜⑥雰囲気までの内容を短い文で順番に【1回だけ】確認復唱し、最後に「この内容で絵を描いてもよろしいでしょうか？」と尋ねて返答を待ってください。（同じ確認まとめを2度繰り返さないでください）
 4. 描画の実行タイミング（完了合図）：
    相手が「うん」「お願い」「描いて」「そうして」「はい」「この内容でお願いします」等と明確に同意した時のみ、はじめて \`generate_memory_visual\` ツールを呼び出してください。
-   ツールを呼び出す際は「かしこまりました！今からキャンバスに描いてみますね。少しだけ待っていてくださいね。」と伝えてください。
+   ツールを呼び出す際は「かしこまりました！今からキャンバスに描いてみますね。少しだけ待っていてくださいね。」と【1回だけ】伝えて静かにお待ちください。（同じ言葉を2度繰り返さないでください）
 5. 描画後の温かい声かけ：
    絵が表示されたら「${nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？」と温かく声をかけてください。
 6. 【最重要】絵の修正・描き直し（refine_memory_visual）ルール：
@@ -5749,7 +5749,9 @@ ${artStyle.svgStyleRules}
     const ctx = state.audioContextOut;
     if (!ctx) return;
 
-    const int16Array = new Int16Array(arrayBuffer);
+    const byteLen = arrayBuffer.byteLength - (arrayBuffer.byteLength % 2);
+    if (byteLen < 2) return;
+    const int16Array = new Int16Array(arrayBuffer, 0, byteLen / 2);
     const float32Array = new Float32Array(int16Array.length);
 
     for (let i = 0; i < int16Array.length; i++) {
@@ -8119,9 +8121,8 @@ ${artStyle.svgStyleRules}
           logDiag(`🎨 さくらさんの描画開始発声を検知（「${clean}」）。描画パイプラインを正式起動します！`);
           sc.drawConfirmedByUser = true;
           sc.isAwaitingConfirmation = false;
-          sc.status = 'drawing';
-          setAvatarState('drawing');
-          renderSceneCollectorUI();
+          // ※重要: ここで先に setAvatarState('drawing') を呼ぶと startDrawingProgress() が isDrawingMedia=true にしてしまい、
+          //   直後の executeConfirmedDrawing() が二重実行ガードで自己ブロックされるため、executeConfirmedDrawing() に一任する！
           executeConfirmedDrawing();
           return;
         }
@@ -8199,7 +8200,11 @@ ${artStyle.svgStyleRules}
         sc.isAwaitingConfirmation = true;
         sc.status = 'confirming';
         sc.activeStep = 'confirm';
-        parseAndFillCollectorCardsFromVisualElements(clean, '');
+        // すでに確定済みの②場所・③天候等をまとめ文全体で上書きしないよう、未入力項目がある場合のみ補完する
+        const hasMissingCore = !sc.topic || !sc.place || !sc.weather || !sc.people || !sc.mood;
+        if (hasMissingCore) {
+          parseAndFillCollectorCardsFromVisualElements(clean, '');
+        }
         updateExtractedWordsCard();
         if (dom.editSceneDescription) {
           dom.editSceneDescription.value = buildCollectorBulletedSummary();
@@ -8821,19 +8826,20 @@ ${artStyle.svgStyleRules}
 
     await triggerSceneDrawingForTopic(topic, combinedElements);
 
-    sc.status = 'drawn';
+    const drawSucceeded = !!(state.hasDrawnImage && state.currentArtifact && !state.currentArtifact.is_blank);
+    sc.status = drawSucceeded ? 'drawn' : 'confirming';
+    if (!drawSucceeded) {
+      sc.activeStep = 'confirm';
+      sc.isAwaitingConfirmation = true;
+    }
     renderSceneCollectorUI();
     setAvatarState('listening');
 
     if (state.isDirectGeminiWs && state.socket && state.socket.readyState === WebSocket.OPEN) {
-      state.directLastAiPromptTime = Date.now();
-      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4000);
-      state.socket.send(JSON.stringify({
-        client_content: {
-          turns: [{ role: 'user', parts: [{ text: `「${topic}」の絵がキャンバスに描き上がりました。「お待たせいたしました！絵が描き上がりましたよ。いかがでしょうか？この雰囲気でよいでしょうか、それとも描き直したいところはありますか？」と優しく声をかけてください。` }] }],
-          turn_complete: true
-        }
-      }));
+      const notifyText = drawSucceeded
+        ? `「${topic}」の絵がキャンバスに描き上がりました。「お待たせいたしました！絵が描き上がりましたよ。いかがでしょうか？この雰囲気でよいでしょうか、それとも描き直したいところはありますか？」と1回だけ優しく声をかけてください。`
+        : `申し訳ありません。通信の混雑またはタイムアウトのため、今回は絵を描画できずキャンバスは白紙のままです。「絵が描き上がりました」「絵が浮かびました」とは絶対に言わず、「ごめんなさい、少し混み合っていて今回は絵が描けませんでした。もう一度描いてみましょうか？」と優しく正直にお伝えください。`;
+      sendDirectClientContentSafely(state.socket, notifyText, { echoGuardMs: 4000, cancelOnNewAiTurn: false });
     }
   }
 
