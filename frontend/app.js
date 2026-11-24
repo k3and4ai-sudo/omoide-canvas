@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_04';
+  const APP_VERSION = 'v20261124_05';
   const APP_VERSION_TITLE = '2026-11-20 自己エコーループ根絶(ハードウェア出力遅延+550msハードミュート＆直後600ms残響リバーブゲート)';
 
   function escapeHtml(str) {
@@ -3422,11 +3422,11 @@ ${levelRules}
         rawSumSq += s * s;
       }
       const rms = Math.sqrt(rawSumSq / downsampledData.length);
-      // 環境ノイズ（rms < 0.002）は増幅せず、通常の会話声（0.003〜0.04）を最大3.2倍(+10dB)まで自動ブースト
+      // 環境ノイズ・ハム（rms < 0.004）は増幅せず、通常の会話声だけを最大2.4倍まで自動ブースト
       let softwareGain = 1.0;
-      if (rms >= 0.002) {
-        const targetRms = 0.095;
-        softwareGain = Math.min(3.2, Math.max(1.2, targetRms / Math.max(rms, 0.008)));
+      if (rms >= 0.004) {
+        const targetRms = 0.085;
+        softwareGain = Math.min(2.4, Math.max(1.1, targetRms / Math.max(rms, 0.01)));
       }
       // Int16 Little-Endian PCM へ変換（tanhソフトリミッターで過大入力時の歪みを防止）
       const pcm16 = new Int16Array(downsampledData.length);
@@ -5008,11 +5008,8 @@ ${levelRules}
               `4. \`<g id="refinement-layer">\` で始まり \`</g>\` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`
             );
 
-          const preferLiteDueTo503 = (Date.now() - (state.gemini35Flash503At || 0)) < 5 * 60 * 1000;
-          const refineModels = (isReplacementModify && !preferLiteDueTo503)
-            ? ['gemini-3.5-flash', 'gemini-3.5-flash-lite']
-            : ['gemini-3.5-flash-lite', 'gemini-3.5-flash'];
-          const refineMaxTokens = isReplacementModify ? 16384 : 8192;
+          const refineModels = ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.5-flash'];
+          const refineMaxTokens = isReplacementModify ? 8192 : 6144;
           for (const mName of refineModels) {
             try {
               logDiag(`${isReplacementModify ? '要素置換SVG再描画' : '差分レイヤー再描画'}を試行中 (${mName}): 「${feedback}」`);
@@ -5071,9 +5068,10 @@ ${levelRules}
       }
 
       // =========================================================================
-      // 1. Flash Image (gemini-2.5-flash-image) を試行（初回描画時、429なら即SVGへ）
+      // 1. Flash Image (gemini-2.5-flash-image) を試行（初回描画時、429時は10分間スキップし即SVGへ）
       // =========================================================================
-      if (!mediaDataUrl && !isRefinement) {
+      const skipFlashImageDueTo429 = (Date.now() - (state.flashImage429At || 0)) < 10 * 60 * 1000;
+      if (!mediaDataUrl && !isRefinement && !skipFlashImageDueTo429) {
         try {
           if (dom.drawingSubtext) dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」で絵を描いています...`;
           const resImg = await fetch(
@@ -5085,7 +5083,7 @@ ${levelRules}
                 contents: [{ parts: [{ text: finalPrompt }] }],
                 generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
               }),
-              signal: AbortSignal.timeout ? AbortSignal.timeout(18000) : undefined
+              signal: AbortSignal.timeout ? AbortSignal.timeout(15000) : undefined
             }
           );
           recordApiCall(resImg.headers, resImg.status);
@@ -5105,6 +5103,9 @@ ${levelRules}
               }
             }
           } else {
+            if (resImg.status === 429) {
+              state.flashImage429At = Date.now();
+            }
             logDiag(`gemini-2.5-flash-image 応答ステータス: ${resImg.status}。高精細SVG生成へ移行します。`);
           }
         } catch (imgErr) {
@@ -5153,37 +5154,24 @@ ${artStyle.svgStyleRules}
 3. 【人物・にぎわいの描写ルール】情景に「生徒」「友達」「人」「大勢」などの人物が含まれる場合は、背景だけで終わらせず、必ず前景〜中景の道や校門・広場に【複数の人物（大勢なら8〜15人以上）】を後ろ姿・横向き・遠景の温かいイラスト調ではっきり大きく描いてください（制服・カバン・歩いている動き等も表現し、1つの \`<g id="people-layer">\` にまとめて描くと簡潔です）。
 4. <svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全な整形式SVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
 
-          const preferLiteInitial = (Date.now() - (state.gemini35Flash503At || 0)) < 5 * 60 * 1000;
-          const candidateModels = preferLiteInitial
-            ? ['gemini-2.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash']
-            : ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-3.5-flash-lite'];
+          // 高速・安定な gemini-3.1-flash-lite を最優先（実測3〜10秒で高精細SVG生成）し、フォールバックに3.5系を配置
+          const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.5-flash'];
           const modelAttemptLogs = [];
           for (const modelName of candidateModels) {
             try {
-              logDiag(`AI高精細SVG描画を試行中 (${modelName} / 最大55秒): 「${cleanTitle}」`);
-              const requestSvg = (useThinkingZero) => {
-                const genCfg = { temperature: 0.3, maxOutputTokens: 8192 };
-                if (useThinkingZero) {
-                  genCfg.thinkingConfig = { thinkingBudget: 0 };
+              logDiag(`AI高精細SVG描画を試行中 (${modelName} / 最大45秒): 「${cleanTitle}」`);
+              const resSvg = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
+                {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    contents: [{ parts: [{ text: svgPrompt }] }],
+                    generationConfig: { temperature: 0.3, maxOutputTokens: 8192 }
+                  }),
+                  signal: AbortSignal.timeout ? AbortSignal.timeout(45000) : undefined
                 }
-                return fetch(
-                  `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
-                  {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      contents: [{ parts: [{ text: svgPrompt }] }],
-                      generationConfig: genCfg
-                    }),
-                    signal: AbortSignal.timeout ? AbortSignal.timeout(55000) : undefined
-                  }
-                );
-              };
-              let resSvg = await requestSvg(true);
-              if (resSvg.status === 400) {
-                logDiag(`モデル ${modelName} が thinkingConfig 非対応(400)のため通常設定で再試行します`);
-                resSvg = await requestSvg(false);
-              }
+              );
               recordApiCall(resSvg.headers, resSvg.status);
               if (resSvg.ok) {
                 const dataSvg = await resSvg.json();
@@ -5754,8 +5742,17 @@ ${artStyle.svgStyleRules}
     const int16Array = new Int16Array(arrayBuffer, 0, byteLen / 2);
     const float32Array = new Float32Array(int16Array.length);
 
+    let dcSum = 0;
     for (let i = 0; i < int16Array.length; i++) {
-      float32Array[i] = int16Array[i] / 32768.0;
+      const val = int16Array[i] / 32768.0;
+      float32Array[i] = val;
+      dcSum += val;
+    }
+    const dcOffset = dcSum / int16Array.length;
+    if (Math.abs(dcOffset) > 0.001) {
+      for (let i = 0; i < float32Array.length; i++) {
+        float32Array[i] = Math.max(-1, Math.min(1, float32Array[i] - dcOffset));
+      }
     }
 
     const audioBuffer = ctx.createBuffer(1, float32Array.length, SAMPLE_RATE_OUT);
