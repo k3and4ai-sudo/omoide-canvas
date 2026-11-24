@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_07';
-  const APP_VERSION_TITLE = '2026-11-20 自己エコーループ根絶(ハードウェア出力遅延+550msハードミュート＆直後600ms残響リバーブゲート)';
+  const APP_VERSION = 'v20261124_08';
+  const APP_VERSION_TITLE = '2026-11-24 高精細SVG描画をgemini-3.5-flash-lite最優先(約170要素の細密描写)＋gemini-3-flash-preview(thinkingBudget:0)へ刷新';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -5041,11 +5041,15 @@ ${levelRules}
               `4. \`<g id="refinement-layer">\` で始まり \`</g>\` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`
             );
 
-          const refineModels = ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.5-flash'];
-          const refineMaxTokens = isReplacementModify ? 8192 : 6144;
+          const refineModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite'];
+          const refineMaxTokens = isReplacementModify ? 16384 : 8192;
           for (const mName of refineModels) {
             try {
               logDiag(`${isReplacementModify ? '要素置換SVG再描画' : '差分レイヤー再描画'}を試行中 (${mName}): 「${feedback}」`);
+              const refineGenConfig = { temperature: 0.25, maxOutputTokens: refineMaxTokens };
+              if (mName === 'gemini-3-flash-preview') {
+                refineGenConfig.thinkingConfig = { thinkingBudget: 0 };
+              }
               const resRef = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/models/${mName}:generateContent?key=${encodeURIComponent(apiKey)}`,
                 {
@@ -5053,9 +5057,9 @@ ${levelRules}
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     contents: [{ parts: [{ text: refineSvgPrompt }] }],
-                    generationConfig: { temperature: 0.25, maxOutputTokens: refineMaxTokens }
+                    generationConfig: refineGenConfig
                   }),
-                  signal: AbortSignal.timeout ? AbortSignal.timeout(150000) : undefined
+                  signal: AbortSignal.timeout ? AbortSignal.timeout(55000) : undefined
                 }
               );
               recordApiCall(resRef.headers, resRef.status);
@@ -5177,6 +5181,11 @@ ${isRefinement && feedback ? `
 【画風特化造形ルール（${artStyle.name}）】
 ${artStyle.svgStyleRules}
 
+【細密描写・クオリティ必須条件（荒い簡易イラスト禁止）】
+- 単純な図形や大雑把なブロックの羅列にせず、遠景（繊細な空のグラデーション・柔らかい雲・遠くの山並みや光条）・中景（建物の屋根瓦・窓枠・レンガや木目の細線、樹木の幹と重なり合う枝葉・木漏れ日）・近景（地面・石畳・草花の質感、落ち葉や花びら、モチーフの長い影、主役や人物の細部）の3層構造で極めて細密かつ丁寧に描き込んでください。
+- 8個以上の <linearGradient> / <radialGradient> と、柔らかな光・水彩のにじみ・奥行きを表現する <filter>（feGaussianBlur 等）を活用してください。
+- 少なくとも80個以上の豊かな <path>・<polygon>・<ellipse>・<circle> 要素を使い、細部まで丁寧に描き込んでください。
+
 【最重要造形ルール】
 1. ユーザーがお話しした具体的なモチーフ・特徴・造形（山、夕焼け、海、学校、校門、並木道、教室、喫茶店、花、柿、木製テーブル、窓、雪、川など）を100%忠実に、細部まで丁寧に描き込んでください。
    - 建物・校門・並木道について語られている場合：レンガや木目の質感、屋根瓦や窓枠、木々の枝葉や木漏れ日、地面の陰影や落ち葉まで細かく表現してください。
@@ -5187,12 +5196,16 @@ ${artStyle.svgStyleRules}
 3. 【人物・にぎわいの描写ルール】情景に「生徒」「友達」「人」「大勢」などの人物が含まれる場合は、背景だけで終わらせず、必ず前景〜中景の道や校門・広場に【複数の人物（大勢なら8〜15人以上）】を後ろ姿・横向き・遠景の温かいイラスト調ではっきり大きく描いてください（制服・カバン・歩いている動き等も表現し、1つの \`<g id="people-layer">\` にまとめて描くと簡潔です）。
 4. <svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全な整形式SVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
 
-          // 高速・安定な gemini-3.1-flash-lite を最優先（実測3〜10秒で高精細SVG生成）し、フォールバックに3.5系を配置
-          const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.5-flash'];
+          // 細密描写に優れた gemini-3.5-flash-lite（実測19秒・約170要素）を最優先、次点に高速高精細な gemini-3-flash-preview (thinkingBudget:0 / 実測15秒)、最終フォールバックに gemini-3.1-flash-lite
+          const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite'];
           const modelAttemptLogs = [];
           for (const modelName of candidateModels) {
             try {
-              logDiag(`AI高精細SVG描画を試行中 (${modelName} / 最大45秒): 「${cleanTitle}」`);
+              logDiag(`AI高精細SVG描画を試行中 (${modelName} / 最大55秒): 「${cleanTitle}」`);
+              const svgGenConfig = { temperature: 0.35, maxOutputTokens: 16384 };
+              if (modelName === 'gemini-3-flash-preview') {
+                svgGenConfig.thinkingConfig = { thinkingBudget: 0 };
+              }
               const resSvg = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
                 {
@@ -5200,9 +5213,9 @@ ${artStyle.svgStyleRules}
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     contents: [{ parts: [{ text: svgPrompt }] }],
-                    generationConfig: { temperature: 0.3, maxOutputTokens: 8192 }
+                    generationConfig: svgGenConfig
                   }),
-                  signal: AbortSignal.timeout ? AbortSignal.timeout(45000) : undefined
+                  signal: AbortSignal.timeout ? AbortSignal.timeout(55000) : undefined
                 }
               );
               recordApiCall(resSvg.headers, resSvg.status);
