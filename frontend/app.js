@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_08';
-  const APP_VERSION_TITLE = '2026-11-24 高精細SVG描画をgemini-3.5-flash-lite最優先(約170要素の細密描写)＋gemini-3-flash-preview(thinkingBudget:0)へ刷新';
+  const APP_VERSION = 'v20261124_09';
+  const APP_VERSION_TITLE = '2026-11-24 空SVGスケルトン排除(描画要素8個以上必須)＋安定高精細なgemini-3-flash-preview(thinkingBudget:0)最優先';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -2572,8 +2572,18 @@ ${levelRules}
 
     const isValidXml = (xmlStr) => {
       try {
+        if (!xmlStr || xmlStr.length < 400) return false;
         const doc = new DOMParser().parseFromString(xmlStr, 'image/svg+xml');
-        return !doc.querySelector('parsererror');
+        if (doc.querySelector('parsererror')) return false;
+        // 空のスケルトンSVG（<defs>のみ等）を確実に弾くため、実際に描画される図形要素が8個以上あることを必須化
+        const drawableEls = doc.querySelectorAll('path, polygon, polyline, rect, circle, ellipse, line, text, use, image');
+        let visibleCount = 0;
+        for (const el of drawableEls) {
+          if (!el.closest('defs, clipPath, mask, marker, pattern')) {
+            visibleCount++;
+          }
+        }
+        return visibleCount >= 8;
       } catch (e) {
         return false;
       }
@@ -5041,7 +5051,7 @@ ${levelRules}
               `4. \`<g id="refinement-layer">\` で始まり \`</g>\` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`
             );
 
-          const refineModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite'];
+          const refineModels = ['gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
           const refineMaxTokens = isReplacementModify ? 16384 : 8192;
           for (const mName of refineModels) {
             try {
@@ -5065,7 +5075,8 @@ ${levelRules}
               recordApiCall(resRef.headers, resRef.status);
               if (resRef.ok) {
                 const dataRef = await resRef.json();
-                let rawOut = (dataRef?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+                const refParts = dataRef?.candidates?.[0]?.content?.parts || [];
+                let rawOut = refParts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n').trim();
                 rawOut = rawOut.replace(/^```[a-zA-Z]*\s*/, '').replace(/\s*```$/, '').trim();
 
                 let candidateSvg = null;
@@ -5196,8 +5207,8 @@ ${artStyle.svgStyleRules}
 3. 【人物・にぎわいの描写ルール】情景に「生徒」「友達」「人」「大勢」などの人物が含まれる場合は、背景だけで終わらせず、必ず前景〜中景の道や校門・広場に【複数の人物（大勢なら8〜15人以上）】を後ろ姿・横向き・遠景の温かいイラスト調ではっきり大きく描いてください（制服・カバン・歩いている動き等も表現し、1つの \`<g id="people-layer">\` にまとめて描くと簡潔です）。
 4. <svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全な整形式SVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
 
-          // 細密描写に優れた gemini-3.5-flash-lite（実測19秒・約170要素）を最優先、次点に高速高精細な gemini-3-flash-preview (thinkingBudget:0 / 実測15秒)、最終フォールバックに gemini-3.1-flash-lite
-          const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite'];
+          // 安定・高速かつ高精細な gemini-3-flash-preview (thinkingBudget:0 / 実測13〜15秒) を最優先、次点に gemini-3.5-flash-lite、最終フォールバックに gemini-3.1-flash-lite
+          const candidateModels = ['gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
           const modelAttemptLogs = [];
           for (const modelName of candidateModels) {
             try {
@@ -5221,18 +5232,19 @@ ${artStyle.svgStyleRules}
               recordApiCall(resSvg.headers, resSvg.status);
               if (resSvg.ok) {
                 const dataSvg = await resSvg.json();
-                const rawText = dataSvg?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+                const svgParts = dataSvg?.candidates?.[0]?.content?.parts || [];
+                const rawText = svgParts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n');
                 const validSvg = repairAndValidateSvgJS(rawText);
                 if (validSvg) {
                   state.lastGeneratedSvgCode = validSvg;
                   mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(validSvg)}`;
                   usedModelName = modelName;
                   dismissCanvasError();
-                  logDiag(`✅ Gemini (${modelName}) による高精細オーダーメイド情景画(SVG)の描画＆XML検証に成功しました！`);
+                  logDiag(`✅ Gemini (${modelName}) による高精細オーダーメイド情景画(SVG: ${validSvg.length}文字)の描画＆XML検証に成功しました！`);
                   break;
                 } else {
-                  modelAttemptLogs.push(`❌ ${modelName}: SVG検証エラー`);
-                  logDiag(`⚠️ モデル ${modelName} のSVG出力がXML検証に失敗しました。次の候補モデルを試行します。`);
+                  modelAttemptLogs.push(`❌ ${modelName}: SVG検証エラー(要素不足/破損)`);
+                  logDiag(`⚠️ モデル ${modelName} のSVG出力がXML/描画要素検証に失敗しました (raw=${rawText.length}文字)。次の候補モデルを試行します。`);
                 }
               } else {
                 if (modelName === 'gemini-3.5-flash' && resSvg.status === 503) {
