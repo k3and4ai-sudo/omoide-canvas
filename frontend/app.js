@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_12';
-  const APP_VERSION_TITLE = '2026-11-24 2段階SVG入れ子<g>抽出バグ修正＋高精細モデル層拡充(2.5-flash/3.5-flash追加)＋140要素未満時の自動第3段階追い描き込み';
+  const APP_VERSION = 'v20261124_13';
+  const APP_VERSION_TITLE = '2026-11-24 プロンプト履歴の自動保存＆読み込み・編集・再描画メニュー追加';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -5005,8 +5005,10 @@ ${levelRules}
 
     const artStyleKey = args.art_style || state.currentArtStyle || 'watercolor';
     const artStyle = ART_STYLES[artStyleKey] || ART_STYLES.watercolor;
+    const customRawSvgPrompt = (args.custom_raw_svg_prompt || '').trim();
+    const skipPass2 = !!args.skip_pass2;
 
-    // ローカル検証時（localhost）のみ、描画エンジンへ送ったプロンプトと結果SVGを自動保存する
+    // 描画エンジンへ送ったプロンプトの履歴自動保存（端末localStorage）＆ローカル検証サーバー記録
     const captureDrawingPromptLocal = (payload) => {
       try {
         window.__lastSentDrawingPrompt = payload;
@@ -5023,6 +5025,9 @@ ${levelRules}
             prompt: payload.prompt
           }));
         } catch (_) {}
+        if (payload && payload.phase === 'response' && payload.prompt) {
+          savePromptHistoryEntry(payload);
+        }
         if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
           fetch('/__save_prompt', {
             method: 'POST',
@@ -5182,7 +5187,7 @@ ${levelRules}
       // 1. Flash Image (gemini-2.5-flash-image) を試行（初回描画時、429時は10分間スキップし即SVGへ）
       // =========================================================================
       const skipFlashImageDueTo429 = (Date.now() - (state.flashImage429At || 0)) < 10 * 60 * 1000;
-      if (!mediaDataUrl && !isRefinement && !skipFlashImageDueTo429) {
+      if (!mediaDataUrl && !isRefinement && !customRawSvgPrompt && !skipFlashImageDueTo429) {
         try {
           if (dom.drawingSubtext) dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」で絵を描いています...`;
           const resImg = await fetch(
@@ -5273,7 +5278,7 @@ ${levelRules}
   - 人物は必ず **手前の広い校庭・歩道・通学路（足元 y=440〜575）** に立たせ、人物の頭や体が校舎の壁面・窓・玄関・屋根に被ったり、建物にめり込んだり、空中に浮いたりしないよう厳密に座標と遠近法サイズを計算してください。
   - 人物の足元には必ず接地影（半透明の \`<ellipse>\`）を描いて地面に立っている立体感を出してください。`;
 
-          const svgPrompt = `あなたは高齢者・回想法ケアのための情景画専門アーティスト（${artStyle.svgRoleInstruction}）です。ユーザーが語った思い出やお話に合わせて、指定された情景の【${styleDesc}】SVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
+          const svgPrompt = customRawSvgPrompt || `あなたは高齢者・回想法ケアのための情景画専門アーティスト（${artStyle.svgRoleInstruction}）です。ユーザーが語った思い出やお話に合わせて、指定された情景の【${styleDesc}】SVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
 ${cleanElements}
@@ -5482,8 +5487,8 @@ ${pass1Svg}
 3. **重要**: \`p2-bg-details\` は背景・壁・床専用です。手前の主役モチーフ（炬燵・家具・人物・ペット等）を不透明な図形で塗り潰したり隠したりせず、必ず半透明の重なり・細線・ハイライト・質感でリッチに仕上げてください。
 4. 出力は必要に応じて \`<defs>...</defs>\`（IDは必ず \`p2-\` で始めて既存IDと衝突させないこと）と、\`<g id="p2-bg-details">...</g>\` および \`<g id="p2-fg-details">...</g>\` のみを出力してください。\`<svg>\` タグや解説文・マークダウン枠（\`\`\`）は一切含めないでください。`;
 
-              // Pass 2（さらに140要素未満なら自動でPass 3の追い描き込み）を実行
-              const maxDetailPasses = 2;
+              // Pass 2（さらに140要素未満なら自動でPass 3の追い描き込み）を実行（※履歴からの1段階指定時はスキップ）
+              const maxDetailPasses = skipPass2 ? 0 : 2;
               for (let detailRound = 1; detailRound <= maxDetailPasses; detailRound++) {
                 if (detailRound === 2 && finalVecCount >= 140) break;
                 if (detailRound === 2 && dom.drawingSubtext) {
@@ -9365,6 +9370,344 @@ ${pass1Svg}
     dom.diagLog.textContent = `[${timestamp}] ${text}\n` + dom.diagLog.textContent;
   }
 
+  // ============================================================================
+  // 描画プロンプト履歴の自動保存・一覧表示・編集・再描画メニュー
+  // ============================================================================
+  const PROMPT_HISTORY_STORAGE_KEY = 'omoide_prompt_history_v1';
+  const PROMPT_HISTORY_MAX_ITEMS = 30;
+  let selectedPromptHistoryId = null;
+
+  function loadPromptHistory() {
+    try {
+      const raw = localStorage.getItem(PROMPT_HISTORY_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      // 従来の単一保存キー（omoide_last_drawing_prompt）があれば初回移行
+      const legacyRaw = localStorage.getItem('omoide_last_drawing_prompt');
+      if (legacyRaw) {
+        const legacy = JSON.parse(legacyRaw);
+        if (legacy && legacy.prompt) {
+          const migrated = [{
+            id: `legacy_${Date.now()}`,
+            timestamp: legacy.timestamp || new Date().toISOString(),
+            mode: legacy.mode || 'initial_svg',
+            model: legacy.model || '',
+            title: legacy.title || '直近の描画プロンプト',
+            cleanElements: legacy.cleanElements || '',
+            feedback: legacy.feedback || '',
+            artStyleKey: legacy.artStyleKey || 'watercolor',
+            vectorCount: legacy.vectorCount || 0,
+            elapsedMs: legacy.elapsedMs || 0,
+            prompt: legacy.prompt
+          }];
+          localStorage.setItem(PROMPT_HISTORY_STORAGE_KEY, JSON.stringify(migrated));
+          return migrated;
+        }
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function savePromptHistoryList(list) {
+    try {
+      localStorage.setItem(PROMPT_HISTORY_STORAGE_KEY, JSON.stringify(list.slice(0, PROMPT_HISTORY_MAX_ITEMS)));
+    } catch (e) {
+      // 容量超過時は古い履歴を削って再試行
+      try {
+        localStorage.setItem(PROMPT_HISTORY_STORAGE_KEY, JSON.stringify(list.slice(0, 10)));
+      } catch (_) {}
+    }
+    updatePromptHistoryBadge();
+  }
+
+  function savePromptHistoryEntry(payload) {
+    if (!payload || !payload.prompt) return;
+    const list = loadPromptHistory();
+    const entry = {
+      id: `ph_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: payload.timestamp || new Date().toISOString(),
+      mode: payload.mode || 'two_stage_svg',
+      model: payload.model || '',
+      title: payload.title || '思い出の情景',
+      cleanElements: payload.cleanElements || '',
+      feedback: payload.feedback || '',
+      artStyleKey: payload.artStyleKey || state.currentArtStyle || 'watercolor',
+      isIndoorScene: typeof payload.isIndoorScene === 'boolean' ? payload.isIndoorScene : null,
+      vectorCount: payload.vectorCount || 0,
+      elapsedMs: payload.elapsedMs || 0,
+      prompt: payload.prompt
+    };
+    list.unshift(entry);
+    savePromptHistoryList(list);
+    selectedPromptHistoryId = entry.id;
+    const modal = document.getElementById('promptHistoryModal');
+    if (modal && !modal.classList.contains('hidden')) {
+      renderPromptHistoryModal();
+    }
+  }
+
+  function updatePromptHistoryBadge() {
+    const badge = document.getElementById('promptHistoryCountBadge');
+    if (!badge) return;
+    const count = loadPromptHistory().length;
+    badge.textContent = String(count);
+  }
+
+  function formatPromptHistoryTime(isoStr) {
+    try {
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return '';
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mi = String(d.getMinutes()).padStart(2, '0');
+      const ss = String(d.getSeconds()).padStart(2, '0');
+      return `${mm}/${dd} ${hh}:${mi}:${ss}`;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function renderPromptHistoryModal() {
+    const listEl = document.getElementById('promptHistoryList');
+    const titleEl = document.getElementById('promptDetailTitle');
+    const metaEl = document.getElementById('promptDetailMeta');
+    const styleEl = document.getElementById('promptDetailArtStyle');
+    const elementsEl = document.getElementById('promptDetailElements');
+    const fullTextEl = document.getElementById('promptDetailFullText');
+    const btnRedrawElements = document.getElementById('btnRedrawFromElements');
+    const btnRedrawRaw = document.getElementById('btnRedrawFromRawPrompt');
+    if (!listEl) return;
+
+    const list = loadPromptHistory();
+    updatePromptHistoryBadge();
+
+    if (list.length === 0) {
+      selectedPromptHistoryId = null;
+      listEl.innerHTML = '<div class="prompt-history-empty">まだ描画プロンプトの履歴がありません。<br>絵を描くと自動でここに追加されます。</div>';
+      if (titleEl) titleEl.textContent = '履歴を選択してください';
+      if (metaEl) metaEl.textContent = '';
+      if (elementsEl) elementsEl.value = '';
+      if (fullTextEl) fullTextEl.value = '';
+      if (btnRedrawElements) btnRedrawElements.disabled = true;
+      if (btnRedrawRaw) btnRedrawRaw.disabled = true;
+      return;
+    }
+
+    if (!selectedPromptHistoryId || !list.some(item => item.id === selectedPromptHistoryId)) {
+      selectedPromptHistoryId = list[0].id;
+    }
+
+    listEl.innerHTML = list.map(item => {
+      const isActive = item.id === selectedPromptHistoryId;
+      const styleInfo = ART_STYLES[item.artStyleKey] || ART_STYLES.watercolor;
+      const modeLabel = item.mode === 'refine_full_svg' ? '修正' : (item.mode === 'refine_diff_layer' ? '追加' : '描画');
+      const vecBadge = item.vectorCount ? `<span class="prompt-history-badge vec">${item.vectorCount}要素</span>` : '';
+      const timeStr = formatPromptHistoryTime(item.timestamp);
+      const secStr = item.elapsedMs ? ` / ${(item.elapsedMs / 1000).toFixed(1)}秒` : '';
+      return `
+        <div class="prompt-history-item${isActive ? ' active' : ''}" data-ph-id="${escapeHtml(item.id)}">
+          <div class="prompt-history-item-top">
+            <div class="prompt-history-item-title">${escapeHtml(item.title || '思い出の情景')}</div>
+            <button type="button" class="prompt-history-item-delete" data-ph-delete="${escapeHtml(item.id)}" title="この履歴を削除">✕</button>
+          </div>
+          <div class="prompt-history-item-badges">
+            <span class="prompt-history-badge">${escapeHtml(modeLabel)}</span>
+            <span class="prompt-history-badge">${escapeHtml(styleInfo.name)}</span>
+            ${vecBadge}
+          </div>
+          <div class="prompt-history-item-meta">${escapeHtml(timeStr)}${escapeHtml(secStr)}</div>
+        </div>
+      `;
+    }).join('');
+
+    const selected = list.find(item => item.id === selectedPromptHistoryId) || list[0];
+    if (selected) {
+      if (titleEl) titleEl.textContent = selected.title || '思い出の情景';
+      if (metaEl) {
+        const parts = [];
+        if (selected.timestamp) parts.push(formatPromptHistoryTime(selected.timestamp));
+        if (selected.model) parts.push(selected.model);
+        if (selected.elapsedMs) parts.push(`${(selected.elapsedMs / 1000).toFixed(1)}秒`);
+        metaEl.textContent = parts.join(' / ');
+      }
+      if (styleEl && ART_STYLES[selected.artStyleKey]) {
+        styleEl.value = selected.artStyleKey;
+      }
+      if (elementsEl) elementsEl.value = selected.cleanElements || selected.feedback || selected.title || '';
+      if (fullTextEl) fullTextEl.value = selected.prompt || '';
+      if (btnRedrawElements) btnRedrawElements.disabled = false;
+      if (btnRedrawRaw) btnRedrawRaw.disabled = false;
+    }
+  }
+
+  function openPromptHistoryModal() {
+    const modal = document.getElementById('promptHistoryModal');
+    if (!modal) return;
+    renderPromptHistoryModal();
+    modal.classList.remove('hidden');
+  }
+
+  function closePromptHistoryModal() {
+    const modal = document.getElementById('promptHistoryModal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  async function triggerRedrawFromPromptHistory(useRawPrompt) {
+    if (state.isDrawingMedia) {
+      alert('現在別の絵を描画中です。完了してから再度お試しください。');
+      return;
+    }
+    const apiKey = (state.sessionApiKey || '').trim();
+    if (!apiKey) {
+      closePromptHistoryModal();
+      openLoginModal();
+      alert('再描画するには、先にGemini APIキーでログインしてください。');
+      return;
+    }
+
+    const list = loadPromptHistory();
+    const selected = list.find(item => item.id === selectedPromptHistoryId);
+    const styleEl = document.getElementById('promptDetailArtStyle');
+    const elementsEl = document.getElementById('promptDetailElements');
+    const fullTextEl = document.getElementById('promptDetailFullText');
+    const twoStageEl = document.getElementById('promptDetailUseTwoStage');
+
+    const chosenStyle = (styleEl && styleEl.value) || (selected && selected.artStyleKey) || state.currentArtStyle || 'watercolor';
+    const chosenElements = (elementsEl && elementsEl.value.trim()) || (selected && selected.cleanElements) || '';
+    const chosenRawPrompt = (fullTextEl && fullTextEl.value.trim()) || (selected && selected.prompt) || '';
+    const useTwoStage = twoStageEl ? !!twoStageEl.checked : true;
+    const baseTitle = (selected && selected.title) || '履歴からの再描画';
+
+    if (useRawPrompt && !chosenRawPrompt) {
+      alert('プロンプト全文が空です。');
+      return;
+    }
+    if (!useRawPrompt && !chosenElements) {
+      alert('情景メモが空です。');
+      return;
+    }
+
+    // 画風セレクタも同期
+    state.currentArtStyle = chosenStyle;
+    if (dom.selectArtStyle) dom.selectArtStyle.value = chosenStyle;
+
+    closePromptHistoryModal();
+    logDiag(`📜 プロンプト履歴から再描画を開始します（${useRawPrompt ? '編集プロンプト全文直接実行' : '情景メモから再生成'} / 2段階:${useTwoStage ? 'ON' : 'OFF'}）: 「${baseTitle}」`);
+
+    state.sceneCollector.status = 'drawing';
+    renderSceneCollectorUI();
+    setAvatarState('drawing');
+
+    await handleDirectMediaGeneration(null, null, 'generate_memory_visual', {
+      japanese_title: baseTitle,
+      visual_elements: chosenElements || baseTitle,
+      art_style: chosenStyle,
+      is_refinement: false,
+      custom_raw_svg_prompt: useRawPrompt ? chosenRawPrompt : '',
+      skip_pass2: !useTwoStage
+    });
+  }
+
+  function initPromptHistoryUI() {
+    updatePromptHistoryBadge();
+
+    const btnOpen = document.getElementById('btnOpenPromptHistory');
+    const btnClose = document.getElementById('btnClosePromptHistory');
+    const modal = document.getElementById('promptHistoryModal');
+    const listEl = document.getElementById('promptHistoryList');
+    const btnCopy = document.getElementById('btnCopyPromptFullText');
+    const btnRedrawElements = document.getElementById('btnRedrawFromElements');
+    const btnRedrawRaw = document.getElementById('btnRedrawFromRawPrompt');
+    const btnClearAll = document.getElementById('btnClearAllPromptHistory');
+    const btnExport = document.getElementById('btnExportPromptHistory');
+
+    if (btnOpen) btnOpen.addEventListener('click', openPromptHistoryModal);
+    if (btnClose) btnClose.addEventListener('click', closePromptHistoryModal);
+    if (modal) {
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) closePromptHistoryModal();
+      });
+    }
+
+    if (listEl) {
+      listEl.addEventListener('click', (e) => {
+        const delBtn = e.target.closest('[data-ph-delete]');
+        if (delBtn) {
+          e.stopPropagation();
+          const delId = delBtn.getAttribute('data-ph-delete');
+          const next = loadPromptHistory().filter(item => item.id !== delId);
+          savePromptHistoryList(next);
+          if (selectedPromptHistoryId === delId) selectedPromptHistoryId = null;
+          renderPromptHistoryModal();
+          return;
+        }
+        const itemEl = e.target.closest('[data-ph-id]');
+        if (itemEl) {
+          selectedPromptHistoryId = itemEl.getAttribute('data-ph-id');
+          renderPromptHistoryModal();
+        }
+      });
+    }
+
+    if (btnCopy) {
+      btnCopy.addEventListener('click', async () => {
+        const fullTextEl = document.getElementById('promptDetailFullText');
+        const txt = fullTextEl ? fullTextEl.value : '';
+        if (!txt) return;
+        try {
+          await navigator.clipboard.writeText(txt);
+          const orig = btnCopy.textContent;
+          btnCopy.textContent = '✅ コピーしました';
+          setTimeout(() => { btnCopy.textContent = orig; }, 1500);
+        } catch (_) {
+          fullTextEl.select();
+          document.execCommand('copy');
+        }
+      });
+    }
+
+    if (btnRedrawElements) {
+      btnRedrawElements.addEventListener('click', () => triggerRedrawFromPromptHistory(false));
+    }
+    if (btnRedrawRaw) {
+      btnRedrawRaw.addEventListener('click', () => triggerRedrawFromPromptHistory(true));
+    }
+
+    if (btnClearAll) {
+      btnClearAll.addEventListener('click', () => {
+        if (!confirm('保存されているプロンプト履歴をすべて消去しますか？')) return;
+        savePromptHistoryList([]);
+        selectedPromptHistoryId = null;
+        renderPromptHistoryModal();
+      });
+    }
+
+    if (btnExport) {
+      btnExport.addEventListener('click', () => {
+        const list = loadPromptHistory();
+        if (list.length === 0) {
+          alert('エクスポートする履歴がありません。');
+          return;
+        }
+        const blob = new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `omoide_prompt_history_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      });
+    }
+  }
+
   // 起動実行
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', () => {
+    init();
+    initPromptHistoryUI();
+  });
 })();
