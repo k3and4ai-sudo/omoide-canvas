@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_01';
+  const APP_VERSION = 'v20261124_02';
   const APP_VERSION_TITLE = '2026-11-20 自己エコーループ根絶(ハードウェア出力遅延+550msハードミュート＆直後600ms残響リバーブゲート)';
 
   function escapeHtml(str) {
@@ -2703,12 +2703,13 @@ ${levelRules}
           inputAudioTranscription: {},
           outputAudioTranscription: {},
           realtimeInputConfig: {
+            activityHandling: 'NO_INTERRUPTION',
             automatic_activity_detection: {
               disabled: false,
               start_of_speech_sensitivity: 'START_SENSITIVITY_HIGH',
-              end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
+              end_of_speech_sensitivity: 'END_SENSITIVITY_HIGH',
               prefix_padding_ms: 500,
-              silence_duration_ms: 1600
+              silence_duration_ms: 1100
             }
           },
           tools: [
@@ -3417,15 +3418,26 @@ ${levelRules}
         }
       }
 
-      // Int16 Little-Endian PCM へ変換
-      const pcm16 = new Int16Array(downsampledData.length);
-      let sumSq = 0;
+      // 生RMS計測 ＆ アダプティブ・ソフトウェアマイクゲイン（普通の声量でも明瞭に認識＋音割れ防止ソフトクリップ）
+      let rawSumSq = 0;
       for (let i = 0; i < downsampledData.length; i++) {
-        const s = Math.max(-1, Math.min(1, downsampledData[i]));
-        sumSq += s * s;
+        const s = downsampledData[i];
+        rawSumSq += s * s;
+      }
+      const rms = Math.sqrt(rawSumSq / downsampledData.length);
+      // 環境ノイズ（rms < 0.002）は増幅せず、通常の会話声（0.003〜0.04）を最大3.2倍(+10dB)まで自動ブースト
+      let softwareGain = 1.0;
+      if (rms >= 0.002) {
+        const targetRms = 0.095;
+        softwareGain = Math.min(3.2, Math.max(1.2, targetRms / Math.max(rms, 0.008)));
+      }
+      // Int16 Little-Endian PCM へ変換（tanhソフトリミッターで過大入力時の歪みを防止）
+      const pcm16 = new Int16Array(downsampledData.length);
+      for (let i = 0; i < downsampledData.length; i++) {
+        const boosted = downsampledData[i] * softwareGain;
+        const s = Math.tanh(boosted);
         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
-      const rms = Math.sqrt(sumSq / downsampledData.length);
       const preset = NOISE_GATE_PRESETS[state.noiseGateMode] || NOISE_GATE_PRESETS.normal;
       const targetHangoverChunks = Math.max(4, Math.round((preset.hangoverMs || 300) / chunkMs));
 
@@ -3444,13 +3456,13 @@ ${levelRules}
 
       // 【重要】ノイズゲート判定：
       // ・「標準感度（静かなお部屋：normal）」は語頭欠け（「犬」→「N」等）と聞き取り漏れを防ぐため、
-      //   AI発話中・描画中以外はそのまま生PCM音声をGemini Liveへ送信する！
+      //   AI発話中・描画中以外はそのまま増幅済みPCM音声をGemini Liveへ送信する！
       // ・テレビ・周囲音カット（tv_cut / strict / ultra）選択時のみRMSしきい値ゲートを適用する
       if (state.noiseGateMode === 'normal') {
         const nowMs = Date.now();
-        // AI発話終了直後の350ms間のみ、微弱なスピーカー残響（RMS < 0.0055）を無音化し、
-        // 通常の話し声（RMS >= 0.0055）は即座に通してマイクの聞き取りやすさを確保
-        if ((nowMs - (state.lastAiSpeechFinishedTime || 0)) < 350 && rms < 0.0055) {
+        // AI発話終了直後の250ms間のみ、微弱なスピーカー残響（RMS < 0.003）を無音化し、
+        // 普通の声量（RMS >= 0.003）は即座に通してマイクの聞き取りやすさを最大化
+        if ((nowMs - (state.lastAiSpeechFinishedTime || 0)) < 250 && rms < 0.003) {
           const zeroPcm = new Int16Array(downsampledData.length);
           sendPcmAudioChunk(zeroPcm.buffer);
           return;
@@ -3496,13 +3508,13 @@ ${levelRules}
       }
     };
 
-    // 120Hz ハイパスフィルター（エアコン・空調・テレビの低域・反響ノイズをカット）
+    // 75Hz ハイパスフィルター（50/60Hz電源ハムや空調の超低域ノイズのみカットし、人の声の基音は損なわない）
     // ※GC回収によるマイク音声経路切断を防ぐため必ず state に参照保持する
     let audioFilterNode = null;
     try {
       audioFilterNode = audioContext.createBiquadFilter();
       audioFilterNode.type = 'highpass';
-      audioFilterNode.frequency.value = 120;
+      audioFilterNode.frequency.value = 75;
       audioFilterNode.Q.value = 0.707;
       source.connect(audioFilterNode);
       audioFilterNode.connect(processor);
@@ -5767,8 +5779,9 @@ ${artStyle.svgStyleRules}
     source.connect(state.outputGainNode);
 
     const currentTime = ctx.currentTime;
-    if (state.nextPlaybackTime < currentTime) {
-      state.nextPlaybackTime = currentTime;
+    if (state.nextPlaybackTime < currentTime + 0.02) {
+      // 120msの先行ジッターバッファを確保し、フォーカス切替のDOM描画や通信揺らぎによる音声途切れを防止
+      state.nextPlaybackTime = currentTime + 0.12;
     }
 
     source.start(state.nextPlaybackTime);
