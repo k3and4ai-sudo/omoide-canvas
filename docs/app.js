@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_06';
+  const APP_VERSION = 'v20261124_07';
   const APP_VERSION_TITLE = '2026-11-20 自己エコーループ根絶(ハードウェア出力遅延+550msハードミュート＆直後600ms残響リバーブゲート)';
 
   function escapeHtml(str) {
@@ -1452,9 +1452,9 @@ ${levelRules}
    ⑥雰囲気の復唱が終わったら、必ず「一通りお話を伺いました。」に続けて、①テーマ〜⑥雰囲気までの内容を短い文で順番に【1回だけ】確認復唱し、最後に「この内容で絵を描いてもよろしいでしょうか？」と尋ねて返答を待ってください。（同じ確認まとめを2度繰り返さないでください）
 4. 描画の実行タイミング（完了合図）：
    相手が「うん」「お願い」「描いて」「そうして」「はい」「この内容でお願いします」等と明確に同意した時のみ、はじめて \`generate_memory_visual\` ツールを呼び出してください。
-   ツールを呼び出す際は「かしこまりました！今からキャンバスに描いてみますね。少しだけ待っていてくださいね。」と【1回だけ】伝えて静かにお待ちください。（同じ言葉を2度繰り返さないでください）
+   （※ツールを呼び出した後、ツールから \`displayed_on_canvas\`（描画完了済み）が返ってきた場合は、絵はすでに表示されているため「今からキャンバスに描いてみますね」「少し待っていてください」とは絶対に言わないでください！）
 5. 描画後の温かい声かけ：
-   絵が表示されたら「${nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？」と温かく声をかけてください。
+   ツールから \`displayed_on_canvas\` が返ったら、すぐに「${nickname}、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？もし描き直したいところがあれば教えてくださいね」と温かく声をかけてください。
 6. 【最重要】絵の修正・描き直し（refine_memory_visual）ルール：
    相手が描かれた絵を見て、修正や変更の要望を口にしたら、**必ずまず「描き直します、〇〇ですね。」と修正内容を声に出して復唱してから** \`refine_memory_visual\` ツールを呼び出してください。
    その際、\`user_feedback\` に相手の具体的な修正希望を、\`updated_visual_elements\` に修正後の全体情景を詳しく指定してください。
@@ -1629,15 +1629,24 @@ ${levelRules}
       updateStatus('マイクと接続を準備しています...', true);
       dom.btnSessionToggle.disabled = true;
 
-      // 1. AudioContextの初期化（スマホ対応: 入出力を1つのAudioContextに統合し、タップ直後にアンロック）
+      // 1. AudioContextの初期化（再生用は24kHz専用コンテキストに分離し、48kHzリサンプリングによるチャンク境界「ぶー」ノイズ＆マイク干渉を根絶）
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (!state.audioContextOut) {
-        state.audioContextOut = new AudioCtx();
+        try {
+          state.audioContextOut = new AudioCtx({ sampleRate: SAMPLE_RATE_OUT });
+        } catch (e) {
+          state.audioContextOut = new AudioCtx();
+        }
       }
       if (state.audioContextOut.state === 'suspended') {
         await state.audioContextOut.resume();
       }
-      state.audioContextIn = state.audioContextOut;
+      if (!state.audioContextIn || state.audioContextIn === state.audioContextOut) {
+        state.audioContextIn = new AudioCtx();
+      }
+      if (state.audioContextIn.state === 'suspended') {
+        await state.audioContextIn.resume();
+      }
 
       // 出力用マスター GainNode の初期化（スピーカー音量調整・音割れ＆スマホ爆音防止）
       if (!state.outputGainNode) {
@@ -2937,6 +2946,27 @@ ${levelRules}
             const cleanAiTxt = state.currentAiTurnTranscript.trim();
             if (cleanAiTxt) {
               dom.aiTranscriptText.textContent = cleanAiTxt;
+              // リアルタイム・ブリンキング同期：さくらさんが「②場所についてお聞きします」等を発話し始めた瞬間にフォーカスを切り替える
+              if (state.sceneCollector.status === 'collecting') {
+                const liveStepPatterns = [
+                  { step: 'mood', regex: /(?:⑥|6|６)[、.\s]*(?:気分|雰囲気|気持ち)についてお聞きします/ },
+                  { step: 'details', regex: /(?:⑤|5|５)[、.\s]*(?:見えたもの|様子|光景)についてお聞きします/ },
+                  { step: 'people', regex: /(?:④|4|４)[、.\s]*(?:登場人物|人物)についてお聞きします/ },
+                  { step: 'weather', regex: /(?:③|3|３)[、.\s]*(?:天候|天気|季節)についてお聞きします/ },
+                  { step: 'place', regex: /(?:②|2|２)[、.\s]*(?:場所|舞台)についてお聞きします/ },
+                  { step: 'topic', regex: /(?:①|1|１)[、.\s]*(?:テーマ|話題)についてお聞きします/ }
+                ];
+                for (const item of liveStepPatterns) {
+                  if (item.regex.test(cleanAiTxt)) {
+                    if (state.sceneCollector.activeStep !== item.step) {
+                      state.sceneCollector.activeStep = item.step;
+                      state.sceneCollector.turnTargetStep = item.step;
+                      renderSceneCollectorUI();
+                    }
+                    break;
+                  }
+                }
+              }
             }
           }
 
@@ -3006,33 +3036,7 @@ ${levelRules}
               state.hasUnansweredUserTurn = false;
               state.recentAiUtterances.push(finishedAiTxt);
               if (state.recentAiUtterances.length > 6) state.recentAiUtterances.shift();
-
-              // フォーカス（ブリンキング）と実音声再生の同期：
-              // 「復唱＋次ステップ質問」を含む発話でスピーカーに再生残時間がある場合は、
-              // さくらさんが復唱を終えて次の質問に入るタイミング（残時間の約48%）に合わせてブリンキングを切り替える
-              if (state.directFocusSyncTimer) {
-                clearTimeout(state.directFocusSyncTimer);
-                state.directFocusSyncTimer = null;
-              }
-              const ctxSync = state.audioContextOut;
-              const syncRemMs = (ctxSync && state.nextPlaybackTime > ctxSync.currentTime)
-                ? (state.nextPlaybackTime - ctxSync.currentTime) * 1000
-                : 0;
-              const isEchoAndNextQ = state.sceneCollector.status === 'collecting' &&
-                finishedAiTxt.includes('復唱') &&
-                finishedAiTxt.includes('お聞きします') &&
-                syncRemMs > 700;
-              if (isEchoAndNextQ) {
-                const shiftDelayMs = Math.min(3500, Math.max(400, Math.round(syncRemMs * 0.48)));
-                state.directFocusSyncTimer = setTimeout(() => {
-                  state.directFocusSyncTimer = null;
-                  if (state.isSessionActive) {
-                    updateSceneCollectorFromText(finishedAiTxt, 'ai');
-                  }
-                }, shiftDelayMs);
-              } else {
-                updateSceneCollectorFromText(finishedAiTxt, 'ai');
-              }
+              updateSceneCollectorFromText(finishedAiTxt, 'ai');
 
               const col = state.sceneCollector;
               // (A) 確認まとめの途中途切れ・または⑥完了後に確認質問を言わずに終わった場合は無条件でリカバリー
@@ -5344,7 +5348,7 @@ ${artStyle.svgStyleRules}
           : {
               status: 'displayed_on_canvas',
               title: artifact.title,
-              message: 'キャンバスに絵が表示されました。感想を尋ね、「この雰囲気でよいでしょうか？もし描き直したいところがあれば教えてくださいね」と優しく声をかけてください。'
+              message: '【描画完了済み】絵はすでに完成してキャンバスに表示されています。「今からキャンバスに描いてみますね」「少し待っていてください」とは絶対に言わず、すぐに「お父さん、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？もし描き直したいところがあれば教えてくださいね」と感想を尋ねてください。'
             };
         ws.send(JSON.stringify({
           tool_response: {
@@ -5771,17 +5775,8 @@ ${artStyle.svgStyleRules}
     const int16Array = new Int16Array(arrayBuffer, 0, byteLen / 2);
     const float32Array = new Float32Array(int16Array.length);
 
-    let dcSum = 0;
     for (let i = 0; i < int16Array.length; i++) {
-      const val = int16Array[i] / 32768.0;
-      float32Array[i] = val;
-      dcSum += val;
-    }
-    const dcOffset = dcSum / int16Array.length;
-    if (Math.abs(dcOffset) > 0.001) {
-      for (let i = 0; i < float32Array.length; i++) {
-        float32Array[i] = Math.max(-1, Math.min(1, float32Array[i] - dcOffset));
-      }
+      float32Array[i] = int16Array[i] / 32768.0;
     }
 
     const audioBuffer = ctx.createBuffer(1, float32Array.length, SAMPLE_RATE_OUT);
