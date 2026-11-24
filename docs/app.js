@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_10';
-  const APP_VERSION_TITLE = '2026-11-24 SVG超細密化(200〜350要素目標/32Kトークン/思考ON)＋重なり解消・完全SVG修正モード全面刷新';
+  const APP_VERSION = 'v20261124_11';
+  const APP_VERSION_TITLE = '2026-11-24 2段階SVG超細密描き込み(約200要素/Z順分離合成)＋室内/屋外レイアウト自動最適化(gemini-3.5-flash-lite最優先)';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -5006,6 +5006,33 @@ ${levelRules}
     const artStyleKey = args.art_style || state.currentArtStyle || 'watercolor';
     const artStyle = ART_STYLES[artStyleKey] || ART_STYLES.watercolor;
 
+    // ローカル検証時（localhost）のみ、描画エンジンへ送ったプロンプトと結果SVGを自動保存する
+    const captureDrawingPromptLocal = (payload) => {
+      try {
+        window.__lastSentDrawingPrompt = payload;
+        try {
+          localStorage.setItem('omoide_last_drawing_prompt', JSON.stringify({
+            timestamp: payload.timestamp,
+            mode: payload.mode,
+            model: payload.model,
+            title: payload.title,
+            artStyleKey: payload.artStyleKey,
+            feedback: payload.feedback,
+            vectorCount: payload.vectorCount,
+            elapsedMs: payload.elapsedMs,
+            prompt: payload.prompt
+          }));
+        } catch (_) {}
+        if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+          fetch('/__save_prompt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          }).catch(() => {});
+        }
+      } catch (_) {}
+    };
+
     let mediaDataUrl = '';
     let usedModelName = '';
     const apiKey = (state.sessionApiKey || '').trim();
@@ -5055,7 +5082,7 @@ ${levelRules}
               `4. \`<g id="refinement-layer">\` で始まり \`</g>\` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`
             );
 
-          const refineModels = ['gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
+          const refineModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite'];
           const refineMaxTokens = isFullSvgEdit ? 32768 : 16384;
           for (const mName of refineModels) {
             try {
@@ -5065,6 +5092,19 @@ ${levelRules}
                 // 座標の重なり解析・配置計算を行うため適度な思考予算を付与
                 refineGenConfig.thinkingConfig = { thinkingBudget: isFullSvgEdit ? 1536 : 1024 };
               }
+              const refStartMs = Date.now();
+              captureDrawingPromptLocal({
+                timestamp: new Date().toISOString(),
+                phase: 'request',
+                mode: isFullSvgEdit ? 'refine_full_svg' : 'refine_diff_layer',
+                model: mName,
+                title: cleanTitle,
+                cleanElements,
+                feedback,
+                artStyleKey,
+                generationConfig: refineGenConfig,
+                prompt: refineSvgPrompt
+              });
               const resRef = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/models/${mName}:generateContent?key=${encodeURIComponent(apiKey)}`,
                 {
@@ -5097,6 +5137,23 @@ ${levelRules}
                 const validRefined = candidateSvg ? repairAndValidateSvgJS(candidateSvg) : null;
                 if (validRefined) {
                   const vecCount = (validRefined.match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
+                  const refElapsedMs = Date.now() - refStartMs;
+                  captureDrawingPromptLocal({
+                    timestamp: new Date().toISOString(),
+                    phase: 'response',
+                    mode: isFullSvgEdit ? 'refine_full_svg' : 'refine_diff_layer',
+                    model: mName,
+                    title: cleanTitle,
+                    cleanElements,
+                    feedback,
+                    artStyleKey,
+                    generationConfig: refineGenConfig,
+                    prompt: refineSvgPrompt,
+                    svgCode: validRefined,
+                    svgLength: validRefined.length,
+                    vectorCount: vecCount,
+                    elapsedMs: refElapsedMs
+                  });
                   state.lastGeneratedSvgCode = validRefined;
                   mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(validRefined)}`;
                   usedModelName = `${mName} (${isFullSvgEdit ? '完全SVG修正' : '差分レイヤー合成'} / ${vecCount}要素)`;
@@ -5168,13 +5225,20 @@ ${levelRules}
       }
 
       // =========================================================================
-      // 2. 高精細オーダーメイドSVG情景画生成（backend/media_generator.py と同一仕様）
-      //    gemini-3.5-flash 優先 / 180秒タイムアウト / maxOutputTokens 16384
+      // 2. 2段階・超細密オーダーメイドSVG情景画生成（Pass 1: ベース構図 → Pass 2: 細密ディテールZ順分離合成）
+      //    室内/屋外レイアウト自動最適化 ＋ gemini-3.5-flash-lite 最優先
       // =========================================================================
       if (!mediaDataUrl) {
         try {
-          if (dom.drawingSubtext) dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」で細部まで丁寧に描いています（高精細モード）...`;
-          logDiag(`AI高精細情景描画を開始します: 「${cleanTitle}」 (画風: ${artStyle.name}) - 内容: 「${cleanElements}」`);
+          const sceneTextForDetect = `${cleanTitle} ${cleanElements}`;
+          const hasIndoorHint = /(?:和室|座敷|部屋|室内|家の中|居間|茶の間|台所|キッチン|炬燵|こたつ|襖|ふすま|障子|畳|喫茶店|カフェ|店内|教室|体育館|廊下|病院|リビング|ダイニング|寝室|書斎|縁側|床の間)/.test(sceneTextForDetect);
+          const hasStrongOutdoorMain = /(?:校庭|通学路|並木道|校門|公園|海辺|海岸|砂浜|山頂|登山|畑|田んぼ|川原|河川敷|運動会|商店街|駅前|神社|お寺の境内)/.test(sceneTextForDetect);
+          const isIndoorScene = hasIndoorHint && !hasStrongOutdoorMain;
+
+          if (dom.drawingSubtext) {
+            dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」で構図を描いています（第1段階 / 全2段階）...`;
+          }
+          logDiag(`AI2段階SVG描画を開始します [${isIndoorScene ? '室内レイアウト' : '屋外レイアウト'}]: 「${cleanTitle}」 (画風: ${artStyle.name}) - 内容: 「${cleanElements}」`);
 
           const styleDesc = artStyleKey === 'realistic'
             ? '写実的でリアルな情景（精密な光と影、被写界深度、立体感）'
@@ -5183,6 +5247,31 @@ ${levelRules}
               : artStyleKey === 'colored_pencil'
                 ? '素朴で繊細な色鉛筆スケッチ風'
                 : '温かい水彩画風';
+
+          const layoutInstruction = isIndoorScene
+            ? `【超細密描写・室内レイアウト必須条件（手抜き・簡易イラスト厳禁）】
+- 本情景は**室内空間**です。天井や部屋の上部に青空や屋外の雲を直接描くことは厳禁とし、必ず天井・長押（なげし）・鴨居・柱・壁・襖・障子・窓枠などで温かく囲まれた自然な室内空間として構成してください（外の青空・桜・庭を見せる場合は、窓や開いた障子の枠の向こう側だけに自然に見せること）。
+- 10個以上の \`<linearGradient>\` / \`<radialGradient>\` と \`<filter>\`（柔らかな水彩のにじみ・光のぼかし）を活用し、以下の明確なレイヤー構造（\`<g id="...">\`）で丁寧にベース構図（80〜130要素以上）を描き込んでください：
+  1. \`<g id="layer-room-shell">\`（天井板・長押・柱・壁・鴨居・奥の襖や障子・窓枠・照明など室内の骨格）
+  2. \`<g id="layer-outside-view">\`（窓や開いた障子越しに見える外の明るい日差し・季節の草花や空）
+  3. \`<g id="layer-floor">\`（奥行きのあるパースのついた畳敷きの床・畳縁・縁側の板張り・フローリング等）
+  4. \`<g id="layer-main-furniture">\`（部屋中央の炬燵・木製テーブル・茶箪笥・食器・花瓶などの主要家具・静物）
+  5. \`<g id="layer-people-and-pet">\`（人物やペット：家具・壁に不自然にめり込まず、畳や床に接地影付きで自然に配置）
+  6. \`<g id="layer-light-atmosphere">\`（窓から差し込む柔らかな光と穏やかな陰影）`
+            : `【超細密描写・屋外レイアウト必須条件（手抜き・簡易イラスト厳禁）】
+- 10個以上の \`<linearGradient>\` / \`<radialGradient>\` と \`<filter>\`（柔らかな光・水彩のにじみ・木漏れ日・地面の影）を活用し、以下の明確なレイヤー構造（\`<g id="...">\`）で丁寧にベース構図（90〜140要素以上）を描き込んでください：
+  1. \`<g id="layer-sky">\`（遠景 y=0〜240：多層グラデーションの空、光の筋、綿毛のように重なり合う多層の雲、遠くの霞んだ山並み）
+  2. \`<g id="layer-mid-buildings">\`（中景 y=130〜375：校舎や建物は屋根瓦・外壁・窓枠・玄関ポーチ・庇の影まで丁寧に描写）
+  3. \`<g id="layer-mid-trees">\`（中景〜近景の樹木：幹・枝・濃淡の異なる葉の塊や花びらの重なり）
+  4. \`<g id="layer-ground">\`（近景 y=360〜600：校庭の砂や土の起伏、石畳や通学路のパース、草花・落ち葉、建物や木の接地影）
+  5. \`<g id="layer-people">\`（人物専用レイヤー：下記「空間レイアウト・重なり厳禁ルール」を絶対厳守）
+  6. \`<g id="layer-foreground-details">\`（最前景の草花・光粒・水彩のにじみオーバーレイ）
+
+【空間レイアウト・重なり厳禁ルール（絶対厳守！）】
+- **建物（学校の校舎など）と人物が画面上で不自然に重なることを厳禁とします！**
+  - 学校の校舎・建物は画面奥〜中景（接地線 y=340〜375 付近、高さ y=130〜375 の範囲）に配置し、手前（y=375〜600）に広い校庭・広場・通学路の空間をしっかり確保してください。
+  - 人物は必ず **手前の広い校庭・歩道・通学路（足元 y=440〜575）** に立たせ、人物の頭や体が校舎の壁面・窓・玄関・屋根に被ったり、建物にめり込んだり、空中に浮いたりしないよう厳密に座標と遠近法サイズを計算してください。
+  - 人物の足元には必ず接地影（半透明の \`<ellipse>\`）を描いて地面に立っている立体感を出してください。`;
 
           const svgPrompt = `あなたは高齢者・回想法ケアのための情景画専門アーティスト（${artStyle.svgRoleInstruction}）です。ユーザーが語った思い出やお話に合わせて、指定された情景の【${styleDesc}】SVGイラスト（viewBox="0 0 800 600"）を1枚描いてください。
 
@@ -5198,44 +5287,97 @@ ${isRefinement && feedback ? `
 【画風特化造形ルール（${artStyle.name}）】
 ${artStyle.svgStyleRules}
 
-【超細密描写・ベクトル密度必須条件（手抜き・簡易イラスト厳禁）】
-- 描画時間がかかっても構いませんので、省略や簡略化を一切せず、**目標 200〜350個以上（最低でも150個以上）**の緻密な \`<path>\`・\`<polygon>\`・\`<ellipse>\`・\`<circle>\`・\`<rect>\`・\`<line>\` ベクトル要素を贅沢に使って、美術館の絵画・緻密な絵本原画のように細部まで描き込んでください。
-- 12個以上の \`<linearGradient>\` / \`<radialGradient>\` と、柔らかな光・水彩のにじみ・木漏れ日・地面の影を表現する \`<filter>\`（feGaussianBlur 等）を活用してください。
-- 以下の明確なレイヤー構造（\`<g id="...">\`）に分けて描くこと：
-  1. \`<g id="layer-sky">\`（遠景 y=0〜240：多層グラデーションの空、光の筋、綿毛のように重なり合う多層の雲、遠くの霞んだ山並み）
-  2. \`<g id="layer-mid-buildings">\`（中景 y=130〜370：校舎や建物は瓦1枚ごとの陰影、外壁の羽目板やレンガ目地、木枠とガラスの反射光がある多数の窓、時計台や玄関ポーチ、庇の影まで精密に描写）
-  3. \`<g id="layer-mid-trees">\`（中景〜近景の樹木：幹の樹皮の筋、分かれた枝、濃淡の異なる何十枚もの葉の塊・花びらの重なり・木漏れ日のハイライト）
-  4. \`<g id="layer-ground">\`（近景 y=360〜600：校庭の砂や土の起伏、石畳や通学路のパースライン、道端の草花・落ち葉・花びら、建物や木々から伸びる長い接地影）
-  5. \`<g id="layer-people">\`（人物専用レイヤー：下記「空間レイアウト・重なり厳禁ルール」を絶対厳守）
-  6. \`<g id="layer-foreground-details">\`（最前景の草花・光粒・水彩のにじみオーバーレイ等の仕上げ）
-
-【空間レイアウト・重なり厳禁ルール（絶対厳守！）】
-- **建物（学校の校舎など）と人物が画面上で不自然に重なることを厳禁とします！**
-  - 学校の校舎・建物は画面奥〜中景（接地線 y=340〜375 付近、高さ y=130〜375 の範囲）に堂々と配置し、手前（y=375〜600）に広い校庭・広場・通学路の空間をしっかり確保してください。
-  - 人物は必ず **手前の広い校庭・歩道・通学路（足元 y=440〜575）** に立たせ、人物の頭や体が校舎の壁面・窓・玄関・屋根に被ったり、建物にめり込んだり、空中に浮いたりしないよう厳密に座標と遠近法サイズ（奥の人物は小さく、手前の人物は適度な大きさ）を計算してください。
-  - 人物を配置する場合は、校舎の真正面を塞がない位置（校舎の前方の開けた校庭下側、または左右の通学路）に自然に配置し、足元には必ず接地影（半透明の \`<ellipse>\`）を描いて地面に立っている立体感を出してください。
+${layoutInstruction}
 
 【最重要造形ルール】
-1. ユーザーがお話しした具体的なモチーフ・特徴・造形（山、夕焼け、海、学校、校門、並木道、教室、喫茶店、花、柿、木製テーブル、窓、雪、川など）を100%忠実に、細部まで丁寧に描き込んでください。
+1. ユーザーがお話しした具体的なモチーフ・特徴・造形（和室、炬燵、襖、犬、山、夕焼け、海、学校、校門、並木道、教室、喫茶店、花、柿、木製テーブル、窓、雪、川など）を100%忠実に、細部まで丁寧に描き込んでください。
+   - 和室・座敷・炬燵について語られている場合：天井・長押・柱・襖・障子・パースのある畳・温かな炬燵布団と木製天板・みかんや湯呑みまで温かく表現してください。
    - 建物・校門・並木道について語られている場合：レンガや木目の質感、屋根瓦や窓枠の1つ1つ、木々の枝葉の重なりや木漏れ日、地面の陰影や落ち葉まで細かく表現してください。
    - 山について語られている場合：鋭角な三角形・ギザギザの険しい岩峰・切り立った山頂・稜線の陰影・雪渓をシャープなポリゴンやパス（<polygon>, <path>）でダイナミックに描いてください。
    - 庭やバラについて語られている場合：青空、木漏れ日、緑の芝生、白いウッドフェンス、鮮やかな真紅のバラ（重なり合う立体的な花びら・蕾・葉脈）を豊かに描いてください。
    - 喫茶店や店内について語られている場合：木目テーブル、コーヒー、クリームソーダ、ペンダントライト、窓からの差し込み光などを描いてください。
 2. 背景やモチーフにはグラデーション（<linearGradient>, <radialGradient>）や柔らかいフィルターを効果的に使い、立体感と深みを与えてください。
-3. 【人物・にぎわいの描写ルール】情景に「生徒」「友達」「人」「大勢」などの人物が含まれる場合は、背景だけで終わらせず、必ず上記【空間レイアウト・重なり厳禁ルール】を守った上で、手前の校庭や通学路（足元 y=440〜575）に【複数の人物（大勢なら8〜15人程度）】を後ろ姿・横向き・遠景の温かいイラスト調（頭・髪・制服・襟・腕・脚・カバン・接地影まで丁寧に複数パーツで描写）で \`<g id="layer-people">\` に描いてください。
+3. 【人物・ペット・にぎわいの描写ルール】情景に人物やペットが含まれる場合は、背景だけで終わらせず、必ず自然な位置・遠近感で丁寧に描いてください（屋外で大勢の生徒・友達がいる場合は手前の校庭や通学路 y=440〜575 に8〜15人程度、室内の家族やペットは畳や床の上で家具にめり込まない位置に接地影付きで描写）。
 4. <svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全な整形式SVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
 
-          // 高精細・緻密描写を最優先：gemini-3-flash-preview（構図思考ON・32Kトークン・最大120秒）→ gemini-3.5-flash-lite → gemini-3.1-flash-lite
-          const candidateModels = ['gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
+          // Pass 2 細密ディテール（Z順分離）マージ用ヘルパー
+          const mergeTwoStageSvgJS = (baseSvgStr, pass2RawStr) => {
+            let cleanedP2 = String(pass2RawStr || '').trim()
+              .replace(/^```[a-zA-Z]*\s*/, '')
+              .replace(/\s*```$/, '')
+              .trim();
+            if (!cleanedP2) return null;
+
+            const defsMatch = cleanedP2.match(/<defs[^>]*>([\s\S]*?)<\/defs>/i);
+            const extraDefs = defsMatch ? defsMatch[1].trim() : '';
+            const withoutDefs = cleanedP2.replace(/<defs[^>]*>[\s\S]*?<\/defs>/gi, '').trim();
+
+            const bgMatch = withoutDefs.match(/<g\b[^>]*id=["']p2-bg-details["'][^>]*>[\s\S]*?<\/g>/i);
+            const fgMatch = withoutDefs.match(/<g\b[^>]*id=["']p2-fg-details["'][^>]*>[\s\S]*?<\/g>/i);
+
+            let merged = baseSvgStr;
+            if (extraDefs) {
+              if (/<\/defs>/i.test(merged)) {
+                merged = merged.replace(/<\/defs>/i, `\n  <!-- Pass 2 Extra Defs -->\n  ${extraDefs}\n</defs>`);
+              } else {
+                merged = merged.replace(/(<svg[^>]*>)/i, `$1\n<defs>\n  ${extraDefs}\n</defs>`);
+              }
+            }
+
+            if (bgMatch || fgMatch) {
+              if (bgMatch) {
+                // 背景細部は主役家具・人物レイヤーの直前に挿入してZ順（奥行き）を厳守
+                const insertBeforeRe = /(<g\b[^>]*id=["'](?:layer-main-furniture|layer-kotatsu|layer-people-and-pet|layer-people|layer-foreground-details)["'][^>]*>)/i;
+                if (insertBeforeRe.test(merged)) {
+                  merged = merged.replace(insertBeforeRe, `<!-- Pass 2 Background Details -->\n  ${bgMatch[0]}\n  $1`);
+                } else {
+                  merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- Pass 2 Background Details -->\n  ${bgMatch[0]}\n</svg>`);
+                }
+              }
+              if (fgMatch) {
+                merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- Pass 2 Foreground Details -->\n  ${fgMatch[0]}\n</svg>`);
+              }
+            } else {
+              // フォールバック: 単一 <g>...</g> の場合は末尾へ合成
+              const firstG = withoutDefs.indexOf('<g');
+              const lastGEnd = withoutDefs.lastIndexOf('</g>');
+              if (firstG === -1 || lastGEnd === -1 || lastGEnd <= firstG) return null;
+              const detailG = withoutDefs.slice(firstG, lastGEnd + 4);
+              merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- Pass 2 Detail Layer -->\n  ${detailG}\n</svg>`);
+            }
+            return repairAndValidateSvgJS(merged);
+          };
+
+          // 造形力・安定性・速度のバランスが最良な gemini-3.5-flash-lite を最優先、次点に gemini-3-flash-preview、最終に gemini-3.1-flash-lite
+          const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite'];
           const modelAttemptLogs = [];
+          let pass1Svg = '';
+          let pass1Model = '';
+          let pass1VecCount = 0;
+          let pass1ElapsedMs = 0;
+
+          // --- 第1段階（Pass 1）：ベース構図生成 ---
           for (const modelName of candidateModels) {
             try {
-              logDiag(`AI超細密SVG描画を試行中 (${modelName} / 32Kトークン / 最大120秒): 「${cleanTitle}」`);
+              logDiag(`AI2段階SVG描画 [Pass 1/構図] を試行中 (${modelName} / 最大90秒): 「${cleanTitle}」`);
               const svgGenConfig = { temperature: 0.35, maxOutputTokens: 32768 };
               if (modelName === 'gemini-3-flash-preview') {
-                // 建物と人物の重なり防止・レイヤー構成計画のために適度な思考予算を付与
                 svgGenConfig.thinkingConfig = { thinkingBudget: 1024 };
               }
+              const svgStartMs = Date.now();
+              captureDrawingPromptLocal({
+                timestamp: new Date().toISOString(),
+                phase: 'request_pass1',
+                mode: 'two_stage_svg',
+                model: modelName,
+                title: cleanTitle,
+                cleanElements,
+                feedback,
+                artStyleKey,
+                isIndoorScene,
+                generationConfig: svgGenConfig,
+                prompt: svgPrompt
+              });
               const resSvg = await fetch(
                 `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
                 {
@@ -5245,7 +5387,7 @@ ${artStyle.svgStyleRules}
                     contents: [{ parts: [{ text: svgPrompt }] }],
                     generationConfig: svgGenConfig
                   }),
-                  signal: AbortSignal.timeout ? AbortSignal.timeout(120000) : undefined
+                  signal: AbortSignal.timeout ? AbortSignal.timeout(90000) : undefined
                 }
               );
               recordApiCall(resSvg.headers, resSvg.status);
@@ -5255,16 +5397,15 @@ ${artStyle.svgStyleRules}
                 const rawText = svgParts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n');
                 const validSvg = repairAndValidateSvgJS(rawText);
                 if (validSvg) {
-                  const vecCount = (validSvg.match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
-                  state.lastGeneratedSvgCode = validSvg;
-                  mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(validSvg)}`;
-                  usedModelName = `${modelName} (${vecCount}要素)`;
-                  dismissCanvasError();
-                  logDiag(`✅ Gemini (${modelName}) による超細密オーダーメイド情景画(SVG: ${validSvg.length}文字 / ベクトル約${vecCount}要素)の描画＆XML検証に成功しました！`);
+                  pass1Svg = validSvg;
+                  pass1Model = modelName;
+                  pass1VecCount = (validSvg.match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
+                  pass1ElapsedMs = Date.now() - svgStartMs;
+                  logDiag(`✅ [Pass 1完了] (${modelName}): ${validSvg.length}文字 / ベクトル約${pass1VecCount}要素 (${(pass1ElapsedMs / 1000).toFixed(1)}秒)`);
                   break;
                 } else {
                   modelAttemptLogs.push(`❌ ${modelName}: SVG検証エラー(要素不足/破損)`);
-                  logDiag(`⚠️ モデル ${modelName} のSVG出力がXML/描画要素検証に失敗しました (raw=${rawText.length}文字)。次の候補モデルを試行します。`);
+                  logDiag(`⚠️ モデル ${modelName} のPass 1 SVG出力がXML/描画要素検証に失敗しました (raw=${rawText.length}文字)。次の候補モデルを試行します。`);
                 }
               } else {
                 if (modelName === 'gemini-3.5-flash' && resSvg.status === 503) {
@@ -5274,9 +5415,120 @@ ${artStyle.svgStyleRules}
                 logDiag(`モデル ${modelName} 応答ステータス: ${resSvg.status}。次の候補モデルを試行します。`);
               }
             } catch (mErr) {
-              modelAttemptLogs.push(`❌ ${modelName}: ${mErr.name === 'TimeoutError' ? 'タイムアウト(120秒)' : mErr.message}`);
+              modelAttemptLogs.push(`❌ ${modelName}: ${mErr.name === 'TimeoutError' ? 'タイムアウト(90秒)' : mErr.message}`);
               logDiag(`モデル ${modelName} エラー: ${mErr.message}。次の候補モデルを試行します。`);
             }
+          }
+
+          // --- 第2段階（Pass 2）：超細密ディテール重ね描き（Z順分離合成・失敗時は安全にPass 1採用） ---
+          if (pass1Svg) {
+            let finalSvg = pass1Svg;
+            let finalVecCount = pass1VecCount;
+            let finalModelLabel = `${pass1Model} (${pass1VecCount}要素)`;
+            let totalElapsedMs = pass1ElapsedMs;
+
+            try {
+              if (dom.drawingSubtext) {
+                dom.drawingSubtext.textContent = `細部の模様・質感・光と影を丁寧に描き込んでいます（第2段階 / 全2段階）...`;
+              }
+              const pass2DetailHints = isIndoorScene
+                ? `- **背景・部屋・床（\`p2-bg-details\`）**: 畳の細かい織り目線、畳縁の伝統模様、襖紙の淡い水彩模様（松・雲・花の小枝等）、引手の縁取りと光沢、障子・窓の繊細な組子格子、柱や鴨居・天井板の木目の細線\n   - **主役・家具・人物・光（\`p2-fg-details\`）**: 炬燵布団や家具の和柄・布の皺・木目の光沢、湯呑みの湯気や小物のハイライト、着物や服の柄・帯・髪の流れ、ペットのふわふわした毛並みと接地影、窓から斜めに差し込む柔らかな光条（opacity 0.08〜0.18）と光の粒`
+                : `- **背景・建物・樹木・地面（\`p2-bg-details\`）**: 建物の屋根瓦・レンガや板壁の目地・窓ガラスの反射、樹木の幹の樹皮・重なり合う細かな葉や花びら、地面の砂や石畳の質感・草花・落ち葉・長い影\n   - **主役・人物・光（\`p2-fg-details\`）**: 人物の服装・襟・カバン・髪や動きの細部、柔らかな太陽光条（opacity 0.08〜0.18）、舞う花びらや光の粒・水彩絵の具の優しいにじみ`;
+
+              const pass2Prompt = `あなたは美術館品質の情景画を手掛けるプロのSVG細密仕上げアーティスト（${artStyle.svgRoleInstruction}）です。
+以下は、第1段階で描かれたベース構図のSVGコード（viewBox="0 0 800 600"）です。
+
+【情景テーマ】:
+${cleanElements}
+
+【画風】:
+${styleDesc}（${artStyle.promptModifier}）
+
+【第1段階 ベースSVG（座標・色調の参照用）】:
+${pass1Svg}
+
+【あなたのミッション（第2段階：超細密ディテール描き込み）】
+ベースSVGの構図・配置・色調は【100%活かしたまま】、絵の密度・立体感・温もりを劇的に引き上げるための細密仕上げレイヤーを描き出してください。
+
+【絶対厳守ルール】
+1. ベースSVGの座標（viewBox 800x600）を正確に読み取り、各モチーフの位置にぴったり重なるように**合計120〜180個以上の繊細なベクトル要素**（\`<path>\`, \`<line>\`, \`<ellipse>\`, \`<circle>\`, \`<polygon>\`, \`<rect>\`）を描き込んでください。
+2. 奥行き（Z順）が崩れないよう、以下の2つのグループに分けて出力してください：
+   ${pass2DetailHints}
+3. **重要**: \`p2-bg-details\` は背景・壁・床専用です。手前の主役モチーフ（炬燵・家具・人物・ペット等）を不透明な図形で塗り潰したり隠したりせず、必ず半透明の重なり・細線・ハイライト・質感でリッチに仕上げてください。
+4. 出力は必要に応じて \`<defs>...</defs>\`（IDは必ず \`p2-\` で始めて既存IDと衝突させないこと）と、\`<g id="p2-bg-details">...</g>\` および \`<g id="p2-fg-details">...</g>\` のみを出力してください。\`<svg>\` タグや解説文・マークダウン枠（\`\`\`）は一切含めないでください。`;
+
+              const pass2Models = [pass1Model, ...candidateModels.filter(m => m !== pass1Model)];
+              for (const p2Model of pass2Models) {
+                try {
+                  logDiag(`AI2段階SVG描画 [Pass 2/細密仕上げ] を試行中 (${p2Model} / 最大75秒)...`);
+                  const p2GenConfig = { temperature: 0.35, maxOutputTokens: 32768 };
+                  if (p2Model === 'gemini-3-flash-preview') {
+                    p2GenConfig.thinkingConfig = { thinkingBudget: 512 };
+                  }
+                  const p2StartMs = Date.now();
+                  const resP2 = await fetch(
+                    `https://generativelanguage.googleapis.com/v1beta/models/${p2Model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+                    {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        contents: [{ parts: [{ text: pass2Prompt }] }],
+                        generationConfig: p2GenConfig
+                      }),
+                      signal: AbortSignal.timeout ? AbortSignal.timeout(75000) : undefined
+                    }
+                  );
+                  recordApiCall(resP2.headers, resP2.status);
+                  if (resP2.ok) {
+                    const dataP2 = await resP2.json();
+                    const p2Parts = dataP2?.candidates?.[0]?.content?.parts || [];
+                    const p2Raw = p2Parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n');
+                    const mergedSvg = mergeTwoStageSvgJS(pass1Svg, p2Raw);
+                    if (mergedSvg) {
+                      const mergedVecCount = (mergedSvg.match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
+                      if (mergedVecCount > pass1VecCount) {
+                        const p2ElapsedMs = Date.now() - p2StartMs;
+                        finalSvg = mergedSvg;
+                        finalVecCount = mergedVecCount;
+                        totalElapsedMs = pass1ElapsedMs + p2ElapsedMs;
+                        finalModelLabel = `${pass1Model} 2段階超細密 (${pass1VecCount}→${mergedVecCount}要素)`;
+                        logDiag(`✅ [Pass 2完了] (${p2Model}): +${mergedVecCount - pass1VecCount}要素追加 → 合計約${mergedVecCount}要素 (${mergedSvg.length}文字 / 合計${(totalElapsedMs / 1000).toFixed(1)}秒)`);
+                        break;
+                      }
+                    }
+                    logDiag(`⚠️ Pass 2 (${p2Model}) の出力が合成検証を通過しませんでした。次を試行します。`);
+                  } else {
+                    logDiag(`Pass 2 (${p2Model}) 応答ステータス: ${resP2.status}`);
+                  }
+                } catch (p2Err) {
+                  logDiag(`Pass 2 (${p2Model}) エラー: ${p2Err.message}`);
+                }
+              }
+            } catch (p2OuterErr) {
+              logDiag(`Pass 2 スキップ（Pass 1 ベースSVGを採用）: ${p2OuterErr.message}`);
+            }
+
+            captureDrawingPromptLocal({
+              timestamp: new Date().toISOString(),
+              phase: 'response',
+              mode: 'two_stage_svg',
+              model: finalModelLabel,
+              title: cleanTitle,
+              cleanElements,
+              feedback,
+              artStyleKey,
+              isIndoorScene,
+              prompt: svgPrompt,
+              svgCode: finalSvg,
+              svgLength: finalSvg.length,
+              vectorCount: finalVecCount,
+              elapsedMs: totalElapsedMs
+            });
+            state.lastGeneratedSvgCode = finalSvg;
+            mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(finalSvg)}`;
+            usedModelName = finalModelLabel;
+            dismissCanvasError();
+            logDiag(`✅ 2段階超細密SVG描画が完了しました！(${finalModelLabel} / ${finalSvg.length}文字 / 合計${(totalElapsedMs / 1000).toFixed(1)}秒)`);
           }
           if (!mediaDataUrl && modelAttemptLogs.length > 0) {
             state.lastSvgErrorDetails = modelAttemptLogs.join('\n');
