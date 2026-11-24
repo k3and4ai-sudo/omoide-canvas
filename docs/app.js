@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_02';
+  const APP_VERSION = 'v20261124_03';
   const APP_VERSION_TITLE = '2026-11-20 自己エコーループ根絶(ハードウェア出力遅延+550msハードミュート＆直後600ms残響リバーブゲート)';
 
   function escapeHtml(str) {
@@ -2683,7 +2683,7 @@ ${levelRules}
     ws.onopen = () => {
       const setupPayload = {
         setup: {
-          model: 'models/gemini-2.5-flash-native-audio-latest',
+          model: 'models/gemini-3.1-flash-live-preview',
           generationConfig: {
             responseModalities: ['AUDIO'],
             speechConfig: {
@@ -2692,9 +2692,6 @@ ${levelRules}
                   voice_name: selectedVoice
                 }
               }
-            },
-            thinkingConfig: {
-              thinking_budget: 0
             }
           },
           systemInstruction: {
@@ -3022,11 +3019,11 @@ ${levelRules}
               ) {
                 recoverDirectTruncatedConfirmation(ws, finishedAiTxt);
               }
-              // (B) 聞き取り中の復唱・質問途中途切れリカバリー
+              // (B) 聞き取り中の復唱・質問途中途切れリカバリー（文末が質問形で終わっているか厳密判定）
               else if (
                 col.status === 'collecting' &&
                 !state.isDrawingMedia &&
-                !/(?:でしょうか|ますか|ましょうか|ですか|かな|教えて|聞かせて|お聞きします|どうでした|いかが|どなた|どんな|？|\?)/.test(finishedAiTxt) &&
+                !/(?:でしょうか|ますか|ましょうか|ですか|かな|教えてくださいね|聞かせてくださいね|？|\?)[！!。.\s]*$/.test(finishedAiTxt) &&
                 !['今から描', '描いてみます', '絵にしてみます', '描き直します'].some(w => finishedAiTxt.includes(w))
               ) {
                 recoverDirectCollectingQuestion(ws, finishedAiTxt);
