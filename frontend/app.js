@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_05';
+  const APP_VERSION = 'v20261124_06';
   const APP_VERSION_TITLE = '2026-11-20 自己エコーループ根絶(ハードウェア出力遅延+550msハードミュート＆直後600ms残響リバーブゲート)';
 
   function escapeHtml(str) {
@@ -2683,7 +2683,7 @@ ${levelRules}
     ws.onopen = () => {
       const setupPayload = {
         setup: {
-          model: 'models/gemini-3.1-flash-live-preview',
+          model: 'models/gemini-3.8-live',
           generationConfig: {
             responseModalities: ['AUDIO'],
             speechConfig: {
@@ -3006,7 +3006,33 @@ ${levelRules}
               state.hasUnansweredUserTurn = false;
               state.recentAiUtterances.push(finishedAiTxt);
               if (state.recentAiUtterances.length > 6) state.recentAiUtterances.shift();
-              updateSceneCollectorFromText(finishedAiTxt, 'ai');
+
+              // フォーカス（ブリンキング）と実音声再生の同期：
+              // 「復唱＋次ステップ質問」を含む発話でスピーカーに再生残時間がある場合は、
+              // さくらさんが復唱を終えて次の質問に入るタイミング（残時間の約48%）に合わせてブリンキングを切り替える
+              if (state.directFocusSyncTimer) {
+                clearTimeout(state.directFocusSyncTimer);
+                state.directFocusSyncTimer = null;
+              }
+              const ctxSync = state.audioContextOut;
+              const syncRemMs = (ctxSync && state.nextPlaybackTime > ctxSync.currentTime)
+                ? (state.nextPlaybackTime - ctxSync.currentTime) * 1000
+                : 0;
+              const isEchoAndNextQ = state.sceneCollector.status === 'collecting' &&
+                finishedAiTxt.includes('復唱') &&
+                finishedAiTxt.includes('お聞きします') &&
+                syncRemMs > 700;
+              if (isEchoAndNextQ) {
+                const shiftDelayMs = Math.min(3500, Math.max(400, Math.round(syncRemMs * 0.48)));
+                state.directFocusSyncTimer = setTimeout(() => {
+                  state.directFocusSyncTimer = null;
+                  if (state.isSessionActive) {
+                    updateSceneCollectorFromText(finishedAiTxt, 'ai');
+                  }
+                }, shiftDelayMs);
+              } else {
+                updateSceneCollectorFromText(finishedAiTxt, 'ai');
+              }
 
               const col = state.sceneCollector;
               // (A) 確認まとめの途中途切れ・または⑥完了後に確認質問を言わずに終わった場合は無条件でリカバリー
@@ -3830,7 +3856,10 @@ ${levelRules}
                 state.directUserTranscriptSeq = (state.directUserTranscriptSeq || 0) + 1;
                 const mySeq = state.directUserTranscriptSeq;
                 dom.userTranscriptText.textContent = `「${correctedText}」`;
-                updateSceneCollectorFromText(correctedText, 'user');
+                // 直結モードの聞き取り中(collecting)はさくらさんの復唱を唯一の正とし、Web Speech APIによる先走りフォーカス切替を防止
+                if (state.sceneCollector.status !== 'collecting') {
+                  updateSceneCollectorFromText(correctedText, 'user');
+                }
 
                 // 描画完了後（満足→保存確認→保存/終了）の処理
                 if (handleUserUtteranceAfterDrawnDirect(correctedText)) {
