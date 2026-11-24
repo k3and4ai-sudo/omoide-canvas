@@ -17,8 +17,8 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261124_11';
-  const APP_VERSION_TITLE = '2026-11-24 2段階SVG超細密描き込み(約200要素/Z順分離合成)＋室内/屋外レイアウト自動最適化(gemini-3.5-flash-lite最優先)';
+  const APP_VERSION = 'v20261124_12';
+  const APP_VERSION_TITLE = '2026-11-24 2段階SVG入れ子<g>抽出バグ修正＋高精細モデル層拡充(2.5-flash/3.5-flash追加)＋140要素未満時の自動第3段階追い描き込み';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -5082,7 +5082,7 @@ ${levelRules}
               `4. \`<g id="refinement-layer">\` で始まり \`</g>\` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`
             );
 
-          const refineModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite'];
+          const refineModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'];
           const refineMaxTokens = isFullSvgEdit ? 32768 : 16384;
           for (const mName of refineModels) {
             try {
@@ -5300,7 +5300,32 @@ ${layoutInstruction}
 3. 【人物・ペット・にぎわいの描写ルール】情景に人物やペットが含まれる場合は、背景だけで終わらせず、必ず自然な位置・遠近感で丁寧に描いてください（屋外で大勢の生徒・友達がいる場合は手前の校庭や通学路 y=440〜575 に8〜15人程度、室内の家族やペットは畳や床の上で家具にめり込まない位置に接地影付きで描写）。
 4. <svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg"> で始まり </svg> で終わる完全な整形式SVGコードのみを出力してください。余計な解説文やマークダウン枠（\`\`\`xml 等）は一切含めないでください。`;
 
-          // Pass 2 細密ディテール（Z順分離）マージ用ヘルパー
+          // 入れ子 <g> があっても途中で切れずに完全抽出するタグ深さカウントヘルパー
+          const extractBalancedGroupById = (xmlStr, targetId) => {
+            const startRe = new RegExp(`<g\\b[^>]*id=["']${targetId}["'][^>]*>`, 'i');
+            const m = startRe.exec(xmlStr);
+            if (!m) return null;
+            const startIdx = m.index;
+            const tagRe = /<(\/?)g\b[^>]*>/gi;
+            tagRe.lastIndex = startIdx;
+            let depth = 0;
+            let tm;
+            while ((tm = tagRe.exec(xmlStr)) !== null) {
+              const fullTag = tm[0];
+              if (fullTag.endsWith('/>')) continue;
+              if (tm[1] === '/') {
+                depth--;
+                if (depth === 0) {
+                  return xmlStr.slice(startIdx, tm.index + fullTag.length);
+                }
+              } else {
+                depth++;
+              }
+            }
+            return null;
+          };
+
+          // Pass 2/3 細密ディテール（Z順分離）マージ用ヘルパー
           const mergeTwoStageSvgJS = (baseSvgStr, pass2RawStr) => {
             let cleanedP2 = String(pass2RawStr || '').trim()
               .replace(/^```[a-zA-Z]*\s*/, '')
@@ -5312,8 +5337,8 @@ ${layoutInstruction}
             const extraDefs = defsMatch ? defsMatch[1].trim() : '';
             const withoutDefs = cleanedP2.replace(/<defs[^>]*>[\s\S]*?<\/defs>/gi, '').trim();
 
-            const bgMatch = withoutDefs.match(/<g\b[^>]*id=["']p2-bg-details["'][^>]*>[\s\S]*?<\/g>/i);
-            const fgMatch = withoutDefs.match(/<g\b[^>]*id=["']p2-fg-details["'][^>]*>[\s\S]*?<\/g>/i);
+            const bgGroup = extractBalancedGroupById(withoutDefs, 'p2-bg-details');
+            const fgGroup = extractBalancedGroupById(withoutDefs, 'p2-fg-details');
 
             let merged = baseSvgStr;
             if (extraDefs) {
@@ -5324,18 +5349,18 @@ ${layoutInstruction}
               }
             }
 
-            if (bgMatch || fgMatch) {
-              if (bgMatch) {
+            if (bgGroup || fgGroup) {
+              if (bgGroup) {
                 // 背景細部は主役家具・人物レイヤーの直前に挿入してZ順（奥行き）を厳守
                 const insertBeforeRe = /(<g\b[^>]*id=["'](?:layer-main-furniture|layer-kotatsu|layer-people-and-pet|layer-people|layer-foreground-details)["'][^>]*>)/i;
                 if (insertBeforeRe.test(merged)) {
-                  merged = merged.replace(insertBeforeRe, `<!-- Pass 2 Background Details -->\n  ${bgMatch[0]}\n  $1`);
+                  merged = merged.replace(insertBeforeRe, `<!-- Pass 2 Background Details -->\n  ${bgGroup}\n  $1`);
                 } else {
-                  merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- Pass 2 Background Details -->\n  ${bgMatch[0]}\n</svg>`);
+                  merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- Pass 2 Background Details -->\n  ${bgGroup}\n</svg>`);
                 }
               }
-              if (fgMatch) {
-                merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- Pass 2 Foreground Details -->\n  ${fgMatch[0]}\n</svg>`);
+              if (fgGroup) {
+                merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- Pass 2 Foreground Details -->\n  ${fgGroup}\n</svg>`);
               }
             } else {
               // フォールバック: 単一 <g>...</g> の場合は末尾へ合成
@@ -5348,8 +5373,8 @@ ${layoutInstruction}
             return repairAndValidateSvgJS(merged);
           };
 
-          // 造形力・安定性・速度のバランスが最良な gemini-3.5-flash-lite を最優先、次点に gemini-3-flash-preview、最終に gemini-3.1-flash-lite
-          const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite'];
+          // 高精細モデル層を厚く確保（3.5-flash-lite → 3-flash-preview → 2.5-flash → 3.5-flash → 最終手段 3.1-flash-lite）
+          const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'];
           const modelAttemptLogs = [];
           let pass1Svg = '';
           let pass1Model = '';
@@ -5457,52 +5482,70 @@ ${pass1Svg}
 3. **重要**: \`p2-bg-details\` は背景・壁・床専用です。手前の主役モチーフ（炬燵・家具・人物・ペット等）を不透明な図形で塗り潰したり隠したりせず、必ず半透明の重なり・細線・ハイライト・質感でリッチに仕上げてください。
 4. 出力は必要に応じて \`<defs>...</defs>\`（IDは必ず \`p2-\` で始めて既存IDと衝突させないこと）と、\`<g id="p2-bg-details">...</g>\` および \`<g id="p2-fg-details">...</g>\` のみを出力してください。\`<svg>\` タグや解説文・マークダウン枠（\`\`\`）は一切含めないでください。`;
 
-              const pass2Models = [pass1Model, ...candidateModels.filter(m => m !== pass1Model)];
-              for (const p2Model of pass2Models) {
-                try {
-                  logDiag(`AI2段階SVG描画 [Pass 2/細密仕上げ] を試行中 (${p2Model} / 最大75秒)...`);
-                  const p2GenConfig = { temperature: 0.35, maxOutputTokens: 32768 };
-                  if (p2Model === 'gemini-3-flash-preview') {
-                    p2GenConfig.thinkingConfig = { thinkingBudget: 512 };
-                  }
-                  const p2StartMs = Date.now();
-                  const resP2 = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/${p2Model}:generateContent?key=${encodeURIComponent(apiKey)}`,
-                    {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        contents: [{ parts: [{ text: pass2Prompt }] }],
-                        generationConfig: p2GenConfig
-                      }),
-                      signal: AbortSignal.timeout ? AbortSignal.timeout(75000) : undefined
-                    }
-                  );
-                  recordApiCall(resP2.headers, resP2.status);
-                  if (resP2.ok) {
-                    const dataP2 = await resP2.json();
-                    const p2Parts = dataP2?.candidates?.[0]?.content?.parts || [];
-                    const p2Raw = p2Parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n');
-                    const mergedSvg = mergeTwoStageSvgJS(pass1Svg, p2Raw);
-                    if (mergedSvg) {
-                      const mergedVecCount = (mergedSvg.match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
-                      if (mergedVecCount > pass1VecCount) {
-                        const p2ElapsedMs = Date.now() - p2StartMs;
-                        finalSvg = mergedSvg;
-                        finalVecCount = mergedVecCount;
-                        totalElapsedMs = pass1ElapsedMs + p2ElapsedMs;
-                        finalModelLabel = `${pass1Model} 2段階超細密 (${pass1VecCount}→${mergedVecCount}要素)`;
-                        logDiag(`✅ [Pass 2完了] (${p2Model}): +${mergedVecCount - pass1VecCount}要素追加 → 合計約${mergedVecCount}要素 (${mergedSvg.length}文字 / 合計${(totalElapsedMs / 1000).toFixed(1)}秒)`);
-                        break;
-                      }
-                    }
-                    logDiag(`⚠️ Pass 2 (${p2Model}) の出力が合成検証を通過しませんでした。次を試行します。`);
-                  } else {
-                    logDiag(`Pass 2 (${p2Model}) 応答ステータス: ${resP2.status}`);
-                  }
-                } catch (p2Err) {
-                  logDiag(`Pass 2 (${p2Model}) エラー: ${p2Err.message}`);
+              // Pass 2（さらに140要素未満なら自動でPass 3の追い描き込み）を実行
+              const maxDetailPasses = 2;
+              for (let detailRound = 1; detailRound <= maxDetailPasses; detailRound++) {
+                if (detailRound === 2 && finalVecCount >= 140) break;
+                if (detailRound === 2 && dom.drawingSubtext) {
+                  dom.drawingSubtext.textContent = `さらに細部の質感・光と影を追い描き込みしています（仕上げ段階）...`;
                 }
+                const roundPrompt = detailRound === 1
+                  ? pass2Prompt
+                  : pass2Prompt
+                      .replace(pass1Svg, finalSvg)
+                      .replace(/p2-/g, 'p3-')
+                      .replace('第2段階：超細密ディテール描き込み', '第3段階：さらなる超細密仕上げ（現在より+100要素以上追加）');
+                const passModels = [pass1Model, ...candidateModels.filter(m => m !== pass1Model)];
+                let roundSucceeded = false;
+                for (const p2Model of passModels) {
+                  try {
+                    logDiag(`AI多段階SVG描画 [Pass ${detailRound + 1}/細密仕上げ] を試行中 (${p2Model} / 最大75秒)...`);
+                    const p2GenConfig = { temperature: 0.35, maxOutputTokens: 32768 };
+                    if (p2Model === 'gemini-3-flash-preview') {
+                      p2GenConfig.thinkingConfig = { thinkingBudget: 512 };
+                    }
+                    const p2StartMs = Date.now();
+                    const resP2 = await fetch(
+                      `https://generativelanguage.googleapis.com/v1beta/models/${p2Model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+                      {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          contents: [{ parts: [{ text: roundPrompt }] }],
+                          generationConfig: p2GenConfig
+                        }),
+                        signal: AbortSignal.timeout ? AbortSignal.timeout(75000) : undefined
+                      }
+                    );
+                    recordApiCall(resP2.headers, resP2.status);
+                    if (resP2.ok) {
+                      const dataP2 = await resP2.json();
+                      const p2Parts = dataP2?.candidates?.[0]?.content?.parts || [];
+                      const p2Raw = p2Parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n');
+                      const mergedSvg = mergeTwoStageSvgJS(finalSvg, detailRound === 2 ? p2Raw.replace(/p3-/g, 'p2-') : p2Raw);
+                      if (mergedSvg) {
+                        const mergedVecCount = (mergedSvg.match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
+                        if (mergedVecCount > finalVecCount) {
+                          const p2ElapsedMs = Date.now() - p2StartMs;
+                          const prevCount = finalVecCount;
+                          finalSvg = mergedSvg;
+                          finalVecCount = mergedVecCount;
+                          totalElapsedMs += p2ElapsedMs;
+                          finalModelLabel = `${pass1Model} ${detailRound + 1}段階超細密 (${pass1VecCount}→${mergedVecCount}要素)`;
+                          logDiag(`✅ [Pass ${detailRound + 1}完了] (${p2Model}): +${mergedVecCount - prevCount}要素追加 → 合計約${mergedVecCount}要素 (${mergedSvg.length}文字 / 合計${(totalElapsedMs / 1000).toFixed(1)}秒)`);
+                          roundSucceeded = true;
+                          break;
+                        }
+                      }
+                      logDiag(`⚠️ Pass ${detailRound + 1} (${p2Model}) の出力が合成検証を通過しませんでした。次を試行します。`);
+                    } else {
+                      logDiag(`Pass ${detailRound + 1} (${p2Model}) 応答ステータス: ${resP2.status}`);
+                    }
+                  } catch (p2Err) {
+                    logDiag(`Pass ${detailRound + 1} (${p2Model}) エラー: ${p2Err.message}`);
+                  }
+                }
+                if (!roundSucceeded) break;
               }
             } catch (p2OuterErr) {
               logDiag(`Pass 2 スキップ（Pass 1 ベースSVGを採用）: ${p2OuterErr.message}`);
