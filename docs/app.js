@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261125_01';
+  const APP_VERSION = 'v20261126_01';
   const APP_VERSION_TITLE = '2026-11-24 プロンプト履歴の自動保存＆読み込み・編集・再描画メニュー追加';
 
   function escapeHtml(str) {
@@ -1862,8 +1862,8 @@ ${levelRules}
     }
 
     // 1. お父さんの文字起こし確定後、一定時間経過してもAIの返答が始まらない場合
-    //    （直結モードは5.5秒フォールバックと競合しないよう10.0秒、バックエンド接続時は12.0秒で二重発火防止）
-    const userWaitMs = state.isDirectGeminiWs ? 10000 : 12000;
+    //    （直結モードは5秒無音VAD＋9.0秒フォールバックと競合しないよう13.0秒、バックエンド接続時は14.0秒で二重発火防止）
+    const userWaitMs = state.isDirectGeminiWs ? 13000 : 14000;
     if (state.hasUnansweredUserTurn && userSilenceMs >= userWaitMs && !state.isAiSpeaking) {
       triggerSilenceFollowUp('after_user_speech');
       return;
@@ -2277,8 +2277,8 @@ ${levelRules}
       if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
       if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') return;
       if (seq !== state.directUserTranscriptSeq) return;
-      // 4.5秒以内に継続発話があった場合は話し途中なので遮らない
-      if (Date.now() - (state.directLastUserTranscriptTime || 0) < 4500) return;
+      // 6.0秒以内に継続発話があった場合は話し途中なので遮らない（5秒無音VAD設定との整合）
+      if (Date.now() - (state.directLastUserTranscriptTime || 0) < 6000) return;
       // すでにAIが返答した、またはAI発話中・直近プロンプト送信直後なら二重送信しない
       // （※GeminiがinputTranscriptionだけ返して無言になったケースも救済するため、directLastGeminiInputTimeではスキップしない）
       if ((state.lastAiSpeechFinishedTime || 0) >= startTime) return;
@@ -2332,9 +2332,9 @@ ${levelRules}
       } else {
         promptText = `お父さんが「${text}」とお話しになりました。温かく共感して返答してください。`;
       }
-      logDiag(`🔄 [直結] Gemini無反応のため5.5秒フォールバック送信: 「${text}」`);
+      logDiag(`🔄 [直結] Gemini無反応のため9.0秒フォールバック送信: 「${text}」`);
       sendDirectClientContentSafely(ws, promptText, { echoGuardMs: 4000 });
-    }, 5500);
+    }, 9000);
   }
 
   function scheduleDirectEnsureAiResponseAfterInput(ws, seq) {
@@ -2344,7 +2344,7 @@ ${levelRules}
       if (!state.isSessionActive || !state.isDirectGeminiWs || !ws || ws.readyState !== WebSocket.OPEN) return;
       if (state.isDrawingMedia || sc.status === 'drawing' || sc.status === 'drawn') return;
       if (seq !== state.directInputTransSeq) return;
-      if (Date.now() - (state.directLastGeminiInputTime || 0) < 5000) return;
+      if (Date.now() - (state.directLastGeminiInputTime || 0) < 6500) return;
       if ((state.lastAiSpeechFinishedTime || 0) >= startTime) return;
       if (isAiCurrentlySpeakingOrPlaying() || (state.currentAiTurnTranscript || '').trim()) return;
       if (Date.now() - (state.directLastAiPromptTime || 0) < 7000) return;
@@ -2390,9 +2390,9 @@ ${levelRules}
       } else {
         promptText = `お父さんが「${uText}」とお話しになりました。温かく共感して返答してください。`;
       }
-      logDiag(`🔄 [直結応答保証] inputTranscription後6.0秒無応答のためAI応答を促します (status=${sc.status})`);
+      logDiag(`🔄 [直結応答保証] inputTranscription後9.5秒無応答のためAI応答を促します (status=${sc.status})`);
       sendDirectClientContentSafely(ws, promptText, { echoGuardMs: 4000 });
-    }, 6000);
+    }, 9500);
   }
 
   function recoverDirectTruncatedConfirmation(ws, truncatedText) {
@@ -2825,9 +2825,9 @@ ${levelRules}
             automatic_activity_detection: {
               disabled: false,
               start_of_speech_sensitivity: 'START_SENSITIVITY_HIGH',
-              end_of_speech_sensitivity: 'END_SENSITIVITY_HIGH',
+              end_of_speech_sensitivity: 'END_SENSITIVITY_LOW',
               prefix_padding_ms: 500,
-              silence_duration_ms: 1100
+              silence_duration_ms: 5000
             }
           },
           tools: [
@@ -4005,7 +4005,7 @@ ${levelRules}
                 logDiag(`文字起こし完了を送信: 「${textToSend}」`);
               }
             }
-          }, 750);
+          }, 1800);
         }
       };
 
@@ -5145,12 +5145,24 @@ ${levelRules}
     const apiKey = (state.sessionApiKey || '').trim();
 
     if (apiKey) {
+      if (!isRefinement) {
+        // 新規テーマ描画時は前回SVGを引きずらないようクリア
+        state.lastGeneratedSvgCode = '';
+      }
+
       // =========================================================================
       // 0. 再描画モード（元SVGがある場合）：
+      //    ・テーマ自体の大幅変更（「別の絵」「新しいテーマ」「違う絵」「〇〇に変えて」等）の場合は
+      //      旧SVGの修正に留めず、新規の6段階プログレッシブ超細密SVG生成へ進む！
       //    ・純粋な追加のみ（「花を足して」「生徒を増やして」等で移動・重なり解消・置換・削除を含まない場合のみ）→ <g id="refinement-layer"> 差分レイヤー合成
       //    ・それ以外のすべての修正（重なり解消・位置移動・サイズ変更・置換・色変更・削除・細密化等）→ 元SVG全体を空間計算して書き換える完全SVG出力
       // =========================================================================
-      if (isRefinement && feedback && state.lastGeneratedSvgCode && state.lastGeneratedSvgCode.includes('</svg>')) {
+      const isMajorThemeChange = isRefinement && feedback && /(?:別の絵|違う絵|新しい絵|別のテーマ|違うテーマ|新しいテーマ|テーマを変え|テーマを変更|一から描|最初から描|やり直して別)/.test(feedback);
+      if (isMajorThemeChange) {
+        logDiag(`🔄 テーマ変更指示を検知したため、旧SVG修正ではなく新規6段階超細密描画で描き直します: 「${feedback}」`);
+        state.lastGeneratedSvgCode = '';
+      }
+      if (isRefinement && !isMajorThemeChange && feedback && state.lastGeneratedSvgCode && state.lastGeneratedSvgCode.includes('</svg>')) {
         try {
           const isPureAddOnly = /(?:増やし|追加|足して|描き足|もっと多く|もっとたくさん)/.test(feedback)
             && !/(?:重な|かぶっ|ずら|離し|移動|位置|配置|手前|奥|下げ|上げ|右|左|小さく|大きく|直して|修正|変え|変更|にして|じゃなく|ではなく|消し|なくし|取り除|細か|緻密|ベクトル|描き直|書き直|色|白く|白い|赤く|赤い|青く|青い|黒く|黒い|茶色|黄色|ピンク)/.test(feedback);
@@ -5340,9 +5352,13 @@ ${levelRules}
       if (!mediaDataUrl) {
         try {
           const sceneTextForDetect = `${cleanTitle} ${cleanElements}`;
-          const hasIndoorHint = /(?:和室|座敷|部屋|室内|家の中|居間|茶の間|台所|キッチン|炬燵|こたつ|襖|ふすま|障子|畳|喫茶店|カフェ|店内|教室|体育館|廊下|病院|リビング|ダイニング|寝室|書斎|縁側|床の間)/.test(sceneTextForDetect);
-          const hasStrongOutdoorMain = /(?:校庭|通学路|並木道|校門|公園|海辺|海岸|砂浜|山頂|登山|畑|田んぼ|川原|河川敷|運動会|商店街|駅前|神社|お寺の境内)/.test(sceneTextForDetect);
-          const isIndoorScene = hasIndoorHint && !hasStrongOutdoorMain;
+          const hasJapaneseRoomHint = /(?:和室|座敷|畳|炬燵|こたつ|襖|ふすま|障子|縁側|床の間|茶の間)/.test(sceneTextForDetect);
+          const hasOtherIndoorHint = /(?:部屋|室内|家の中|居間|台所|キッチン|喫茶店|カフェ|店内|教室|体育館|廊下|病院|リビング|ダイニング|寝室|書斎|レストラン|食堂|電車の中|車内|お店の中)/.test(sceneTextForDetect);
+          const hasStrongOutdoorMain = /(?:校庭|通学路|並木道|校門|公園|海辺|海岸|砂浜|山頂|登山|畑|田んぼ|川原|河川敷|運動会|商店街|駅前|神社|お寺の境内|花畑|牧場|遊園地|動物園|お祭り|花火|港|漁港|湖|渓谷|森林|雪山)/.test(sceneTextForDetect);
+          const isJapaneseRoom = hasJapaneseRoomHint && !hasStrongOutdoorMain;
+          const isOtherIndoor = !isJapaneseRoom && hasOtherIndoorHint && !hasStrongOutdoorMain;
+          const isIndoorScene = isJapaneseRoom || isOtherIndoor;
+          const sceneLayoutLabel = isJapaneseRoom ? '和室レイアウト' : (isOtherIndoor ? '一般室内レイアウト' : '屋外・風景レイアウト');
 
           const countSvgVectors = (svgStr) => (String(svgStr || '').match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
 
@@ -5365,7 +5381,7 @@ ${levelRules}
           if (dom.drawingSubtext) {
             dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」で空間と背景の土台を描いています（第1/6段階）...`;
           }
-          logDiag(`AI6段階プログレッシブSVG描画を開始します [${isIndoorScene ? '室内レイアウト' : '屋外レイアウト'}]: 「${cleanTitle}」 (画風: ${artStyle.name}) - 内容: 「${cleanElements}」`);
+          logDiag(`AI6段階プログレッシブSVG描画を開始します [${sceneLayoutLabel}]: 「${cleanTitle}」 (画風: ${artStyle.name}) - 内容: 「${cleanElements}」`);
 
           const styleDesc = artStyleKey === 'realistic'
             ? '写実的でリアルな情景（精密な光と影、被写界深度、立体感）'
@@ -5573,36 +5589,52 @@ ${levelRules}
             return null;
           };
 
-          // --- Stage 1A プロンプト（空間・建築・背景・床の精密土台） ---
-          const stage1aLayout = isIndoorScene
-            ? `【第1A段階ミッション：室内空間・建築・窓外の景色・床面の精密土台（目標 110〜150要素）】
-※ この段階では **人物・ペット・中央の主要家具（炬燵・テーブル等）は一切描かないでください**（次の第1B段階で精密に造形します）。
-全出力を「奥行きある室内空間の建築骨格・襖や壁・開いた障子や窓越しに見える外の景色・隙間なく敷き詰められた床面」の絵画的クオリティだけに集中投下してください！
+          // --- Stage 1A プロンプト（空間・建築・背景・床/地面/水面の精密土台：全テーマ汎用対応） ---
+          const stage1aLayout = isJapaneseRoom
+            ? `【第1A段階ミッション：和室空間・建築・窓外の景色・床面の精密土台（目標 110〜150要素）】
+※ この段階では **人物・ペット・中央の主要家具（テーブル・炬燵等）は一切描かないでください**（次の第1B段階で精密に造形します）。
+※ 【描く情景・ユーザーの言葉】に書かれた場所・季節・時間帯・様子に100%忠実に描くこと（語られていない要素を勝手に固定で描かないこと）。
 
 【必須レイヤー構造と精細造形ルール】
-- 12個以上の \`<linearGradient>\` / \`<radialGradient>\` を活用し、温かいノスタルジー調にすること。
-- 天井や部屋の上部に青空を直接描くことは厳禁。天井板・長押・鴨居・柱・壁で温かく囲まれた自然な室内空間にすること。
+- 12個以上の \`<linearGradient>\` / \`<radialGradient>\` を活用し、情景の雰囲気と時間帯に合う豊かな色彩にすること。
+- 天井や部屋の上部に青空を直接描くことは厳禁。天井板・長押・鴨居・柱・壁で温かく囲まれた自然な和室空間にすること。
 1. \`<g id="layer-outside-view">\`（右側 x=505〜760, y=105〜358 の開いた障子や窓の向こう側に見える外の景色）：
-   - 季節に合った空・雲・庭木や桜・草花を、正円だけでなく優雅なベジェ曲線 \`<path>\` で描写すること。
+   - 情景の季節・時間帯に合った空・雲・庭木や花・風景を、正円だけでなく優雅なベジェ曲線 \`<path>\` で描写すること。
 2. \`<g id="layer-room-shell">\`（室内の骨格・建築・建具）：
-   - 画面上部 y=0〜108：パースの効いた天井板と竿縁、昭和レトロな照明（襖の中央には垂らさないこと）
+   - 画面上部 y=0〜108：パースの効いた天井板と竿縁、部屋に合う照明（襖の中央には垂らさないこと）
    - 左右端（x=0〜50, x=750〜800）：立体感のある柱と温かな壁（白い塗り残し厳禁）
    - 長押・鴨居は y=105〜122 に、敷居は y=352〜364 に通すこと。
-   - 左〜中央奥（x=55〜485, y=120〜354）：情景に合う襖・壁・棚・窓などの背景建具
-   - 右側（x=495〜750, y=120〜354）：開いた障子戸や窓枠（開口部から外の景色がしっかり見えるようにすること）
+   - 左〜中央奥（x=55〜485, y=120〜354）：情景に合う襖・床の間・壁・棚などの背景建具
+   - 右側（x=495〜750, y=120〜354）：開いた障子戸や縁側窓枠（開口部から外の景色がしっかり見えるようにすること）
 3. \`<g id="layer-floor">\`（奥行きのある畳敷き・床面 y=354〜600）：
    - **【隙間防止・絶対厳守】** \`<g id="layer-floor">\` の**最初の要素**として必ず \`<rect x="0" y="352" width="800" height="248" fill="url(#floorBaseGrad)" />\` の全面下地矩形を敷き、白い三角の隙間が絶対に発生しないようにすること！
-   - その上に一点透視パースの畳・畳縁・縁側板張り・フローリング等を重ね、中央エリア（x=220〜580, y=395〜555）は次段階の主役配置用に綺麗に空けておくこと。`
-            : `【第1A段階ミッション：屋外空間・空・建物・並木道・地面の精密土台（目標 110〜150要素）】
-※ この段階では **人物・動物は一切描かないでください**（次の第1B段階で1人ずつ精密な人体・衣装シルエットで造形します）。
-全出力を「澄んだ空と遠景・立体感ある建物や門・自然な枝ぶりの樹木・奥行きある地面や通学路」の絵画的クオリティだけに集中投下してください！
+   - その上に一点透視パースの畳・畳縁・縁側板張り等を重ね、中央エリア（x=220〜580, y=395〜555）は次段階の主役配置用に綺麗に空けておくこと。`
+            : isOtherIndoor
+              ? `【第1A段階ミッション：室内空間・建築・窓外の景色・床面の精密土台（目標 110〜150要素）】
+※ この段階では **人物・ペット・中央の主要家具（テーブル・椅子等）は一切描かないでください**（次の第1B段階で精密に造形します）。
+※ 【描く情景・ユーザーの言葉】に書かれた場所（喫茶店・洋室・教室・食堂・車内・リビング等）・季節・時間帯に100%忠実に描くこと！
 
-【必須レイヤー構造と精細造形ルール（簡易図形・正円の木・平面的な箱建物を厳禁！）】
-- 12個以上の \`<linearGradient>\` / \`<radialGradient>\` を活用すること。
-1. \`<g id="layer-sky">\`（遠景 y=0〜250）：季節と時間帯に合った多層グラデーションの空、柔らかいベジェ曲線の雲、遠くの霞んだ山並み・稜線
-2. \`<g id="layer-mid-buildings">\`（中景 y=115〜375）：校舎・校門・塀・家屋・橋・鳥居など情景に含まれる建物群。屋根勾配・軒の影・水平帯・窓枠・門柱・塀まで立体感を持って配置し、手前（y=375〜600）に広い空間を確保すること。
-3. \`<g id="layer-mid-trees">\`（左右や中景の樹木・並木・草木）：**正円や単純な楕円だけで樹冠を描かないこと！** 根元が太く枝分かれする曲線幹 \`<path>\` と、不規則に波打つ有機的な葉群 \`<path d="M... C...">\` を何層も重ねて表現すること。
-4. \`<g id="layer-ground">\`（近景 y=365〜600）：奥へ吸い込まれる一点透視の道・歩道・校庭・芝生・砂浜・縁石・接地影。人物が立つ手前エリア（y=420〜580）を広くクリアに確保すること。`;
+【必須レイヤー構造と精細造形ルール】
+- 12個以上の \`<linearGradient>\` / \`<radialGradient>\` を活用し、情景の雰囲気と時間帯に合う豊かな色彩にすること。
+- 天井や部屋の上部に青空を直接描くことは厳禁。天井・梁・照明・壁面・窓枠で自然に囲まれた室内空間にすること。
+1. \`<g id="layer-outside-view">\`（窓の向こう側に見える外の景色）：
+   - 情景の季節・時間帯・場所に合った空・街並み・自然風景を優雅なベジェ曲線 \`<path>\` で描写すること。
+2. \`<g id="layer-room-shell">\`（室内の骨格・建築・壁面・建具）：
+   - 画面上部 y=0〜108：パースの効いた天井・照明器具
+   - 左右端・奥の壁面：情景に合う壁紙・木パネル・棚・黒板・カウンター・カーテン・窓枠（白い塗り残し厳禁）
+3. \`<g id="layer-floor">\`（奥行きのある床面 y=354〜600）：
+   - **【隙間防止・絶対厳守】** \`<g id="layer-floor">\` の**最初の要素**として必ず \`<rect x="0" y="352" width="800" height="248" fill="url(#floorBaseGrad)" />\` の全面下地矩形を敷き、白い隙間が絶対に発生しないようにすること！
+   - その上に一点透視パースのフローリング・タイル・絨毯等を重ね、中央エリアは次段階の主役配置用に綺麗に空けておくこと。`
+              : `【第1A段階ミッション：屋外・風景空間（空・遠景・中景・地面/水面）の精密土台（目標 110〜150要素）】
+※ この段階では **手前の主役（人物・動物・主役の乗り物や船・象徴的な近景モチーフ等）は一切描かないでください**（次の第1B段階で精密に造形します）。
+※ 【描く情景・ユーザーの言葉】に書かれたテーマ（海辺・山・花畑・公園・校舎・街並み・お祭り・川・神社・夕日・夜景など）に100%忠実に描くこと！語られていない校舎や建物を勝手に出さないこと。
+
+【必須レイヤー構造と精細造形ルール（簡易図形・正円の木・平面的な箱を厳禁！）】
+- 12個以上の \`<linearGradient>\` / \`<radialGradient>\` を活用し、季節と時間帯（朝・昼・夕焼け・夜）を豊かに表現すること。
+1. \`<g id="layer-sky">\`（遠景・空 y=0〜270）：季節と時間帯に合った多層グラデーションの空、柔らかいベジェ曲線の雲、遠くの霞んだ山並み・稜線・太陽/月/星・水平線
+2. \`<g id="layer-mid-buildings">\`（中景の主要背景 y=115〜380）：情景に含まれる建物・街並み・橋・鳥居・灯台・校舎・屋台・遠景の海や湖面・山肌・森林など。屋根勾配・陰影・立体感を持って配置し、手前（y=380〜600）に広い空間を確保すること。
+3. \`<g id="layer-mid-trees">\`（左右や中景の自然物・樹木・花群・岩場・構造物）：**正円や単純な楕円だけで樹冠や花を描かないこと！** 根元から枝分かれする曲線幹 \`<path>\` と不規則に波打つ有機的な葉群・花群・岩や波のレイヤーを何層も重ねて表現すること。
+4. \`<g id="layer-ground">\`（近景の地面・水面・砂浜・花畑・道 y=365〜600）：奥へ吸い込まれる一点透視の道・芝生・砂浜・波打ち際・花壇・広場・水面など。必ず全面を隙間なく塗りつぶし、主役が配置される手前エリア（y=410〜580）を美しく確保すること。`;
 
           const stage1aPrompt = customRawSvgPrompt || `あなたは高齢者・回想法ケアのための情景画専門アーティスト（${artStyle.svgRoleInstruction}）です。
 ユーザーの思い出の情景を描くため、まず【第1A段階：空間・背景・建築・風景の精密土台】となる【${styleDesc}】SVG（viewBox="0 0 800 600"）を作成してください。
@@ -5652,22 +5684,22 @@ ${stage1aLayout}
                 dom.drawingSubtext.textContent = `人物・ペット・主要家具を丁寧に造形しています（第2/6段階）...`;
               }
 
-              // === Stage 1B 実行：主役（人物・ペット・主要家具）の精密ベース造形 ===
+              // === Stage 1B 実行：主役（人物・ペット・主要家具・テーマの象徴モチーフ）の精密ベース造形 ===
               const stage1bSpec = isIndoorScene
-                ? `以下の2つの \`<g>\` グループに分けて、**合計110〜150個以上の有機的なベクトル要素**で主役（家具・人物・ペット）を絵画品質で造形してください：
-1. \`<g id="layer-main-furniture">\`（部屋中央の炬燵・テーブル・座布団・卓上静物等）：パースに合った自然な立体感と布のドレープ、接地影。
-2. \`<g id="layer-people-and-pet">\`（情景に登場する人物・ペット）：
-   - **こけし型・棒人形・正円＋三角だけの簡易造形を厳禁！** 必ず滑らかなベジェ曲線（\`<path d="M... C...">\`）で自然な頭身・髪型・横顔・衣服の袖と帯・動物のふっくらした骨格と四肢・尻尾を造形すること。
+                ? `以下の2つの \`<g>\` グループに分けて、**合計110〜150個以上の有機的なベクトル要素**で情景の主役（家具・静物・人物・ペット）を絵画品質で造形してください：
+1. \`<g id="layer-main-furniture">\`（部屋中央のテーブル・炬燵・椅子・カウンター・卓上の料理や食器・花瓶など情景に合う主要家具と静物）：パースに合った自然な立体感と布のドレープ、接地影。
+2. \`<g id="layer-people-and-pet">\`（情景に登場する人物・ペット。人物やペットがいない静物・室内風景テーマの場合は、手前の象徴的な小物・花・観葉植物・調度品を精細に造形）：
+   - 人物・ペットを描く場合は **こけし型・棒人形・正円＋三角だけの簡易造形を厳禁！** 必ず滑らかなベジェ曲線（\`<path d="M... C...">\`）で自然な頭身・髪型・横顔・衣服・動物の骨格と四肢を造形すること。
    - **1人（1体）ずつ独立した \`<g>\`** に分け、**奥（足元 y が小さい）を先に、手前（足元 y が大きい）を後に**配置すること。`
-                : `\`<g id="layer-people">\` の中に、**合計110〜150個以上の有機的なベクトル要素**を使って、情景に登場する人物や動物を絵画品質の自然なプロポーションで造形してください：
-- **棒人間・正円頭・四角い胴体・1本の棒脚（\`<line>\`）を完全厳禁！** ベジェ曲線 \`<path>\` で自然な頭身・髪型・肩と曲げた腕・衣服や制服・太もも〜ふくらはぎ〜靴下と靴・接地影まで丁寧に造形すること。
-- **前後関係（Z順）と重なり防止を絶対厳守**：必ず **1人（1体）ずつ独立した \`<g>\`** に分け、**奥（足元 y が小さい人物）を先に、手前（足元 y が大きい人物）を後に**記述し、奥の人物は手前の人物とX座標をずらして顔に被らないよう配置すること。
-- 人物は必ず手前の広い道・広場・校庭（足元 y=410〜575）に立たせ、背景の建物に不自然に被らないようにすること。`;
+                : `\`<g id="layer-people">\` の中に、**合計110〜150個以上の有機的なベクトル要素**を使って、この情景テーマの主役となる対象を絵画品質の自然なプロポーションで造形してください：
+- **人物や動物が登場するテーマの場合**：**棒人間・正円頭・四角い胴体・1本の棒脚（\`<line>\`）を完全厳禁！** ベジェ曲線 \`<path>\` で自然な頭身・髪型・肩と腕・衣服・脚と靴・動物の毛並みや四肢・接地影まで丁寧に造形すること。必ず **1人（1体）ずつ独立した \`<g>\`** に分け、**奥（足元 y が小さい）を先に、手前（足元 y が大きい）を後に**記述し、奥の人物が手前の顔に被らないようX座標をずらすこと。
+- **人物が登場しない風景・自然・乗り物・花畑テーマの場合**：情景の主役となる近景〜中景モチーフ（例：手前の大輪の花群・漁船やヨット・電車や蒸気機関車・屋台・大樹・ベンチ・鳥や蝶・桟橋・灯籠など、【情景テーマ】に最もふさわしい主役）を 110〜150要素以上で立体的・有機的に造形すること！（空のまま終わらせないこと）
+- 人物や主役は背景の建物・山・水平線に不自然にめり込まない位置（手前の道・広場・砂浜・水面・花畑 y=390〜575 等）へ美しく配置すること。`;
 
-              const stage1bPrompt = `あなたは高齢者・回想法ケアのための情景画専門アーティスト（水彩絵本・人物動物造形専門）です。
-以下は第1A段階で描かれた【空間・背景・建築・床面の精密土台SVG】（viewBox="0 0 800 600"）です。
+              const stage1bPrompt = `あなたは高齢者・回想法ケアのための情景画専門アーティスト（水彩絵本・主役造形専門）です。
+以下は第1A段階で描かれた【空間・背景・遠景・床/地面の精密土台SVG】（viewBox="0 0 800 600"）です。
 
-【情景テーマ】:
+【情景テーマ（最優先遵守）】:
 ${cleanElements}
 
 【画風】:
@@ -5676,7 +5708,7 @@ ${styleDesc}（${artStyle.promptModifier}）
 【第1A段階 空間・背景SVG（座標・パース・色調の参照用）】:
 ${currentSvg}
 
-【第1B段階ミッション：主役（人物・ペット・主要家具）の精密ベース造形（目標 +110〜150要素）】
+【第1B段階ミッション：主役（人物・ペット・主要家具・テーマの象徴モチーフ）の精密ベース造形（目標 +110〜150要素）】
 - **ドロップシャドウ用の \`<filter>\` は使わず**、影は半透明の \`<ellipse>\` や \`<path>\` で直接描くこと。
 ${stage1bSpec}
 
@@ -5710,7 +5742,7 @@ ${stage1bSpec}
               const detailStages = [
                 {
                   num: 3,
-                  label: '背景・建築・窓外の細密化',
+                  label: isIndoorScene ? '背景・室内建築・窓外の細密化' : '遠景・空・背景構造の細密化',
                   prefix: 's2-',
                   specs: isIndoorScene
                     ? [
@@ -5722,36 +5754,37 @@ ${stage1bSpec}
                     ? `あなたは美術館品質の情景画を手掛ける【背景・建築・窓外景色ディテール専門】のSVGアーティストです。
 以下は精密ベースSVG（viewBox="0 0 800 600"）です。
 
-【情景テーマ】:
+【情景テーマ（最優先遵守）】:
 ${cleanElements}
 
 【精密ベースSVG（座標・色調の参照用）】:
 ${baseFoundationSvg}
 
-【ミッション：背景・建築・窓外景色の超細密描き込み（目標 +110〜150要素）】
+【ミッション：背景・室内建築・窓外景色の超細密描き込み（目標 +110〜150要素）】
 室内と窓外の奥行き（Z順）を完全に分離するため、必ず以下の**2つの \`<g>\` グループ**に分けて出力してください：
 1. \`<g id="s2-outside-detail">\`（**窓・開いた障子の向こう側の外の景色専用**：\`layer-room-shell\` の背面に挿入されます）
-   - 開口部の外に見える桜の花房・枝分かれ・庭木・空・遠景の細密描写（部屋の内側に入り込まないよう必ずこのグループへ入れること！）
-2. \`<g id="s2-arch-bg">\`（**室内建築専用**：床・家具・人物の背面に挿入されます）
-   - 天井板の木目と竿縁、左右柱の木目と陰影、長押・鴨居（y=105〜122のみ。**襖の中央を横切る不要な水平線は絶対禁止！**）
-   - 襖の本画（淡い水彩の山水・松・桜の小枝・引手の光沢）、障子戸の繊細な組子桟と和紙の繊維感
+   - 開口部の外に見える情景テーマに合った空・雲・庭木・花・街並み・遠景の細密描写（部屋の内側に入り込まないよう必ずこのグループへ入れること！）
+2. \`<g id="s2-arch-bg">\`（**室内建築・壁面・建具専用**：床・家具・人物の背面に挿入されます）
+   - ${isJapaneseRoom ? '天井板の木目と竿縁、左右柱の木目と陰影、長押・鴨居（y=105〜122のみ。襖の中央を横切る不要な水平線は絶対禁止！）、襖の本画と引手、障子戸の繊細な組子桟と和紙の繊維感' : '天井・照明の光沢、壁面の質感・木目・レンガ・ポスターや額縁・棚の小物・カーテンのひだ・窓サッシの立体感と反射光'}
 出力は \`<defs>...</defs>\`（IDは必ず \`s2-\` 始まり）と \`<g id="s2-outside-detail">...</g>\` および \`<g id="s2-arch-bg">...</g>\` のみ。\`<svg>\` や解説文・マークダウン枠は一切不要です。`
-                    : `あなたは美術館品質の情景画を手掛ける【背景・建築ディテール専門】のSVGアーティストです。
+                    : `あなたは美術館品質の情景画を手掛ける【遠景・空・背景建築/自然構造ディテール専門】のSVGアーティストです。
 以下は精密ベースSVG（viewBox="0 0 800 600"）です。
 
-【情景テーマ】:
+【情景テーマ（最優先遵守）】:
 ${cleanElements}
 
 【精密ベースSVG（座標・色調の参照用）】:
 ${baseFoundationSvg}
 
-【ミッション：背景・建築・遠景の超細密描き込み（目標 +110〜150要素）】
-ベースSVGの座標に1pxのズレもなく重なるよう、建物の屋根瓦・庇の影・外壁目地・窓サッシと反射光・門柱と塀・遠景の雲と山並みを \`<g id="s2-arch-bg">...</g>\` へ描き込んでください（手前の樹木・地面・人物の背面に挿入されます）。
+【ミッション：遠景・空・背景構造の超細密描き込み（目標 +110〜150要素）】
+ベースSVGの座標に1pxのズレもなく重なるよう、【情景テーマ】に即した遠景と背景の細部を \`<g id="s2-arch-bg">...</g>\` へ徹底的に描き込んでください（手前の自然物・地面・主役の背面に挿入されます）：
+- 建物・街並み・橋・鳥居・灯台・校舎等がある場合：屋根瓦・庇の影・外壁目地・窓サッシと反射光・看板・提灯・欄干・門柱
+- 海・山・川・森・花畑・夕焼け・夜景等の自然風景の場合：重なり合う雲の立体陰影、遠景の山稜・森林のシルエット層、水平線の輝き、波頭・水面のきらめき、遠くの船影や灯り、星空や月の光輪
 出力は \`<defs>...</defs>\`（IDは必ず \`s2-\` 始まり）と \`<g id="s2-arch-bg">...</g>\` のみ。\`<svg>\` や解説文・マークダウン枠は一切不要です。`
                 },
                 {
                   num: 4,
-                  label: isIndoorScene ? '畳・炬燵和柄・静物の描き込み' : '並木・石畳・落ち葉の描き込み',
+                  label: isIndoorScene ? '床面・家具・静物小物の描き込み' : '自然・地面・水面・季節感の描き込み',
                   prefix: 's3-',
                   specs: isIndoorScene
                     ? [
@@ -5763,50 +5796,53 @@ ${baseFoundationSvg}
                         { id: 's3-ground-detail', beforeLayers: ['layer-people'] }
                       ],
                   prompt: isIndoorScene
-                    ? `あなたは美術館品質の情景画を手掛ける【畳・家具・静物ディテール専門】のSVGアーティストです。
-【情景テーマ】: ${cleanElements}
+                    ? `あなたは美術館品質の情景画を手掛ける【床面・家具・静物ディテール専門】のSVGアーティストです。
+【情景テーマ（最優先遵守）】: ${cleanElements}
 【精密ベースSVG】: ${baseFoundationSvg}
 【ミッション（目標 +110〜150要素）】以下の2グループに分けて出力してください：
-1. \`<g id="s3-floor-detail">\`（畳・縁側専用・家具の背面）：パースに沿った畳の繊細な織り目、畳縁の菱文様・小紋、縁側板張りの木目。
-2. \`<g id="s3-props-detail">\`（家具・静物専用・人物の背面）：炬燵布団の伝統和柄と布の皺、座布団の縫い目と房、竹籠の編み目・みかん・急須・湯呑みの絵付け。**最重要：炬燵布団の模様は木製天板の外周（布団部分のみ）に描き、天板の内側には布団柄を重ねず木目と静物をクリアに見せること！**
+1. \`<g id="s3-floor-detail">\`（床面専用・家具の背面）：${isJapaneseRoom ? 'パースに沿った畳の繊細な織り目、畳縁の文様、縁側板張りの木目と光沢' : 'パースに沿ったフローリングの木目やタイルの目地、絨毯の織り模様、窓光の床反射'}。
+2. \`<g id="s3-props-detail">\`（家具・静物専用・人物の背面）：情景テーマに登場する家具の質感・布の柄や皺・木目・卓上の食器や飲み物・料理・花瓶・本などの細密ディテール。**天板の上の静物が柄で潰れないよう、布模様と天板・小物を明確に描き分けること！**
 出力は \`<defs>...</defs>\`（IDは \`s3-\` 始まり）と \`<g id="s3-floor-detail">...</g>\` および \`<g id="s3-props-detail">...</g>\` のみ。解説やマークダウン枠は不要。`
-                    : `あなたは美術館品質の情景画を手掛ける【自然・地面・季節感ディテール専門】のSVGアーティストです。
-【情景テーマ】: ${cleanElements}
+                    : `あなたは美術館品質の情景画を手掛ける【自然・地面・水面・周囲の小物ディテール専門】のSVGアーティストです。
+【情景テーマ（最優先遵守）】: ${cleanElements}
 【精密ベースSVG】: ${baseFoundationSvg}
 【ミッション（目標 +110〜150要素）】以下の2グループに分けて出力してください：
-1. \`<g id="s3-trees-detail">\`（並木・樹木専用・地面/人物の背面）：幹の樹皮の筋・小枝、イチョウやモミジ・桜などの繊細な葉の重なり（\`<defs>\`＋\`<use>\` 展開も歓迎）。
-2. \`<g id="s3-ground-detail">\`（通学路・地面専用・人物の背面）：パースに沿った石畳目地・縁石の立体感・落ち葉・道端の草花・木漏れ日のまだら影。
+1. \`<g id="s3-trees-detail">\`（中景の自然物・植生・構造物専用・地面/主役の背面）：テーマに即した樹木の樹皮と無数の葉の重なり、花畑の繊細な花びらと茎葉、岩肌の陰影、屋台や柵・欄干の細部など（\`<defs>\`＋\`<use>\` 展開も歓迎）。
+2. \`<g id="s3-ground-detail">\`（近景の地面・水面・砂浜・道専用・主役の背面）：テーマに即した石畳目地・縁石・砂浜の波紋と貝殻・打ち寄せる白い波しぶき・水面の揺らぎ反射・芝生の草穂・花びらや落ち葉・木漏れ日のまだら影。
 出力は \`<defs>...</defs>\`（IDは \`s3-\` 始まり）と \`<g id="s3-trees-detail">...</g>\` および \`<g id="s3-ground-detail">...</g>\` のみ。解説やマークダウン枠は不要。`
                 },
                 {
                   num: 5,
-                  label: '主役（人物・ペット）の集中細密化',
+                  label: '主役（人物・動物・中心モチーフ）の集中細密化',
                   prefix: 's4-',
                   specs: [{ id: 's4-characters-detail', beforeLayers: null }],
-                  prompt: `あなたは美術館品質の情景画を手掛ける【人物・動物表現専門】のSVGアーティストです。
-【情景テーマ】: ${cleanElements}
+                  prompt: `あなたは美術館品質の情景画を手掛ける【主役モチーフ・人物・動物表現専門】のSVGアーティストです。
+【情景テーマ（最優先遵守）】: ${cleanElements}
 【注目すべき第1B段階の \`${peopleLayerId}\` コード抜粋（この座標に1pxのズレもなく合わせること！）】:
 ${extractedPeopleCode}
 【全体構図の参照（精密ベースSVG）】:
 ${baseFoundationSvg}
-【ミッション：主役（人物・ペット）の集中超細密描き込み（目標 +110〜150要素）】
-\`<g id="s4-characters-detail">\` の中に、**1人（1体）ずつ独立した \`<g>\` で奥（y小）→手前（y大）の順に**、衣装の柄・襟ライン・リボン/金ボタン・プリーツ・髪の毛流れと艶・優しい表情・動物の毛並みと首輪/鈴・手元の小物・接地影を徹底的に描き込んでください。ドロップシャドウ用 \`<filter>\` は使用禁止。
+【ミッション：主役の集中超細密描き込み（目標 +110〜150要素）】
+\`<g id="s4-characters-detail">\` の中に、第1B段階で配置した主役を徹底的に超細密化してください：
+- 人物・動物がいる場合：**1人（1体）ずつ独立した \`<g>\` で奥（y小）→手前（y大）の順に**、衣装の柄・襟やボタン・布の皺・髪の毛流れと艶・優しい表情・動物の毛並みと目鼻・手元の小物・接地影を描き込むこと。
+- 人物がいない風景・花畑・乗り物・静物テーマの場合：画面の主役モチーフ（大輪の花びらと雄しべ、船体や帆・窓のディテール、電車の車体ラインと車輪、屋台の暖簾や商品、大樹の枝葉と光沢等）の質感・陰影・ハイライトを 110〜150要素以上で徹底的に描き込むこと！
+- ドロップシャドウ用 \`<filter>\` は使用禁止。
 出力は \`<defs>...</defs>\`（IDは \`s4-\` 始まり）と \`<g id="s4-characters-detail">...</g>\` のみ。解説やマークダウン枠は不要。`
                 },
                 {
                   num: 6,
-                  label: '光・季節モチーフ・水彩紙仕上げ',
+                  label: '光・空気感・季節エフェクト・水彩紙仕上げ',
                   prefix: 's5-',
                   specs: [{ id: 's5-atmosphere-fx', beforeLayers: null }],
                   prompt: `あなたは美術館品質の情景画を手掛ける【光・空気感・水彩エフェクト最終仕上げ専門】のSVGアーティストです。
-【情景テーマ】: ${cleanElements}
+【情景テーマ（最優先遵守）】: ${cleanElements}
 【全体構図の参照（精密ベースSVG）】:
 ${baseFoundationSvg}
-【ミッション：光と空気感・季節モチーフの最終仕上げ（目標 +70〜110要素）】
+【ミッション：光と空気感・季節/時間帯モチーフの最終仕上げ（目標 +70〜110要素）】
 最前面に重ねる \`<g id="s5-atmosphere-fx">...</g>\` を出力してください。
 【最重要ルール（主役を邪魔しない上品な演出）】
 - 不透明な大面積図形や、画面全体に散らばりすぎる大きな白い丸玉（ボケ玉）は厳禁！
-- 柔らかな斜光（\`opacity="0.05"〜"0.14"\`）、光の帯の中に控えめに浮かぶ小さな光粒（12〜18個程度、\`opacity="0.18"〜"0.35"\`）、季節に合う舞う花びらや落ち葉（18〜28枚程度）、湯気やリムライト、極薄の水彩にじみ調和で感動的に仕上げてください。
+- 情景の時間帯（朝・昼・夕焼け・夜）と季節・雰囲気に完全連動した柔らかな斜光や夕日の照り返し（\`opacity="0.05"〜"0.14"\`）、光の帯の中に控えめに浮かぶ小さな光粒（12〜18個程度、\`opacity="0.18"〜"0.35"\`）、テーマに合う舞う花びら・落ち葉・雪・波しぶき・ホタル・湯気・鳥影やリムライト、極薄の水彩にじみ調和で感動的に仕上げてください。
 出力は \`<defs>...</defs>\`（IDは \`s5-\` 始まり）と \`<g id="s5-atmosphere-fx">...</g>\` のみ。解説やマークダウン枠は不要。`
                 }
               ];
@@ -7796,6 +7832,7 @@ ${baseFoundationSvg}
     sc.turnTargetStep = sc.activeStep;
     sc.lastStepAdvanceAiTurn = state.aiTurnCounter;
     sc.lastStepAdvanceTime = Date.now();
+    state.lastGeneratedSvgCode = '';
     setAvatarState('listening');
     renderSceneCollectorUI();
     logDiag(`🔄 再聞き取り・修正モードへ切り替えました（対象: ${STEP_LABELS[sc.activeStep] || '全項目'}）`);
@@ -7901,6 +7938,7 @@ ${baseFoundationSvg}
     sc.isAwaitingSaveConfirmation = false;
     sc.lastStepAdvanceAiTurn = state.aiTurnCounter;
     sc.lastStepAdvanceTime = Date.now();
+    state.lastGeneratedSvgCode = '';
 
     if (dom.collectorRefineBar) {
       dom.collectorRefineBar.classList.add('hidden');
@@ -7969,6 +8007,7 @@ ${baseFoundationSvg}
     }
     sc.lastStepAdvanceAiTurn = state.aiTurnCounter;
     sc.lastStepAdvanceTime = Date.now();
+    state.lastGeneratedSvgCode = '';
     setAvatarState('listening');
     renderSceneCollectorUI();
     logDiag(`聞き取りステップを切り替えました: ${STEP_LABELS[step]}`);
@@ -8033,6 +8072,7 @@ ${baseFoundationSvg}
     }
     sc.lastStepAdvanceAiTurn = state.aiTurnCounter;
     sc.lastStepAdvanceTime = Date.now();
+    state.lastGeneratedSvgCode = '';
     renderSceneCollectorUI();
   }
 
