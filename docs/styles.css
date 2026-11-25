@@ -906,6 +906,44 @@ body {
   display: none;
 }
 
+/* プログレッシブ描画中：Stage 1A完了後は絵を見せながら下部へコンパクト退避 */
+.drawing-overlay.progressive-mini {
+  top: auto;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(92%, 620px);
+  height: auto;
+  padding: 10px 18px;
+  border-radius: 16px;
+  background: rgba(253, 251, 247, 0.92);
+  box-shadow: 0 6px 20px rgba(44, 94, 79, 0.18);
+  border: 1px solid rgba(44, 94, 79, 0.22);
+  gap: 2px;
+  pointer-events: none;
+}
+
+.drawing-overlay.progressive-mini .watercolor-spinner {
+  display: none;
+}
+
+.drawing-overlay.progressive-mini .drawing-status-badge {
+  margin-bottom: 2px;
+  font-size: 12px;
+  padding: 2px 10px;
+}
+
+.drawing-overlay.progressive-mini .drawing-text {
+  font-size: 14px;
+  margin: 0;
+}
+
+.drawing-overlay.progressive-mini .drawing-timer,
+.drawing-overlay.progressive-mini .drawing-subtext {
+  font-size: 12px;
+  margin: 0;
+}
+
 .watercolor-spinner {
   width: 64px;
   height: 64px;
