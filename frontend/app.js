@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261126_06';
+  const APP_VERSION = 'v20261127_01';
   const APP_VERSION_TITLE = '2026-11-24 プロンプト履歴の自動保存＆読み込み・編集・再描画メニュー追加';
 
   function escapeHtml(str) {
@@ -1458,8 +1458,9 @@ ${levelRules}
    ・相手が絵に満足・肯定（「これでいい」「素敵」「気に入った」「このまま」等）したら、描き直しはせず「気に入っていただけて嬉しいです！この絵を保存しますか？」と1文だけ尋ねてください。
    ・相手が「保存する／はい／お願い」と答えたら「絵を保存しましたよ！また普通のおしゃべりに戻りましょうね」、「保存しない／いいえ」と答えたら「かしこまりました！それではまた普通のおしゃべりをしましょうね」と1文で優しく答えて通常会話へ戻ってください（保存処理はアプリ側が自動で行うため、ツールは呼ばず、同じ保存確認を繰り返さないでください）。
 6. 【最重要】絵の修正・描き直し（refine_memory_visual）ルール：
-   相手が描かれた絵を見て、修正や変更の要望を口にしたら、**必ずまず「描き直します、〇〇ですね。」と修正内容を声に出して復唱してから** \`refine_memory_visual\` ツールを呼び出してください。
-   その際、\`user_feedback\` に相手の具体的な修正希望を、\`updated_visual_elements\` に修正後の全体情景を詳しく指定してください。
+   ・相手が「修正したい」「描き直したい」「少し直してほしい」「変えたいところがある」など**具体的な変更内容を含まず修正の意思だけを言った場合は、絶対に \`refine_memory_visual\` ツールを呼ばず**、まず「かしこまりました！どこをどのように直しましょうか？」と1文で優しく具体的な修正内容を聞き取ってください。
+   ・具体的な修正内容（例：「空を夕焼けにして」「犬を大きくして」「右側にお花を増やして」等）を相手から聞き取ってから、**必ずまず「描き直します、〇〇ですね。」と修正内容を声に出して復唱してから** \`refine_memory_visual\` ツールを呼び出してください。
+   ・その際、\`user_feedback\` に相手の具体的な修正希望を、\`updated_visual_elements\` に修正後の全体情景を詳しく指定してください。
 
 # 【緊急通報（SOS）の絶対ルール】
 相手が「助けて」「苦しい」「痛い」等の発言をした場合は、まず「${nickname}、大丈夫ですか？ご家族に連絡を入れましょうか？」と確認し、本人が同意した場合のみ \`trigger_emergency_alert\` を呼び出してください。`;
@@ -1781,8 +1782,70 @@ ${levelRules}
     }
   }
 
+  /**
+   * さくらさんの発話から「現在尋ねている聞き取りステップ」を正確に特定する
+   * ※「②場所について復唱します。〜ですね。③天候についてお聞きします。」のように
+   *   復唱（前ステップ）と質問（新ステップ）が1ターンに混在する場合でも、
+   *   必ず復唱側ではなく「最後に尋ねた質問側」のステップを返す。
+   */
+  function detectAiAskedStep(aiText) {
+    if (!aiText || typeof aiText !== 'string') return '';
+    const text = normalizeTranscriptText(aiText);
+    if (!text) return '';
+
+    // 1. 最優先：明示的なステップ質問プレフィックス（「②場所についてお聞きします」等）をすべて走査し、最も後ろに出現したものを採用
+    const explicitRules = [
+      { step: 'topic', regex: /(?:①|1|１)?[、.\s]*(?:テーマ|話題)(?:について|を)?(?:お聞きします|伺います|教えて|聞かせて)/g },
+      { step: 'place', regex: /(?:②|2|２)?[、.\s]*(?:場所|舞台)(?:について|を)?(?:お聞きします|伺います|教えて|聞かせて)/g },
+      { step: 'weather', regex: /(?:③|3|３)?[、.\s]*(?:天候|天気|季節)(?:について|を)?(?:お聞きします|伺います|教えて|聞かせて)/g },
+      { step: 'people', regex: /(?:④|4|４)?[、.\s]*(?:登場人物|人物)(?:について|を)?(?:お聞きします|伺います|教えて|聞かせて)/g },
+      { step: 'details', regex: /(?:⑤|5|５)?[、.\s]*(?:見えたもの|様子|光景)(?:について|を)?(?:お聞きします|伺います|教えて|聞かせて)/g },
+      { step: 'mood', regex: /(?:⑥|6|６)?[、.\s]*(?:気分|雰囲気|気持ち)(?:について|を)?(?:お聞きします|伺います|教えて|聞かせて)/g }
+    ];
+    let bestStep = '';
+    let bestIndex = -1;
+    for (const rule of explicitRules) {
+      let m;
+      while ((m = rule.regex.exec(text)) !== null) {
+        if (m.index >= bestIndex) {
+          bestIndex = m.index;
+          bestStep = rule.step;
+        }
+      }
+    }
+    if (bestStep) return bestStep;
+
+    // 2. 次点：復唱部分（「〜について復唱します。〜ですね。」）を取り除いた残りの質問文のみを対象に、質問固有表現で末尾一致判定
+    let questionPart = text.replace(/^[\s\S]*?(?:について復唱します|を復唱します)[。、！!\s]*[^。！？?\n]*(?:ですね|でしたね|ますね|でしたか)[。！!\s]*/g, '').trim();
+    if (!questionPart) questionPart = text;
+    // 疑問文の末尾部分（最後の1〜2文）に絞ることで、前半の感想・相槌に含まれる名詞への誤爆を防止
+    const sentences = questionPart.split(/[。！？?!\n]+/).map(s => s.trim()).filter(Boolean);
+    const tailText = sentences.slice(-2).join('。');
+
+    const questionRules = [
+      { step: 'topic', regex: /(?:どんな思い出|思い出の絵を描|何の絵を描|どんな絵を描|どんな風景を思い浮かべ|テーマや話題を)/g },
+      { step: 'place', regex: /(?:どんな場所|どんな舞台|どんな所でした|どこでしたか|どちらでしたか|場所や舞台)/g },
+      { step: 'weather', regex: /(?:季節やお天気|お天気はどう|天気はどう|時間帯はどう|季節はいつ|天候や|どんなお天気|どんな季節)/g },
+      { step: 'people', regex: /(?:どなたがいらっしゃ|誰がいらっしゃ|誰と一緒|どなたと一緒|一緒にいた人|登場人物は)/g },
+      { step: 'details', regex: /(?:周りにどんなものが見え|どんなものが見え|何が見えました|周りの様子|どんな様子でした|どんな風でした|どんなふうでした)/g },
+      { step: 'mood', regex: /(?:どんなお気持ち|どんな気持ち|どんな雰囲気|どんな気分|お気持ちや雰囲気)/g }
+    ];
+    for (const rule of questionRules) {
+      let m;
+      while ((m = rule.regex.exec(tailText)) !== null) {
+        if (m.index >= bestIndex) {
+          bestIndex = m.index;
+          bestStep = rule.step;
+        }
+      }
+    }
+    return bestStep;
+  }
+
   function didAiAskCurrentStep(aiText, step) {
     if (!aiText) return false;
+    const detected = detectAiAskedStep(aiText);
+    if (detected) return detected === step;
     if (step === 'topic') return /(?:どんな思い出|テーマや話題|何の絵|どんな絵|どんな風景)/.test(aiText);
     if (step === 'place') return /(?:どこ|場所|舞台|どちら)/.test(aiText);
     if (step === 'weather') return /(?:季節|天気|お天気|天候|時間|明暗|明るさ)/.test(aiText);
@@ -2271,16 +2334,47 @@ ${levelRules}
     // 単体の「はい」「うん」「ええ」だけでは誤爆させず、絵への明確な満足・肯定表現で保存確認へ進む
     const approvalWords = ['このまま', 'これでいい', 'これで良い', 'この雰囲気', 'こんな感じ', 'いいです', '良いです', 'よいです', 'いいよ', '良いよ', 'バッチリ', 'ばっちり', '大丈夫', '問題ない', '変えなくていい', '修正なし', '直さなくていい', '気に入', '素敵', 'いいですね', '良いですね', 'オッケー', 'ok', 'これでお願い', 'これで頼む', '満足', 'きれい', '綺麗'];
     if (hasModify && sc.status === 'drawn' && !state.isDrawingMedia) {
-      logDiag(`🎨 [直結] 描画後の修正指示を検知: 「${clean}」（ツール未呼出時の自動再描画を予約）`);
-      handleUserModificationDetected(clean);
-      const scheduledFeedback = clean;
-      if (state.pendingDirectRefineTimer) clearTimeout(state.pendingDirectRefineTimer);
-      state.pendingDirectRefineTimer = setTimeout(() => {
-        if (state.isSessionActive && state.isDirectGeminiWs && !state.isDrawingMedia && state.sceneCollector.status === 'drawn') {
-          logDiag(`🎨 [直結セーフティネット] 修正指示後にツール呼び出しが無いため再描画を起動します: 「${scheduledFeedback}」`);
-          executeRefineDrawing(scheduledFeedback);
+      // 「修正したい」「描き直したい」等の具体内容を含まない修正意思だけの段階では絶対に描画を開始せず、さくらさんの聞き取りに委ねる
+      if (isVagueModificationIntent(clean)) {
+        logDiag(`💬 [直結] 修正の意思表明を検知（「${clean}」）。具体的な修正内容の聞き取りを待機します（自動描画なし）`);
+        if (state.pendingRefineTimer) {
+          clearTimeout(state.pendingRefineTimer);
+          state.pendingRefineTimer = null;
         }
-      }, 3500);
+        if (state.pendingDirectRefineTimer) {
+          clearTimeout(state.pendingDirectRefineTimer);
+          state.pendingDirectRefineTimer = null;
+        }
+        if (dom.refineHintText) {
+          dom.refineHintText.textContent = '💡 どこをどのように直したいか、具体的な内容を声で教えてください';
+        }
+        return true;
+      }
+      logDiag(`🎨 [直結] 描画後の具体的な修正指示を検知: 「${clean}」（さくらさんの復唱・ツール呼び出しを待機）`);
+      handleUserModificationDetected(clean, { skipAutoTimer: true });
+      const scheduledFeedback = clean;
+      const scheduledAiTurn = state.aiTurnCounter || 0;
+      if (state.pendingDirectRefineTimer) clearTimeout(state.pendingDirectRefineTimer);
+      const tryDirectRefineFallback = (retry) => {
+        state.pendingDirectRefineTimer = null;
+        if (!state.isSessionActive || !state.isDirectGeminiWs || state.isDrawingMedia || state.sceneCollector.status !== 'drawn') return;
+        // さくらさんが話し中・音声再生中、またはお父さんが続けて話している最中は絶対に割り込んで描画を始めない
+        if (isAiCurrentlySpeakingOrPlaying() || state.isUserTranscribing || (Date.now() - (state.lastUserSpeechActivityTime || 0) < 2500)) {
+          if (retry < 6) {
+            state.pendingDirectRefineTimer = setTimeout(() => tryDirectRefineFallback(retry + 1), 2000);
+          }
+          return;
+        }
+        // さくらさんがすでに「どこを直しましょうか？」等と追加聞き取りを返答済みの場合は自動描画しない
+        const lastAi = (state.lastAiUtteranceText || '').trim();
+        if ((state.aiTurnCounter || 0) > scheduledAiTurn && /(?:どこ|どのように|どんなふう|どう直し|教えて|でしょうか|ますか|？|\?)/.test(lastAi)) {
+          logDiag(`💬 [直結セーフティネット] さくらさんが修正内容を確認中のため自動再描画をキャンセルしました`);
+          return;
+        }
+        logDiag(`🎨 [直結セーフティネット] 修正指示後にツール呼び出しが無いため再描画を起動します: 「${scheduledFeedback}」`);
+        executeRefineDrawing(scheduledFeedback);
+      };
+      state.pendingDirectRefineTimer = setTimeout(() => tryDirectRefineFallback(0), 6500);
       return true;
     }
     if (!hasModify && approvalWords.some(w => clean.toLowerCase().includes(w)) && sc.status === 'drawn' && !sc.isAwaitingSaveConfirmation) {
@@ -3099,25 +3193,13 @@ ${levelRules}
             const cleanAiTxt = state.currentAiTurnTranscript.trim();
             if (cleanAiTxt) {
               dom.aiTranscriptText.textContent = cleanAiTxt;
-              // リアルタイム・ブリンキング同期：さくらさんが「②場所についてお聞きします」等を発話し始めた瞬間にフォーカスを切り替える
+              // リアルタイム・ブリンキング同期：さくらさんが次の項目を尋ね始めた瞬間にフォーカスを切り替える
               if (state.sceneCollector.status === 'collecting') {
-                const liveStepPatterns = [
-                  { step: 'mood', regex: /(?:⑥|6|６)[、.\s]*(?:気分|雰囲気|気持ち)についてお聞きします/ },
-                  { step: 'details', regex: /(?:⑤|5|５)[、.\s]*(?:見えたもの|様子|光景)についてお聞きします/ },
-                  { step: 'people', regex: /(?:④|4|４)[、.\s]*(?:登場人物|人物)についてお聞きします/ },
-                  { step: 'weather', regex: /(?:③|3|３)[、.\s]*(?:天候|天気|季節)についてお聞きします/ },
-                  { step: 'place', regex: /(?:②|2|２)[、.\s]*(?:場所|舞台)についてお聞きします/ },
-                  { step: 'topic', regex: /(?:①|1|１)[、.\s]*(?:テーマ|話題)についてお聞きします/ }
-                ];
-                for (const item of liveStepPatterns) {
-                  if (item.regex.test(cleanAiTxt)) {
-                    if (state.sceneCollector.activeStep !== item.step) {
-                      state.sceneCollector.activeStep = item.step;
-                      state.sceneCollector.turnTargetStep = item.step;
-                      renderSceneCollectorUI();
-                    }
-                    break;
-                  }
+                const liveStep = detectAiAskedStep(cleanAiTxt);
+                if (liveStep && state.sceneCollector.activeStep !== liveStep) {
+                  state.sceneCollector.activeStep = liveStep;
+                  state.sceneCollector.turnTargetStep = liveStep;
+                  renderSceneCollectorUI();
                 }
               }
             }
@@ -3261,7 +3343,7 @@ ${levelRules}
 
             if (funcName === 'generate_memory_visual' || funcName === 'refine_memory_visual') {
               const isRefinement = (funcName === 'refine_memory_visual');
-              // 【厳格ガード】6ステップ聞き取り・確認完了前（idle / collecting）のフライング描画呼び出しをブロック
+              // 【厳格ガード1】6ステップ聞き取り・確認完了前（idle / collecting）のフライング描画呼び出しをブロック
               if (!isRefinement && !['confirming', 'ready', 'drawing', 'drawn'].includes(state.sceneCollector.status)) {
                 logDiag(`⚠️ 6ステップ聞き取り完了前の早すぎる描画ツール呼び出しをキャンセルしました (status=${state.sceneCollector.status})`);
                 ws.send(JSON.stringify({
@@ -3278,9 +3360,31 @@ ${levelRules}
                 }));
                 continue;
               }
+              // 【厳格ガード2】修正内容の聞き取り前（具体内容なし・曖昧な修正意思のみ）のフライング描き直しをブロック
+              const rawFeedbackCheck = String(args.user_feedback || '').trim();
+              if (isRefinement && (!rawFeedbackCheck || isVagueModificationIntent(rawFeedbackCheck))) {
+                logDiag(`⚠️ 具体的な修正内容の聞き取り前に refine_memory_visual が呼ばれたためキャンセルしました (feedback=「${rawFeedbackCheck}」)`);
+                ws.send(JSON.stringify({
+                  tool_response: {
+                    function_responses: [{
+                      id: callId,
+                      name: funcName,
+                      response: {
+                        status: 'cancelled_need_specific_feedback',
+                        message: 'まだお父さんから具体的な修正内容を聞き取っていないため、今は描き直さないでください。「描き直します」とは言わず、「かしこまりました！どこをどのように直しましょうか？」と1文で優しく具体的な修正内容を尋ねてください。'
+                      }
+                    }]
+                  }
+                }));
+                continue;
+              }
               if (state.pendingRefineTimer) {
                 clearTimeout(state.pendingRefineTimer);
                 state.pendingRefineTimer = null;
+              }
+              if (state.pendingDirectRefineTimer) {
+                clearTimeout(state.pendingDirectRefineTimer);
+                state.pendingDirectRefineTimer = null;
               }
               const feedback = args.user_feedback || '';
               if (feedback) {
@@ -3665,21 +3769,36 @@ ${levelRules}
           state.directLastMicSpeechRmsTime = nowMs;
           state.directMicSpeechChunksSinceLastInput = (state.directMicSpeechChunksSinceLastInput || 0) + 1;
         }
+        // tool_response / client_content 送信直後のAI返答待機期間（directEchoGuardUntil）中は
+        // 環境音（rms < 0.025）を無音化し、さくらさんの修正後・描画後の発言開始が割り込み中断されるのを完全防止する
+        const isWaitingAiTurn = state.isDirectGeminiWs && (nowMs < (state.directEchoGuardUntil || 0)) && !state.isUserTranscribing;
+        if (isWaitingAiTurn && rms < 0.025) {
+          directSpeechDetectedInTurn = false;
+          directLastSpeechMs = 0;
+          const zeroPcm = new Int16Array(downsampledData.length);
+          sendPcmAudioChunk(zeroPcm.buffer);
+          return;
+        }
         sendPcmAudioChunk(pcm16.buffer);
         // クライアント側RMS監視による精密無音EOS制御：
         // ・絵画6ステップ聞き取り中（collecting）は 5.0秒 の無音で確実にEOS送信（環境音で永遠に止まるのを防止）
         // ・通常会話（idle）・確認・描画後は 1.5秒 の無音で即EOS送信しテンポよく返答させる
         if (state.isDirectGeminiWs) {
-          const isCollectingNow = (state.sceneCollector && state.sceneCollector.status === 'collecting');
-          const targetSilenceMs = isCollectingNow ? COLLECTING_SILENCE_EOS_MS : NORMAL_CHAT_SILENCE_EOS_MS;
-          if (rms >= 0.012 || state.isUserTranscribing) {
-            directSpeechDetectedInTurn = true;
-            directLastSpeechMs = nowMs;
-          } else if (directSpeechDetectedInTurn && (nowMs - directLastSpeechMs) >= targetSilenceMs) {
+          if (isWaitingAiTurn) {
             directSpeechDetectedInTurn = false;
             directLastSpeechMs = 0;
-            sendEosSignal();
-            logDiag(`⚡ [${isCollectingNow ? '聞き取り5秒' : '通常会話1.5秒'}無音判定] ${(targetSilenceMs / 1000).toFixed(1)}秒の無音を検知し、さくらさんの返答を開始します (status=${state.sceneCollector?.status || 'idle'})`);
+          } else {
+            const isCollectingNow = (state.sceneCollector && state.sceneCollector.status === 'collecting');
+            const targetSilenceMs = isCollectingNow ? COLLECTING_SILENCE_EOS_MS : NORMAL_CHAT_SILENCE_EOS_MS;
+            if (rms >= 0.012 || state.isUserTranscribing) {
+              directSpeechDetectedInTurn = true;
+              directLastSpeechMs = nowMs;
+            } else if (directSpeechDetectedInTurn && (nowMs - directLastSpeechMs) >= targetSilenceMs) {
+              directSpeechDetectedInTurn = false;
+              directLastSpeechMs = 0;
+              sendEosSignal();
+              logDiag(`⚡ [${isCollectingNow ? '聞き取り5秒' : '通常会話1.5秒'}無音判定] ${(targetSilenceMs / 1000).toFixed(1)}秒の無音を検知し、さくらさんの返答を開始します (status=${state.sceneCollector?.status || 'idle'})`);
+            }
           }
         }
         return;
@@ -3699,7 +3818,7 @@ ${levelRules}
         voiceHangoverChunks = targetHangoverChunks;
         const nowGateMs = Date.now();
         state.lastVoiceActiveTime = nowGateMs;
-        if (state.isDirectGeminiWs) {
+        if (state.isDirectGeminiWs && !(nowGateMs < (state.directEchoGuardUntil || 0) && !state.isUserTranscribing)) {
           directSpeechDetectedInTurn = true;
           directLastSpeechMs = nowGateMs;
         }
@@ -3716,13 +3835,19 @@ ${levelRules}
         const zeroPcm = new Int16Array(downsampledData.length);
         sendPcmAudioChunk(zeroPcm.buffer);
         if (state.isDirectGeminiWs) {
-          const isCollectingNow = (state.sceneCollector && state.sceneCollector.status === 'collecting');
-          const targetSilenceMs = isCollectingNow ? COLLECTING_SILENCE_EOS_MS : NORMAL_CHAT_SILENCE_EOS_MS;
-          if (directSpeechDetectedInTurn && (Date.now() - directLastSpeechMs) >= targetSilenceMs) {
+          const nowGateSilenceMs = Date.now();
+          if (nowGateSilenceMs < (state.directEchoGuardUntil || 0) && !state.isUserTranscribing) {
             directSpeechDetectedInTurn = false;
             directLastSpeechMs = 0;
-            sendEosSignal();
-            logDiag(`⚡ [${isCollectingNow ? '聞き取り5秒' : '通常会話1.5秒'}無音判定] ${(targetSilenceMs / 1000).toFixed(1)}秒の無音を検知し、さくらさんの返答を開始します (status=${state.sceneCollector?.status || 'idle'})`);
+          } else {
+            const isCollectingNow = (state.sceneCollector && state.sceneCollector.status === 'collecting');
+            const targetSilenceMs = isCollectingNow ? COLLECTING_SILENCE_EOS_MS : NORMAL_CHAT_SILENCE_EOS_MS;
+            if (directSpeechDetectedInTurn && (nowGateSilenceMs - directLastSpeechMs) >= targetSilenceMs) {
+              directSpeechDetectedInTurn = false;
+              directLastSpeechMs = 0;
+              sendEosSignal();
+              logDiag(`⚡ [${isCollectingNow ? '聞き取り5秒' : '通常会話1.5秒'}無音判定] ${(targetSilenceMs / 1000).toFixed(1)}秒の無音を検知し、さくらさんの返答を開始します (status=${state.sceneCollector?.status || 'idle'})`);
+            }
           }
         }
       }
@@ -6254,6 +6379,9 @@ ${baseFoundationSvg}
               title: artifact.title,
               message: '【描画完了済み】絵はすでに完成してキャンバスに表示されています。「今からキャンバスに描いてみますね」「少し待っていてください」とは絶対に言わず、すぐに「お父さん、画面に絵が浮かびましたよ！こんな雰囲気でよろしいでしょうか？もし描き直したいところがあれば教えてくださいね」と感想を尋ねてください。'
             };
+        // ツール応答直後にGeminiが話し始めるまでの間、マイクの環境音や誤EOS送信で発言が中断されないようエコーガードを設定
+        state.directLastAiPromptTime = Date.now();
+        state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 5500);
         ws.send(JSON.stringify({
           tool_response: {
             function_responses: [
@@ -7005,10 +7133,15 @@ ${baseFoundationSvg}
       state.drawnSpeechFallbackTimer = null;
     }
     if (!isBlank) {
-      const fallbackDelay = (state.isSimulation && !state.isDirectGeminiWs) ? 2000 : 8000;
+      const drawnAiTurnAtComplete = state.aiTurnCounter || 0;
+      const fallbackDelay = (state.isSimulation && !state.isDirectGeminiWs) ? 2000 : 10000;
       state.drawnSpeechFallbackTimer = setTimeout(() => {
         state.drawnSpeechFallbackTimer = null;
-        if (!state.isAiSpeaking && state.sceneCollector.status === 'drawn' && state.hasDrawnImage) {
+        // 直結モードで既にさくらさんが話し始めている・話し終えている場合は絶対にWebSpeechを重ねない
+        if (isAiCurrentlySpeakingOrPlaying() || (state.aiTurnCounter || 0) > drawnAiTurnAtComplete) {
+          return;
+        }
+        if (state.sceneCollector.status === 'drawn' && state.hasDrawnImage) {
           const rawName = (state.currentProfile?.call_name || 'お父さん').replace(/\s*さん$/, '');
           const suffix = rawName.endsWith('お父さん') || rawName.endsWith('お母さん') || rawName.endsWith('ちゃん') || rawName.endsWith('先生') ? '' : 'さん';
           const nickname = `${rawName}${suffix}`;
@@ -8509,6 +8642,27 @@ ${baseFoundationSvg}
   // ============================================================================
   // ユーザーの絵の修正・変更指示（「夕焼けにして」「花を置いて」等）の検知
   // ============================================================================
+  /**
+   * 具体的な変更内容を含まない「修正したい意思表明のみ」かどうかを判定する
+   * （例: 「修正したい」「描き直したい」「少し直してほしい」「変えたいところがある」等）
+   * これが true の段階では絶対に描画を開始せず、さくらさんに修正内容を聞き取らせる。
+   */
+  function isVagueModificationIntent(rawText) {
+    if (!rawText || typeof rawText !== 'string') return true;
+    const clean = rawText
+      .replace(/[「」『』]/g, '')
+      .replace(/[。、！？!?\s]+/g, '')
+      .trim();
+    if (clean.length < 2) return true;
+    // フィラー・敬語・修正意思ワードを取り除いた残りに具体的な対象（2文字以上の内容語）が残るかチェック
+    const stripped = clean
+      .replace(/(?:えっと|えーと|あの|その|ちょっと|少し|もう少し|もうちょっと|やっぱり|やはり|すみません|ごめん|絵を|絵の|これを|ここを|そこを|一部を|一箇所|少しだけ|ちょっとだけ|お願いします|お願い|ください|下さい)/g, '')
+      .replace(/(?:描き直してみたい|書き直してみたい|描き直したい|書き直したい|描き直してほしい|書き直してほしい|描き直して|書き直して|描きかえて|描き変えて|描き直し|書き直し|修正したい|修正してほしい|修正して|修正をお願い|修正お願い|修正があります|修正がある|修正|直したいところがある|直したいところが|直したい|直してほしい|直して|変更したい|変更してほしい|変更して|変更|変えたいところがある|変えたいところが|変えたい|変えてほしい|変えてみて|変えて|やり直したい|やり直してほしい|やり直して|やり直し|もう一度|もう一回)/g, '')
+      .replace(/(?:です|ます|たい|ほしい|欲しい|かな|けど|けれど|が|を|に|は|の|も|で|て|よ|ね|な)+/g, '')
+      .trim();
+    return stripped.length < 2;
+  }
+
   function detectModificationIntent(rawText) {
     if (!state.hasDrawnImage) return null;
     if (!rawText || typeof rawText !== 'string') return null;
@@ -8519,13 +8673,16 @@ ${baseFoundationSvg}
     // 「これでいいです」「この雰囲気でよい」等の肯定は修正ではない
     if (/(これでいい|これで良い|この雰囲気でよい|このままでいい|このままがいい|バッチリ|大丈夫|いいよ)/.test(clean)) return null;
 
+    // 「修正したい」「描き直したい」等の具体内容なしの意思表明だけでは描画トリガーにしない
+    if (isVagueModificationIntent(clean)) return null;
+
     const modPatterns = [
       /(.+?)(?:にしてほしい|にしてくれ|にしてください|にして|に変えてほしい|に変えてくれ|に変えてください|に変えて|に変更してほしい|に変更してください|に変更して|に変えたい|に描き直して|に描きかえて|に書き直して)$/,
       /(.+?)(?:を追加して|を足して|を置いて|を入れて|を描き足して|を書き足して|を描いてみて)$/,
       /(?:もっと|もうちょっと)(.+?)(?:にして|に変えて|に変更して)$/,
       /(?:もう一度|もう一回|新しく)(.+?)(?:描いて|描き直して|書いて|書き直して)$/,
       /(.+?)(?:に修正して|を修正して|に直して|を描き直して|を書き直して)$/,
-      /(?:修正したい|直したい|描き直したい|書き直したい|描き直してみたい|書き直してみたい|変更したい|やり直したい)(.+)?$/
+      /(?:修正したい|直したい|描き直したい|書き直したい|描き直してみたい|書き直してみたい|変更したい|やり直したい)(.+)$/
     ];
 
     for (const pat of modPatterns) {
@@ -8545,8 +8702,12 @@ ${baseFoundationSvg}
     return null;
   }
 
-  function handleUserModificationDetected(feedback) {
+  function handleUserModificationDetected(feedback, opts = {}) {
     if (!feedback) return;
+    if (isVagueModificationIntent(feedback)) {
+      logDiag(`💬 修正意思のみ検知（「${feedback}」）。具体的な修正内容の聞き取りを待機します。`);
+      return;
+    }
     logDiag(`ユーザーの絵の修正指示を検知: 「${feedback}」`);
     state.lastUserModification = feedback;
     state.sceneCollector.details.add(`【修正指示】${feedback}`);
@@ -8571,7 +8732,11 @@ ${baseFoundationSvg}
       clearTimeout(state.pendingRefineTimer);
       state.pendingRefineTimer = null;
     }
-    // 音声での指示後、自然な間（2.5秒後）で自動的に描き直しを実行
+    // 直結モード時はさくらさんの復唱／ツール呼び出し／発話完了待ちセーフティネットへ委ねるため、2.5秒強制タイマーは動かさない
+    if (opts.skipAutoTimer || state.isDirectGeminiWs) {
+      return;
+    }
+    // バックエンド・シミュレーション時のみ、自然な間（2.5秒後）で自動的に描き直しを実行
     state.pendingRefineTimer = setTimeout(() => {
       state.pendingRefineTimer = null;
       if (!state.isDrawingMedia && state.sceneCollector.status === 'drawn') {
@@ -8591,6 +8756,10 @@ ${baseFoundationSvg}
     if (state.pendingRefineTimer) {
       clearTimeout(state.pendingRefineTimer);
       state.pendingRefineTimer = null;
+    }
+    if (state.pendingDirectRefineTimer) {
+      clearTimeout(state.pendingDirectRefineTimer);
+      state.pendingDirectRefineTimer = null;
     }
 
     const sc = state.sceneCollector;
@@ -8644,23 +8813,19 @@ ${baseFoundationSvg}
       user_feedback: feedback
     });
 
-    sc.status = 'drawn';
+    const refineSucceeded = !!(state.hasDrawnImage && state.currentArtifact && !state.currentArtifact.is_blank);
+    sc.status = refineSucceeded ? 'drawn' : 'confirming';
     renderSceneCollectorUI();
     setAvatarState('listening');
 
-    // 直結モード時は修正版の完成直後にGemini Liveへ通知して、さくらさん本人の声で確認してもらう
-    if (state.isDirectGeminiWs && state.socket && state.socket.readyState === WebSocket.OPEN && state.hasDrawnImage) {
-      state.directLastAiPromptTime = Date.now();
-      state.directEchoGuardUntil = Math.max(state.directEchoGuardUntil || 0, Date.now() + 4500);
-      state.socket.send(JSON.stringify({
-        client_content: {
-          turns: [{
-            role: 'user',
-            parts: [{ text: `「${feedback}」を反映した修正版の絵がキャンバスに表示されました。「お父さん、描き直した絵が画面に浮かびましたよ！こんな雰囲気でよろしいでしょうか？」と温かく声をかけて感想を聞いてください。` }]
-          }],
-          turn_complete: true
-        }
-      }));
+    // 直結モード時は修正版の完成直後に安全送信（AI発話中割り込み・中断を完全防止）でさくらさん本人の声で確認してもらう
+    if (state.isDirectGeminiWs && state.socket && state.socket.readyState === WebSocket.OPEN) {
+      const profile = state.currentProfile || DEFAULT_USER_PROFILE;
+      const nickname = formatUserNickname(profile.call_name);
+      const notifyText = refineSucceeded
+        ? `「${feedback}」を反映した修正版の絵がキャンバスに表示されました。「${nickname}、描き直した絵が画面に浮かびましたよ！こんな雰囲気でよろしいでしょうか？」と温かく声をかけて感想を聞いてください。`
+        : `申し訳ありません。通信の混雑またはタイムアウトのため、今回は修正版の絵を描画できませんでした。「ごめんなさい、少し混み合っていて描き直しがうまくいきませんでした。もう一度描き直してみましょうか？」と優しく正直にお伝えください。`;
+      sendDirectClientContentSafely(state.socket, notifyText, { echoGuardMs: 5500, cancelOnNewAiTurn: false });
     }
   }
 
@@ -9173,22 +9338,8 @@ ${baseFoundationSvg}
         return;
       }
 
-      // (7) さくらさんが尋ねた質問内容に合わせてアクティブステップを次に進める！
-      let aiAskedStep = '';
-      if (/(?:場所|どこ|どちら|舞台|外見|道路|道|高校はどんな|どんな所)/.test(clean)) {
-        aiAskedStep = 'place';
-      } else if (/(?:季節|天気|お天気|天候|時間|空|明かり|明るさ|朝|昼|夕方|晴れ)/.test(clean)) {
-        aiAskedStep = 'weather';
-      } else if (/(?:誰|どなた|人|生徒|友達|家族|仲間|男の子|女の子)/.test(clean)) {
-        aiAskedStep = 'people';
-      } else if (/(?:様子|もの|建物|植物|花|景色|何が|どんな風|どんなふう|どんなもの|制服|服装)/.test(clean)) {
-        aiAskedStep = 'details';
-      } else if (/(?:気持ち|雰囲気|気分|空気感)/.test(clean)) {
-        aiAskedStep = 'mood';
-      } else if (/(?:どんな思い出|思い出の絵|テーマ|話題|何の絵|何を思い浮かべ)/.test(clean)) {
-        aiAskedStep = 'topic';
-      }
-
+      // (7) さくらさんが尋ねた質問内容に合わせてアクティブステップを次に進める！（復唱部分の語句で逆戻りしないよう高精度判定）
+      const aiAskedStep = detectAiAskedStep(clean);
       if (aiAskedStep && sc.status === 'collecting') {
         sc.activeStep = aiAskedStep;
         sc.turnTargetStep = aiAskedStep;
