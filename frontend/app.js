@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261126_05';
+  const APP_VERSION = 'v20261126_06';
   const APP_VERSION_TITLE = '2026-11-24 プロンプト履歴の自動保存＆読み込み・編集・再描画メニュー追加';
 
   function escapeHtml(str) {
@@ -1943,6 +1943,23 @@ ${levelRules}
     return COLLECTOR_STEPS.find(s => sc.stepStates[s] === 'pending') || 'confirm';
   }
 
+  // ユーザーが回答した現在ステップの値を確実に記録・確定し、同じ質問の繰り返しを防ぐヘルパー
+  function commitStepValueIfMissing(sc, step, rawText) {
+    if (!sc || !step || !COLLECTOR_STEPS.includes(step)) return;
+    const phrase = cleanScenePhrase(rawText || '');
+    if (phrase && phrase.length >= 1) {
+      if (step === 'topic' && !sc.topic) sc.topic = phrase;
+      else if (step === 'place' && !sc.place) sc.place = phrase;
+      else if (step === 'weather' && !sc.weather) { sc.weather = phrase; sc.seasonWeather = phrase; }
+      else if (step === 'people' && !sc.people) sc.people = phrase;
+      else if (step === 'details' && sc.details.size === 0) addDetailCleanly(sc.details, phrase);
+      else if (step === 'mood' && !sc.mood) sc.mood = phrase;
+    }
+    if (sc.stepStates[step] === 'pending') {
+      sc.stepStates[step] = 'filled';
+    }
+  }
+
   function triggerSilenceFollowUp(reason) {
     const sc = state.sceneCollector;
     // 描画中（drawing）、描画完了後（drawn）は完全遮断
@@ -2029,14 +2046,21 @@ ${levelRules}
             people: '④登場人物', details: '⑤様子', mood: '⑥雰囲気'
           };
           const prevStep = sc.activeStep;
-          const nextPendingStep = (sc.stepStates[sc.activeStep] === 'filled' || sc.stepStates[sc.activeStep] === 'skipped')
+          // ユーザー発話後のフォローアップ（after_user_speech）は現在ステップに回答済みなので必ず確定して次へ前進させる
+          if (reason === 'after_user_speech' && lastUserText && COLLECTOR_STEPS.includes(prevStep)) {
+            commitStepValueIfMissing(sc, prevStep, lastUserText);
+          }
+          const nextPendingStep = (sc.stepStates[sc.activeStep] === 'filled' || sc.stepStates[sc.activeStep] === 'skipped' || reason === 'after_user_speech')
             ? findNextPendingStepForward(sc, sc.activeStep)
             : sc.activeStep;
           if (nextPendingStep === 'confirm') {
             sc.status = 'confirming';
             sc.activeStep = 'confirm';
             renderSceneCollectorUI();
-            promptText = `6ステップの聞き取りが一通り完了しました（${summaryStr}）。「一通りお話を伺いました！${summaryStr}、という内容でよろしいでしょうか？よろしければこのまま絵を描きますね！」と優しく声に出して確認してください。`;
+            const updatedSummary = buildCollectorSummaryText();
+            promptText = (reason === 'after_user_speech' && lastUserText)
+              ? `お父さんが「${lastUserText}」とお話しになりました。短く復唱してから、「一通りお話を伺いました！${updatedSummary}、という内容でよろしいでしょうか？よろしければこのまま絵を描きますね！」と優しく確認してください。`
+              : `6ステップの聞き取りが一通り完了しました（${updatedSummary}）。「一通りお話を伺いました！${updatedSummary}、という内容でよろしいでしょうか？よろしければこのまま絵を描きますね！」と優しく声に出して確認してください。`;
           } else {
             if (nextPendingStep !== sc.activeStep) {
               sc.activeStep = nextPendingStep;
@@ -2306,13 +2330,10 @@ ${levelRules}
       let promptText = '';
       if (sc.status === 'collecting') {
         const sPrefix = stepPrefixMap[savedStep] || 'お話の内容';
-        // ユーザーがすでに savedStep に回答した後のフォールバックなので、同じステップを繰り返さず次へ前進させる
+        // ユーザーがすでに savedStep に回答した後のフォールバックなので、確実に確定し同じステップを繰り返さず次へ前進させる
+        commitStepValueIfMissing(sc, savedStep, text);
         const nextPending = findNextPendingStepForward(sc, savedStep);
         if (nextPending === 'confirm') {
-          if (savedStep === 'mood' && !sc.mood && text) {
-            sc.mood = cleanScenePhrase(text);
-            sc.stepStates.mood = 'filled';
-          }
           sc.status = 'confirming';
           sc.activeStep = 'confirm';
           renderSceneCollectorUI();
@@ -2383,13 +2404,10 @@ ${levelRules}
           details: '「⑤様子についてお聞きします。周りにどんなものが見えましたか？」',
           mood: '「⑥雰囲気についてお聞きします。その時はどんなお気持ちでしたか？」'
         };
-        // すでに回答を受け取った現在ステップを繰り返さず、必ず次ステップ（⑥ならconfirm）へ進める
+        // すでに回答を受け取った現在ステップを確実に確定し、繰り返さず次ステップ（⑥ならconfirm）へ進める
+        commitStepValueIfMissing(sc, sc.activeStep, uText);
         const nextPending = findNextPendingStepForward(sc, sc.activeStep);
         if (nextPending === 'confirm') {
-          if (sc.activeStep === 'mood' && !sc.mood && uText) {
-            sc.mood = cleanScenePhrase(uText);
-            sc.stepStates.mood = 'filled';
-          }
           sc.status = 'confirming';
           sc.activeStep = 'confirm';
           renderSceneCollectorUI();
@@ -3533,10 +3551,11 @@ ${levelRules}
     let isSpeakingUtterance = false;
     let chunksSentInUtterance = 0;
     let preSpeechRingBuffer = []; // 話し始めの最初の子音（「し」「か」等）が欠けないよう直前6チャンク（約150ms）を保持
-    // 通常会話・確認・描画後の短縮無音判定用（聞き取り中 collecting のみ5秒待機、それ以外は1.4秒無音で即EOS送信）
+    // 無音判定による精密EOS制御（聞き取り中 collecting＝5.0秒、通常会話・確認・描画後＝1.5秒）
     let directSpeechDetectedInTurn = false;
     let directLastSpeechMs = 0;
-    const NORMAL_CHAT_SILENCE_EOS_MS = 1400;
+    const COLLECTING_SILENCE_EOS_MS = 5000;
+    const NORMAL_CHAT_SILENCE_EOS_MS = 1500;
 
     processor.onaudioprocess = (e) => {
       // 出力バッファを明示的にゼロクリアして、スピーカーへのノイズ・発振漏れを完全防止
@@ -3593,9 +3612,11 @@ ${levelRules}
         rawSumSq += s * s;
       }
       const rms = Math.sqrt(rawSumSq / downsampledData.length);
-      // 環境ノイズ・ハム（rms < 0.004）は増幅せず、通常の会話声だけを最大2.4倍まで自動ブースト
+      // 環境ノイズ・ハム（rms < 0.005）は減衰してVAD誤検知を防ぎ、通常の会話声（rms >= 0.008）だけを自動ブースト
       let softwareGain = 1.0;
-      if (rms >= 0.004) {
+      if (rms < 0.005) {
+        softwareGain = 0.25;
+      } else if (rms >= 0.008) {
         const targetRms = 0.085;
         softwareGain = Math.min(2.4, Math.max(1.1, targetRms / Math.max(rms, 0.01)));
       }
@@ -3645,23 +3666,20 @@ ${levelRules}
           state.directMicSpeechChunksSinceLastInput = (state.directMicSpeechChunksSinceLastInput || 0) + 1;
         }
         sendPcmAudioChunk(pcm16.buffer);
-        // 絵画の6ステップ聞き取り中（collecting）は5秒無音判定（Gemini Live側設定）を維持し、
-        // それ以外の通常会話（idle）・確認・描画後では発話後1.4秒の無音で即EOSを送りテンポよく返答させる
+        // クライアント側RMS監視による精密無音EOS制御：
+        // ・絵画6ステップ聞き取り中（collecting）は 5.0秒 の無音で確実にEOS送信（環境音で永遠に止まるのを防止）
+        // ・通常会話（idle）・確認・描画後は 1.5秒 の無音で即EOS送信しテンポよく返答させる
         if (state.isDirectGeminiWs) {
           const isCollectingNow = (state.sceneCollector && state.sceneCollector.status === 'collecting');
-          if (isCollectingNow) {
+          const targetSilenceMs = isCollectingNow ? COLLECTING_SILENCE_EOS_MS : NORMAL_CHAT_SILENCE_EOS_MS;
+          if (rms >= 0.012 || state.isUserTranscribing) {
+            directSpeechDetectedInTurn = true;
+            directLastSpeechMs = nowMs;
+          } else if (directSpeechDetectedInTurn && (nowMs - directLastSpeechMs) >= targetSilenceMs) {
             directSpeechDetectedInTurn = false;
             directLastSpeechMs = 0;
-          } else {
-            if (rms >= 0.012 || state.isUserTranscribing) {
-              directSpeechDetectedInTurn = true;
-              directLastSpeechMs = nowMs;
-            } else if (directSpeechDetectedInTurn && (nowMs - directLastSpeechMs) >= NORMAL_CHAT_SILENCE_EOS_MS) {
-              directSpeechDetectedInTurn = false;
-              directLastSpeechMs = 0;
-              sendEosSignal();
-              logDiag(`⚡ [通常会話・短縮無音判定] 1.4秒の無音を検知し、さくらさんの返答を開始します (status=${state.sceneCollector?.status || 'idle'})`);
-            }
+            sendEosSignal();
+            logDiag(`⚡ [${isCollectingNow ? '聞き取り5秒' : '通常会話1.5秒'}無音判定] ${(targetSilenceMs / 1000).toFixed(1)}秒の無音を検知し、さくらさんの返答を開始します (status=${state.sceneCollector?.status || 'idle'})`);
           }
         }
         return;
@@ -3681,7 +3699,7 @@ ${levelRules}
         voiceHangoverChunks = targetHangoverChunks;
         const nowGateMs = Date.now();
         state.lastVoiceActiveTime = nowGateMs;
-        if (state.isDirectGeminiWs && state.sceneCollector && state.sceneCollector.status !== 'collecting') {
+        if (state.isDirectGeminiWs) {
           directSpeechDetectedInTurn = true;
           directLastSpeechMs = nowGateMs;
         }
@@ -3699,14 +3717,12 @@ ${levelRules}
         sendPcmAudioChunk(zeroPcm.buffer);
         if (state.isDirectGeminiWs) {
           const isCollectingNow = (state.sceneCollector && state.sceneCollector.status === 'collecting');
-          if (isCollectingNow) {
-            directSpeechDetectedInTurn = false;
-            directLastSpeechMs = 0;
-          } else if (directSpeechDetectedInTurn && (Date.now() - directLastSpeechMs) >= NORMAL_CHAT_SILENCE_EOS_MS) {
+          const targetSilenceMs = isCollectingNow ? COLLECTING_SILENCE_EOS_MS : NORMAL_CHAT_SILENCE_EOS_MS;
+          if (directSpeechDetectedInTurn && (Date.now() - directLastSpeechMs) >= targetSilenceMs) {
             directSpeechDetectedInTurn = false;
             directLastSpeechMs = 0;
             sendEosSignal();
-            logDiag(`⚡ [通常会話・短縮無音判定] 1.4秒の無音を検知し、さくらさんの返答を開始します (status=${state.sceneCollector?.status || 'idle'})`);
+            logDiag(`⚡ [${isCollectingNow ? '聞き取り5秒' : '通常会話1.5秒'}無音判定] ${(targetSilenceMs / 1000).toFixed(1)}秒の無音を検知し、さくらさんの返答を開始します (status=${state.sceneCollector?.status || 'idle'})`);
           }
         }
       }
