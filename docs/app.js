@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261126_04';
+  const APP_VERSION = 'v20261126_05';
   const APP_VERSION_TITLE = '2026-11-24 プロンプト履歴の自動保存＆読み込み・編集・再描画メニュー追加';
 
   function escapeHtml(str) {
@@ -5216,149 +5216,584 @@ ${levelRules}
       }
 
       // =========================================================================
-      // 0. 再描画モード（元SVGがある場合）：
-      //    ・テーマ自体の大幅変更（「別の絵」「新しいテーマ」「違う絵」「〇〇に変えて」等）の場合は
-      //      旧SVGの修正に留めず、新規の6段階プログレッシブ超細密SVG生成へ進む！
-      //    ・純粋な追加のみ（「花を足して」「生徒を増やして」等で移動・重なり解消・置換・削除を含まない場合のみ）→ <g id="refinement-layer"> 差分レイヤー合成
-      //    ・それ以外のすべての修正（重なり解消・位置移動・サイズ変更・置換・色変更・削除・細密化等）→ 元SVG全体を空間計算して書き換える完全SVG出力
+      // 共通SVGパイプラインヘルパー（新規6段階生成・解像度維持リファイン両用）
+      // =========================================================================
+      const countSvgVectors = (svgStr) => (String(svgStr || '').match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
+
+      const renderProgressiveSvgPreview = (svgStr, stageLabel) => {
+        try {
+          if (!svgStr || !dom.memoryImage) return;
+          dom.canvasPlaceholder?.classList.add('hidden');
+          dom.memoryVideo?.classList.add('hidden');
+          if (dom.svgContainer) dom.svgContainer.classList.add('hidden');
+          dom.memoryImage.classList.remove('hidden', 'refreshing');
+          dom.memoryImage.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgStr)}`;
+          dom.drawingOverlay?.classList.add('progressive-mini');
+          if (dom.drawingText && stageLabel) {
+            dom.drawingText.textContent = stageLabel;
+          }
+        } catch (_) {}
+      };
+
+      const styleDesc = artStyleKey === 'realistic'
+        ? '写実的でリアルな情景（精密な光と影、被写界深度、立体感）'
+        : artStyleKey === 'oil_painting'
+          ? '重厚な油絵風（力強い筆跡、深い陰影）'
+          : artStyleKey === 'colored_pencil'
+            ? '素朴で繊細な色鉛筆スケッチ風'
+            : '温かい水彩画風';
+
+      const refinementNote = (isRefinement && feedback)
+        ? `\n【最重要：ユーザーからの絵の修正・変更指示（絶対厳守！）】\nユーザーは直前の絵に対して「${feedback}」という明確な修正を求めています。必ずこの修正指示を最優先で上書き・反映してください！\n`
+        : '';
+
+      const extractLabeledField = (srcText, labelPattern) => {
+        const m = String(srcText || '').match(labelPattern);
+        return m && m[1] ? m[1].trim() : '';
+      };
+      const focusPeopleText = (
+        (state.sceneCollector && state.sceneCollector.people) ||
+        extractLabeledField(cleanElements, /(?:【④[^】]*】|④\s*登場人物[^\s:：]*)\s*[:：]\s*([^\/\n]+)/) ||
+        ''
+      ).trim();
+      const focusDetailsText = (
+        (state.sceneCollector && state.sceneCollector.details && state.sceneCollector.details.size > 0
+          ? Array.from(state.sceneCollector.details).join('、')
+          : '') ||
+        extractLabeledField(cleanElements, /(?:【⑤[^】]*】|⑤\s*見えたもの[^\s:：]*)\s*[:：]\s*([^\/\n]+)/) ||
+        ''
+      ).trim();
+      const visibleItemsPriorityNote = focusDetailsText
+        ? `\n【重要・漏れなく細かく描く対象（ご本人が語った「見えたもの・様子」）】:\n${focusDetailsText}\n→ ここに挙げられた事物・様子は1つも省略せず、質感・輪郭・陰影・模様・立体感まで丁寧に細かく描き込んでください。\n`
+        : `\n【重要・見えたものの細密描写】:\n情景テーマに含まれる具体的な事物・小物・自然・様子は1つも省略せず、質感・輪郭・陰影・模様まで丁寧に細かく描き込んでください。\n`;
+      const peopleUltraDetailNote = focusPeopleText
+        ? `\n【最優先・更に細かく超細密に描く対象（ご本人が語った「登場人物」）】:\n${focusPeopleText}\n→ 登場人物は絵の魂です。他の要素よりも一段高い解像度（1人につき40〜60要素以上）で、表情（眉・瞳のハイライト・柔らかな笑顔・頬の赤み）、髪の毛流れと艶、衣服の襟・袖・柄・ボタンや帯・布の皺、自然な手足と持ち物・接地影まで徹底的に細かく描き込んでください。\n`
+        : `\n【最優先・登場人物がいる場合の超細密描写】:\n情景に登場人物（や動物）が含まれる場合は、絵の魂として他の要素よりも一段高い解像度（1人につき40〜60要素以上）で、表情・瞳のハイライト・髪の毛流れと艶・衣服の柄や皺・手元の小物・接地影まで徹底的に細かく描き込んでください。\n`;
+
+      // 入れ子 <g> があっても途中で切れずに完全抽出するタグ深さカウントヘルパー
+      const extractBalancedGroupById = (xmlStr, targetId) => {
+        const escapedId = String(targetId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const startRe = new RegExp(`<g\\b[^>]*id=["']${escapedId}["'][^>]*>`, 'i');
+        const m = startRe.exec(xmlStr);
+        if (!m) return null;
+        const startIdx = m.index;
+        const tagRe = /<(\/?)g\b[^>]*>/gi;
+        tagRe.lastIndex = startIdx;
+        let depth = 0;
+        let tm;
+        while ((tm = tagRe.exec(xmlStr)) !== null) {
+          const fullTag = tm[0];
+          if (fullTag.endsWith('/>')) continue;
+          if (tm[1] === '/') {
+            depth--;
+            if (depth === 0) {
+              return xmlStr.slice(startIdx, tm.index + fullTag.length);
+            }
+          } else {
+            depth++;
+          }
+        }
+        return null;
+      };
+
+      // 指定したID群の <g> 要素のみを元SVGから安全に除去（他の層の解像度・描写は100%保持）
+      const removeSvgGroupsByIdJS = (xmlStr, targetIds) => {
+        let out = String(xmlStr || '');
+        for (const tid of targetIds) {
+          let guard = 0;
+          while (guard < 6) {
+            const grp = extractBalancedGroupById(out, tid);
+            if (!grp) break;
+            out = out.replace(grp, '');
+            guard++;
+          }
+        }
+        return out;
+      };
+
+      // ステージごとの <defs> / 要素 ID 衝突を防ぐ名前空間分離ヘルパー
+      const namespaceStageIdsJS = (fragment, prefix, keepGroupIds) => {
+        const idsFound = new Set();
+        const idRe = /\bid=["']([^"']+)["']/g;
+        let im;
+        while ((im = idRe.exec(fragment)) !== null) {
+          idsFound.add(im[1]);
+        }
+        const remap = [];
+        for (const oldId of idsFound) {
+          if (keepGroupIds.has(oldId) || oldId.startsWith(prefix)) continue;
+          remap.push([oldId, `${prefix}${oldId}`]);
+        }
+        remap.sort((a, b) => b[0].length - a[0].length);
+        let out = fragment;
+        for (const [oldId, newId] of remap) {
+          const esc = oldId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          out = out.replace(new RegExp(`\\bid=(["'])${esc}\\1`, 'g'), `id=$1${newId}$1`);
+          out = out.split(`url(#${oldId})`).join(`url(#${newId})`);
+          out = out.split(`href="#${oldId}"`).join(`href="#${newId}"`);
+          out = out.split(`href='#${oldId}'`).join(`href='#${newId}'`);
+        }
+        return out;
+      };
+
+      const insertBeforeLayerJS = (svgStr, layerIds, groupXml, comment) => {
+        const joined = layerIds.map(id => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+        const pat = new RegExp(`(<g\\b[^>]*id=["'](?:${joined})["'][^>]*>)`, 'i');
+        if (pat.test(svgStr)) {
+          return svgStr.replace(pat, `<!-- ${comment} -->\n  ${groupXml}\n  $1`);
+        }
+        return svgStr.replace(/<\/svg\s*>/i, `\n  <!-- ${comment} -->\n  ${groupXml}\n</svg>`);
+      };
+
+      const mergeStageOutputJS = (baseSvgStr, rawStageOut, stagePrefix, groupSpecs) => {
+        let cleaned = String(rawStageOut || '').trim()
+          .replace(/^```[a-zA-Z]*\s*/, '')
+          .replace(/\s*```$/, '')
+          .trim();
+        if (!cleaned) return null;
+        cleaned = sanitizeSvgFragmentJS(cleaned);
+
+        const keepIds = new Set(groupSpecs.map(spec => spec.id));
+        cleaned = namespaceStageIdsJS(cleaned, stagePrefix, keepIds);
+
+        const defsMatch = cleaned.match(/<defs[^>]*>([\s\S]*?)<\/defs>/i);
+        const extraDefs = defsMatch ? defsMatch[1].trim() : '';
+        const withoutDefs = cleaned.replace(/<defs[^>]*>[\s\S]*?<\/defs>/gi, '').trim();
+
+        let merged = baseSvgStr;
+        if (extraDefs) {
+          if (/<\/defs>/i.test(merged)) {
+            merged = merged.replace(/<\/defs>/i, `\n  <!-- ${stagePrefix} Extra Defs -->\n  ${extraDefs}\n</defs>`);
+          } else {
+            merged = merged.replace(/(<svg[^>]*>)/i, `$1\n<defs>\n  ${extraDefs}\n</defs>`);
+          }
+        }
+
+        let matchedAny = false;
+        for (const spec of groupSpecs) {
+          const gXml = extractBalancedGroupById(withoutDefs, spec.id);
+          if (gXml) {
+            matchedAny = true;
+            if (spec.beforeLayers && spec.beforeLayers.length > 0) {
+              merged = insertBeforeLayerJS(merged, spec.beforeLayers, gXml, `${stagePrefix} ${spec.id}`);
+            } else {
+              merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- ${stagePrefix} ${spec.id} -->\n  ${gXml}\n</svg>`);
+            }
+          }
+        }
+
+        if (!matchedAny) {
+          const firstG = withoutDefs.indexOf('<g');
+          const lastGEnd = withoutDefs.lastIndexOf('</g>');
+          if (firstG === -1 || lastGEnd === -1 || lastGEnd <= firstG) return null;
+          const fallbackG = withoutDefs.slice(firstG, lastGEnd + 4);
+          const defaultBefore = groupSpecs[0] && groupSpecs[0].beforeLayers;
+          if (defaultBefore && defaultBefore.length > 0) {
+            merged = insertBeforeLayerJS(merged, defaultBefore, fallbackG, `${stagePrefix} fallback`);
+          } else {
+            merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- ${stagePrefix} fallback -->\n  ${fallbackG}\n</svg>`);
+          }
+        }
+        return repairAndValidateSvgJS(merged);
+      };
+
+      const injectWatercolorPaperFinishJS = (svgStr) => {
+        let out = removeSvgGroupsByIdJS(svgStr, ['s5final-paper-finish']);
+        const paperDefs = `
+  <!-- Stage 5 Watercolor Paper Material Defs -->
+  <filter id="s5final-paper-texture" x="0%" y="0%" width="100%" height="100%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" seed="7" result="grain"/>
+    <feColorMatrix type="matrix" values="0 0 0 0 0.52  0 0 0 0 0.43  0 0 0 0 0.32  0 0 0 0.045 0" in="grain" result="warmGrain"/>
+  </filter>
+  <radialGradient id="s5final-warm-vignette" cx="50%" cy="50%" r="72%">
+    <stop offset="68%" stop-color="#fff8ee" stop-opacity="0"/>
+    <stop offset="100%" stop-color="#d8bfa0" stop-opacity="0.14"/>
+  </radialGradient>`;
+        const paperOverlay = `
+  <!-- Stage 5 Watercolor Paper & Edge Softening Overlay -->
+  <g id="s5final-paper-finish" pointer-events="none">
+    <rect x="0" y="0" width="800" height="600" filter="url(#s5final-paper-texture)" opacity="0.82"/>
+    <rect x="0" y="0" width="800" height="600" fill="url(#s5final-warm-vignette)"/>
+  </g>`;
+        if (!out.includes('id="s5final-paper-texture"')) {
+          if (/<\/defs>/i.test(out)) {
+            out = out.replace(/<\/defs>/i, `${paperDefs}\n</defs>`);
+          } else {
+            out = out.replace(/(<svg[^>]*>)/i, `$1\n<defs>${paperDefs}\n</defs>`);
+          }
+        }
+        out = out.replace(/<\/svg\s*>/i, `${paperOverlay}\n</svg>`);
+        return repairAndValidateSvgJS(out) || svgStr;
+      };
+
+      const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'];
+      const modelAttemptLogs = [];
+
+      const callGeminiStageJS = async (promptText, preferredModel, timeoutMs, thinkingBudget, validatorFn) => {
+        const ordered = preferredModel
+          ? [preferredModel, ...candidateModels.filter(m => m !== preferredModel)]
+          : candidateModels;
+        for (const modelName of ordered) {
+          try {
+            const genConfig = { temperature: 0.35, maxOutputTokens: 32768 };
+            if (modelName === 'gemini-3-flash-preview' && thinkingBudget > 0) {
+              genConfig.thinkingConfig = { thinkingBudget };
+            }
+            const t0 = Date.now();
+            const res = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: promptText }] }],
+                  generationConfig: genConfig
+                }),
+                signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
+              }
+            );
+            recordApiCall(res.headers, res.status);
+            if (res.ok) {
+              const data = await res.json();
+              const parts = data?.candidates?.[0]?.content?.parts || [];
+              const rawText = parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n');
+              const validated = validatorFn(rawText);
+              if (validated) {
+                return { svg: validated, model: modelName, elapsedMs: Date.now() - t0 };
+              }
+              modelAttemptLogs.push(`❌ ${modelName}: SVG検証エラー(要素不足/破損)`);
+              logDiag(`⚠️ モデル ${modelName} のSVG出力が検証を通過しませんでした (raw=${rawText.length}文字)。次を試行します。`);
+            } else {
+              if (modelName === 'gemini-3.5-flash' && res.status === 503) {
+                state.gemini35Flash503At = Date.now();
+              }
+              modelAttemptLogs.push(`❌ ${modelName}: HTTP ${res.status}`);
+              logDiag(`モデル ${modelName} 応答ステータス: ${res.status}。次を試行します。`);
+            }
+          } catch (mErr) {
+            modelAttemptLogs.push(`❌ ${modelName}: ${mErr.name === 'TimeoutError' ? 'タイムアウト' : mErr.message}`);
+            logDiag(`モデル ${modelName} エラー: ${mErr.message}。次を試行します。`);
+          }
+        }
+        return null;
+      };
+
+      // =========================================================================
+      // 0. 解像度完全維持リファイン（元SVGがある場合）：
+      //    ・1回書き直し（解像度低下）を廃止！
+      //    ・軽量AI判定（辞書ゼロ）で修正対象の大きさ（スケール）を分類し、
+      //      - add     : 前の絵の全レイヤーを100%保持したまま超細密レイヤーを描き加え
+      //      - redo_m  : 中層(主役・人物)のみ差し替え → Stage 1B + Stage 4 再実行（XL・L層100%保持）
+      //      - redo_l  : 大層(大型構成物)のみ差し替え → 大層ベース + Stage 3 再実行（XL・M層100%保持）
+      //      - redo_xl : 特大層(空・時間帯・背景・床)のみ差し替え → 特大ベース + Stage 2 + Stage 5 再実行（L・M層100%保持）
+      //      - redo_all: テーマ全体の大幅変更 → 新規6段階フルパイプラインへ進行
       // =========================================================================
       const isMajorThemeChange = isRefinement && feedback && /(?:別の絵|違う絵|新しい絵|別のテーマ|違うテーマ|新しいテーマ|テーマを変え|テーマを変更|一から描|最初から描|やり直して別)/.test(feedback);
       if (isMajorThemeChange) {
-        logDiag(`🔄 テーマ変更指示を検知したため、旧SVG修正ではなく新規6段階超細密描画で描き直します: 「${feedback}」`);
+        logDiag(`🔄 テーマ変更指示を検知したため、新規6段階超細密描画で描き直します: 「${feedback}」`);
         state.lastGeneratedSvgCode = '';
       }
+
       if (isRefinement && !isMajorThemeChange && feedback && state.lastGeneratedSvgCode && state.lastGeneratedSvgCode.includes('</svg>')) {
         try {
-          const isPureAddOnly = /(?:増やし|追加|足して|描き足|もっと多く|もっとたくさん)/.test(feedback)
-            && !/(?:重な|かぶっ|ずら|離し|移動|位置|配置|手前|奥|下げ|上げ|右|左|小さく|大きく|直して|修正|変え|変更|にして|じゃなく|ではなく|消し|なくし|取り除|細か|緻密|ベクトル|描き直|書き直|色|白く|白い|赤く|赤い|青く|青い|黒く|黒い|茶色|黄色|ピンク)/.test(feedback);
-          const isFullSvgEdit = !isPureAddOnly;
-
-          if (dom.drawingSubtext) {
-            dom.drawingSubtext.textContent = isFullSvgEdit
-              ? `元の絵の構成を活かしながら「${feedback}」を丁寧に修正しています（高精細モード）...`
-              : `元の絵を残したまま「${feedback}」を描き加えています...`;
-          }
-          logDiag(`🎨 [${isFullSvgEdit ? '完全SVG構成修正' : '差分レイヤー追加'}] 元SVGを元に「${feedback}」を反映します`);
           const origSvgCode = state.lastGeneratedSvgCode;
-          const refineSvgPrompt = isFullSvgEdit
-            ? (
-              `以下は、ご本人の大切な思い出を描いた既存のSVGイラストコード（viewBox="0 0 800 600"）です。\n` +
-              `ご本人からの修正要望：「${feedback}」を100%確実に解決した【完全な <svg>...</svg>】を出力してください。\n\n` +
-              `【元のSVGコード】\n${origSvgCode}\n\n` +
-              `【絶対厳守ルール】\n` +
-              `1. 指摘された問題・修正点（「${feedback}」）を座標・サイズ・レイヤー構造レベルで確実に解決してください。\n` +
-              `   - 「人物と校舎（建物）が重なっている」「位置がおかしい」「ずらしてほしい」等の指摘がある場合：元の重なっている人物（または建物）の要素を**そのまま残さず必ず削除または座標移動・サイズ調整**してください。校舎・建物は中景（例: y=130〜360）、人物は前景の広い校庭や道（足元 y=440〜575、校舎の壁面や窓に頭や体が不自然にかぶらない開けたスペース）へ明確に分離して配置し直してください。\n` +
-              `   - 過去の差分レイヤー（\`<g id="refinement-layer">\` 等）によって要素が二重に重なっている場合は、不要な重複要素を整理・統合して破綻のない1枚の美しい構図に直してください。\n` +
-              `   - 色・種類・モチーフの変更や削除の指摘がある場合：変更前の古い要素は必ず削除・置換し、新しいモチーフを細密に描き直してください。\n` +
-              `2. 修正対象以外の美しい背景・空・建物・樹木・色調・細部の描き込みは極力維持しつつ、全体として200〜350個以上の豊かなベクトル要素（\`<path>\`, \`<polygon>\`, \`<ellipse>\`, \`<circle>\`, \`<rect>\`, \`<line>\`）からなる高精細な絵画クオリティを保つ（またはさらに細密化する）こと。\n` +
-              `3. 各レイヤーを \`<g id="layer-sky">\`, \`<g id="layer-mid-buildings">\`, \`<g id="layer-ground">\`, \`<g id="layer-people">\` のように整理してください。\n` +
-              `4. \`<svg width="800" height="600" viewBox="0 0 800 600" xmlns="http://www.w3.org/2000/svg">\` で始まり \`</svg>\` で終わる完全な整形式SVGコードのみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`
-            )
-            : (
-              `以下は、ご本人の大切な思い出を描いた既存のSVGイラストコード（viewBox="0 0 800 600"）です。\n` +
-              `この元のSVGイラストの背景・建物・風景・色調・構図は【100%そのまま残し】、\n` +
-              `ご本人からの追加要望：「${feedback}」だけを既存のSVGに重ねて描き加えるための【追加レイヤー <g id="refinement-layer">...</g>】のみを出力してください。\n\n` +
-              `【元のSVGコード（座標・構図・背景の参照用）】\n${origSvgCode}\n\n` +
-              `【絶対厳守ルール】\n` +
-              `1. 元のSVGを書き直す必要はありません。既存の地面・道・校門・背景の座標（viewBox 800x600）をよく読み取り、**既存の建物（校舎の壁や窓など）と不自然に重ならない前景〜中景の開けた地面・道・校庭の上**に、新しく描き加える要素だけを含む \`<g id="refinement-layer"> ... </g>\` を1つ出力してください。\n` +
-              `2. 「${feedback}」が大勢の生徒や人物に関する指示である場合は、校舎の前方の広い校庭や通学路（足元 y=430〜570）に、制服姿やカバンを持った人物を遠近感をつけて丁寧かつ細密に複数描画してください（校舎の壁や窓に人物がめり込んだり空中に浮いたりしないこと）。\n` +
-              `3. 人物を描く場合は、温かみのある親しみやすいイラスト表現（後ろ姿・横向き・自然なポーズと陰影）で描いてください。\n` +
-              `4. \`<g id="refinement-layer">\` で始まり \`</g>\` で終わる整形式SVGグループ要素のみを出力してください。解説やマークダウン枠（\`\`\`）は一切不要です。`
+          const origVecCount = countSvgVectors(origSvgCode);
+          const hasScaleLayers = origSvgCode.includes('id="layer-xl-backdrop"') && origSvgCode.includes('id="layer-l-structures"');
+
+          // 修正対象のスケールを軽量AI判定（約0.5秒・辞書ゼロ）
+          let refineScope = 'add';
+          try {
+            const classifyPrompt = `ユーザーの絵の修正指示を、最も適切な1つのコードに分類してください（JSONや解説不要、コード1単語のみ出力）：
+- add : 前の絵を消さずに新しい要素を描き加える・増やす・細部を足すだけで実現できる（例：花を足して、鳥を増やして、笑顔にして、小物を置いて）
+- redo_m : 中規模の主役（人物・動物・ペット・卓上小物・ボート等）の位置・ポーズ・服装・色・削除など主役層の書き直しが必要
+- redo_l : 大型構成物（建物・山・大きな木・大きな家具・花畑の塊・船や電車等）の書き直し・削除・差し替えが必要
+- redo_xl : 特大の空間・背景（空の色・夕焼け/夜/昼・天気・海・床・壁・天井等）の書き直しが必要
+- redo_all : 絵のテーマや構図全体を別物に一から描き直す必要がある
+
+【修正指示】: ${feedback}`;
+            const clsRes = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${encodeURIComponent(apiKey)}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: classifyPrompt }] }],
+                  generationConfig: { temperature: 0.0, maxOutputTokens: 32 }
+                }),
+                signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined
+              }
             );
+            recordApiCall(clsRes.headers, clsRes.status);
+            if (clsRes.ok) {
+              const clsData = await clsRes.json();
+              const clsTxt = (clsData?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join(' ').toLowerCase();
+              const mScope = clsTxt.match(/\b(redo_all|redo_xl|redo_l|redo_m|add)\b/);
+              if (mScope) refineScope = mScope[1];
+            }
+          } catch (_) {
+            // 判定失敗時は安全なデフォルト（追加系ならadd、それ以外はredo_m）
+            refineScope = /(?:増やし|追加|足して|描き足|もっと多く)/.test(feedback) ? 'add' : 'redo_m';
+          }
 
-          const refineModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'];
-          const refineMaxTokens = isFullSvgEdit ? 32768 : 16384;
-          for (const mName of refineModels) {
-            try {
-              logDiag(`${isFullSvgEdit ? '完全SVG構成修正' : '差分レイヤー追加'}を試行中 (${mName} / 最大120秒): 「${feedback}」`);
-              const refineGenConfig = { temperature: 0.25, maxOutputTokens: refineMaxTokens };
-              if (mName === 'gemini-3-flash-preview') {
-                // 座標の重なり解析・配置計算を行うため適度な思考予算を付与
-                refineGenConfig.thinkingConfig = { thinkingBudget: isFullSvgEdit ? 1536 : 1024 };
-              }
-              const refStartMs = Date.now();
+          // 旧形式SVG（面積スケール層を持たない過去絵）で書き直しが必要な場合は、解像度低下を防ぐため6段階フル実行へ渡す
+          if (!hasScaleLayers && refineScope !== 'add') {
+            logDiag(`🔄 旧形式SVGの書き直し（${refineScope}）のため、解像度維持のため新規6段階超細密描画へ移行します`);
+            refineScope = 'redo_all';
+          }
+
+          const refStartMs = Date.now();
+          const refUniqueTag = `r${String(Date.now()).slice(-4)}`;
+
+          if (refineScope === 'redo_all') {
+            logDiag(`🔄 全体構図の大幅変更（redo_all）と判定 → 新規6段階超細密描画へ進みます`);
+            state.lastGeneratedSvgCode = '';
+          } else if (refineScope === 'add') {
+            // === パターン①：前の絵を100%保持したまま超細密レイヤーを描き加え ===
+            if (dom.drawingSubtext) {
+              dom.drawingSubtext.textContent = `元の絵（${origVecCount}要素）をそのまま残し、「${feedback}」を高精細に描き加えています...`;
+            }
+            logDiag(`🎨 [解像度維持・描き加え(add)] 元絵(${origVecCount}要素)を100%保持して「${feedback}」を追加します`);
+            const refGroupId = `refinement-layer-${refUniqueTag}`;
+            const addPrompt = `あなたは美術館品質の情景画を手掛けるSVGアーティストです。
+以下は、ご本人の大切な思い出を描いた既存の超細密SVG（${origVecCount}要素・viewBox="0 0 800 600"）です。
+**元の絵の要素は1つも消さず100%そのまま残し**、ご本人からの追加要望：「${feedback}」だけを高精細に重ねて描き加える \`<g id="${refGroupId}">...</g>\` を出力してください。
+${peopleUltraDetailNote}${visibleItemsPriorityNote}
+【元のSVGコード（座標・構図・色調の参照用）】:
+${origSvgCode}
+
+【ミッション：前の絵に馴染む高精細な描き加え（目標 +70〜130要素）】
+1. 元の絵のパース・光の色・画風（${styleDesc}）に1pxのズレもなく自然に馴染ませること。
+2. 既存の建物や主役の顔に不自然に被らない位置へ配置し、登場人物を追加する場合は1人につき40要素以上の有機的ベジェ曲線（表情・髪・衣服・接地影）で描くこと。
+3. ドロップシャドウ用 \`<filter>\` は使用禁止。
+4. 出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}-\` 始まり）と \`<g id="${refGroupId}">...</g>\` のみ。解説やマークダウン枠は不要。`;
+
+            const addRes = await callGeminiStageJS(addPrompt, null, 85000, 512, (raw) => {
+              const m = mergeStageOutputJS(origSvgCode, raw, `${refUniqueTag}-`, [
+                { id: refGroupId, beforeLayers: ['s5final-paper-finish'] }
+              ]);
+              return (m && countSvgVectors(m) > origVecCount + 5) ? m : null;
+            });
+            if (addRes && addRes.svg) {
+              const finalSvg = addRes.svg;
+              const newVec = countSvgVectors(finalSvg);
+              const elapsed = Date.now() - refStartMs;
+              state.lastGeneratedSvgCode = finalSvg;
+              mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(finalSvg)}`;
+              usedModelName = `${addRes.model} (元絵保持・描き加え ${origVecCount}→${newVec}要素)`;
               captureDrawingPromptLocal({
-                timestamp: new Date().toISOString(),
-                phase: 'request',
-                mode: isFullSvgEdit ? 'refine_full_svg' : 'refine_diff_layer',
-                model: mName,
-                title: cleanTitle,
-                cleanElements,
-                feedback,
-                artStyleKey,
-                generationConfig: refineGenConfig,
-                prompt: refineSvgPrompt
+                timestamp: new Date().toISOString(), phase: 'response', mode: 'refine_add_layer',
+                model: usedModelName, title: cleanTitle, cleanElements, feedback, artStyleKey,
+                prompt: addPrompt, svgCode: finalSvg, svgLength: finalSvg.length, vectorCount: newVec, elapsedMs: elapsed
               });
-              const resRef = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${mName}:generateContent?key=${encodeURIComponent(apiKey)}`,
-                {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    contents: [{ parts: [{ text: refineSvgPrompt }] }],
-                    generationConfig: refineGenConfig
-                  }),
-                  signal: AbortSignal.timeout ? AbortSignal.timeout(120000) : undefined
-                }
-              );
-              recordApiCall(resRef.headers, resRef.status);
-              if (resRef.ok) {
-                const dataRef = await resRef.json();
-                const refParts = dataRef?.candidates?.[0]?.content?.parts || [];
-                let rawOut = refParts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n').trim();
-                rawOut = rawOut.replace(/^```[a-zA-Z]*\s*/, '').replace(/\s*```$/, '').trim();
+              dismissCanvasError();
+              logDiag(`✅ 元絵保持・高精細描き加え完了！(${origVecCount}→${newVec}要素 / ${(elapsed / 1000).toFixed(1)}秒)`);
+            }
+          } else if (refineScope === 'redo_m') {
+            // === パターン②：中層（主役・人物）のみ2段階再実行（XL・L・FX層は100%保持！） ===
+            logDiag(`🎨 [解像度維持・中層(主役)2段階再実行(redo_m)] 背景・大型構成物を100%保持して主役を書き直します: 「${feedback}」`);
+            let workingSvg = removeSvgGroupsByIdJS(origSvgCode, ['layer-m-subjects', 's4-m-detail']);
+            const baseKeepVec = countSvgVectors(workingSvg);
+            renderProgressiveSvgPreview(workingSvg, `🎨 背景を保持中（第1/2段階：主役を「${feedback}」で造形中...）`);
 
-                let candidateSvg = null;
-                const fullSvgMatch = rawOut.match(/<svg[\s\S]*?<\/svg>/i);
-                if (fullSvgMatch) {
-                  candidateSvg = fullSvgMatch[0];
-                } else if (!isFullSvgEdit) {
-                  const gMatch = rawOut.match(/<g[\s\S]*?<\/g>/i);
-                  if (gMatch) {
-                    candidateSvg = origSvgCode.replace(/<\/svg\s*>/i, `\n  ${gMatch[0]}\n</svg>`);
-                  }
-                }
-                const validRefined = candidateSvg ? repairAndValidateSvgJS(candidateSvg) : null;
-                if (validRefined) {
-                  const vecCount = (validRefined.match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
-                  const refElapsedMs = Date.now() - refStartMs;
-                  captureDrawingPromptLocal({
-                    timestamp: new Date().toISOString(),
-                    phase: 'response',
-                    mode: isFullSvgEdit ? 'refine_full_svg' : 'refine_diff_layer',
-                    model: mName,
-                    title: cleanTitle,
-                    cleanElements,
-                    feedback,
-                    artStyleKey,
-                    generationConfig: refineGenConfig,
-                    prompt: refineSvgPrompt,
-                    svgCode: validRefined,
-                    svgLength: validRefined.length,
-                    vectorCount: vecCount,
-                    elapsedMs: refElapsedMs
-                  });
-                  state.lastGeneratedSvgCode = validRefined;
-                  mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(validRefined)}`;
-                  usedModelName = `${mName} (${isFullSvgEdit ? '完全SVG修正' : '差分レイヤー合成'} / ${vecCount}要素)`;
-                  dismissCanvasError();
-                  logDiag(`✅ Gemini (${mName}) による${isFullSvgEdit ? '完全SVG構成修正' : '差分レイヤー再描画'}に成功しました！（${validRefined.length}文字 / ベクトル約${vecCount}要素）`);
-                  break;
-                } else {
-                  logDiag(`モデル ${mName} の修正出力がXML検証を通過しませんでした。次を試行します。`);
-                }
-              } else {
-                if (mName === 'gemini-3.5-flash' && resRef.status === 503) {
-                  state.gemini35Flash503At = Date.now();
-                }
-                logDiag(`修正モデル ${mName} 応答ステータス: ${resRef.status}`);
+            const redoM1Prompt = `あなたは美術館品質の情景画を手掛ける【中規模・主役オブジェクト造形専門】のSVGアーティストです。
+以下のSVGは、元の絵から【特大層（背景・空間）と大層（大型構成物）を100%保持】した土台です（viewBox="0 0 800 600"）。
+【修正指示（絶対最優先）】: ${feedback}
+【情景テーマ】: ${cleanElements}
+${peopleUltraDetailNote}${visibleItemsPriorityNote}
+【保持された背景・大型構成物SVG（座標・パース・色調の参照用）】:
+${workingSvg}
+
+【ミッション：修正指示を100%反映した中層 \`<g id="layer-m-subjects">\` の精密造形（目標 +130〜180要素）】
+- 1体（1オブジェクト）ずつ独立した \`<g>\` で奥（y小）→手前（y大）の順に有機的ベジェ曲線で造形すること。ドロップシャドウ用 \`<filter>\` は使用禁止。
+- 出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}m1-\` 始まり）と \`<g id="layer-m-subjects">...</g>\` のみ。解説やマークダウン枠は不要。`;
+
+            const resM1 = await callGeminiStageJS(redoM1Prompt, null, 85000, 512, (raw) => {
+              const m = mergeStageOutputJS(workingSvg, raw, `${refUniqueTag}m1-`, [
+                { id: 'layer-m-subjects', beforeLayers: ['s5-atmosphere-fx', 's5final-paper-finish'] }
+              ]);
+              return (m && countSvgVectors(m) > baseKeepVec + 15) ? m : null;
+            });
+            if (resM1 && resM1.svg) {
+              workingSvg = resM1.svg;
+              const m1Vec = countSvgVectors(workingSvg);
+              renderProgressiveSvgPreview(workingSvg, `🎨 主役の造形完了（第2/2段階：登場人物・主役を超細密化中...）`);
+              const newMCode = extractBalancedGroupById(workingSvg, 'layer-m-subjects') || '';
+              const redoM2Prompt = `あなたは美術館品質の情景画を手掛ける【人物・主役オブジェクト超細密表現専門】のSVGアーティストです。
+【修正指示（絶対最優先）】: ${feedback}
+【情景テーマ】: ${cleanElements}
+${peopleUltraDetailNote}${visibleItemsPriorityNote}
+【今回細密化する \`layer-m-subjects\` コード抜粋（座標に1pxのズレもなく重ねること！）】:
+${newMCode}
+【ミッション：中層（特に登場人物を1人40〜60要素で更に細かく！）の集中超細密描き加え（目標 +180〜240要素）】
+\`<g id="s4-m-detail">\` の中に、1体ずつ独立した \`<g>\` で奥→手前順に、表情（眉・瞳ハイライト・笑顔・頬）・髪の毛流れ・衣服の柄と皺・手元の小物・接地影を徹底的に描き込んでください。ドロップシャドウ用 \`<filter>\` は使用禁止。
+出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}m2-\` 始まり）と \`<g id="s4-m-detail">...</g>\` のみ。解説やマークダウン枠は不要。`;
+
+              const resM2 = await callGeminiStageJS(redoM2Prompt, resM1.model, 85000, 1024, (raw) => {
+                const m = mergeStageOutputJS(workingSvg, raw, `${refUniqueTag}m2-`, [
+                  { id: 's4-m-detail', beforeLayers: ['s5-atmosphere-fx', 's5final-paper-finish'] }
+                ]);
+                return (m && countSvgVectors(m) > m1Vec + 10) ? m : null;
+              });
+              if (resM2 && resM2.svg) workingSvg = resM2.svg;
+
+              const finalVec = countSvgVectors(workingSvg);
+              const elapsed = Date.now() - refStartMs;
+              state.lastGeneratedSvgCode = workingSvg;
+              mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(workingSvg)}`;
+              usedModelName = `${resM1.model} (中層2段階再実行・背景保持 ${origVecCount}→${finalVec}要素)`;
+              captureDrawingPromptLocal({
+                timestamp: new Date().toISOString(), phase: 'response', mode: 'refine_redo_m',
+                model: usedModelName, title: cleanTitle, cleanElements, feedback, artStyleKey,
+                prompt: redoM1Prompt, svgCode: workingSvg, svgLength: workingSvg.length, vectorCount: finalVec, elapsedMs: elapsed
+              });
+              dismissCanvasError();
+              logDiag(`✅ 中層(主役)2段階再実行完了！(${origVecCount}→${finalVec}要素 / ${(elapsed / 1000).toFixed(1)}秒)`);
+            }
+          } else if (refineScope === 'redo_l') {
+            // === パターン③：大層（大型構成物）のみ2段階再実行（XL・M・FX層は100%保持！） ===
+            logDiag(`🎨 [解像度維持・大層(大型構成物)2段階再実行(redo_l)] 背景と主役を100%保持して大型要素を書き直します: 「${feedback}」`);
+            let workingSvg = removeSvgGroupsByIdJS(origSvgCode, ['layer-l-structures', 's3-l-detail']);
+            const baseKeepVec = countSvgVectors(workingSvg);
+            renderProgressiveSvgPreview(workingSvg, `🎨 背景・主役を保持中（第1/2段階：大型要素を「${feedback}」で造形中...）`);
+
+            const redoL1Prompt = `あなたは美術館品質の情景画を手掛ける【大型構成物・景観造形専門】のSVGアーティストです。
+以下のSVGは、元の絵から【特大層（背景）と中層（主役・人物）を100%保持】した状態です（viewBox="0 0 800 600"）。
+【修正指示（絶対最優先）】: ${feedback}
+【情景テーマ】: ${cleanElements}
+${visibleItemsPriorityNote}
+【保持された背景・主役SVG（座標・パース・色調の参照用）】:
+${workingSvg}
+
+【ミッション：修正指示を100%反映した大層 \`<g id="layer-l-structures">\` の精密造形（目標 +110〜150要素）】
+- 主役（\`layer-m-subjects\`）の背面に挿入されます。既存の主役や背景と美しく調和する座標で、建物・山・樹木・大家具・花畑・乗り物等の大型要素を有機的ベジェ曲線で造形してください。
+- 出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}l1-\` 始まり）と \`<g id="layer-l-structures">...</g>\` のみ。解説やマークダウン枠は不要。`;
+
+            const resL1 = await callGeminiStageJS(redoL1Prompt, null, 85000, 512, (raw) => {
+              const m = mergeStageOutputJS(workingSvg, raw, `${refUniqueTag}l1-`, [
+                { id: 'layer-l-structures', beforeLayers: ['layer-m-subjects', 's4-m-detail', 's5-atmosphere-fx', 's5final-paper-finish'] }
+              ]);
+              return (m && countSvgVectors(m) > baseKeepVec + 15) ? m : null;
+            });
+            if (resL1 && resL1.svg) {
+              workingSvg = resL1.svg;
+              const l1Vec = countSvgVectors(workingSvg);
+              renderProgressiveSvgPreview(workingSvg, `🎨 大型要素の造形完了（第2/2段階：大型要素を超細密化中...）`);
+              const newLCode = extractBalancedGroupById(workingSvg, 'layer-l-structures') || '';
+              const redoL2Prompt = `あなたは美術館品質の情景画を手掛ける【大型構成物・景観ディテール専門】のSVGアーティストです。
+【修正指示（絶対最優先）】: ${feedback}
+【情景テーマ】: ${cleanElements}
+${visibleItemsPriorityNote}
+【今回細密化する \`layer-l-structures\` コード抜粋（座標に1pxのズレもなく重ねること！）】:
+${newLCode}
+【ミッション：大層への超細密描き加え（目標 +130〜170要素）】
+屋根瓦・窓・外壁・樹皮と無数の葉・山肌・家具の木目や布柄・花びら等を \`<g id="s3-l-detail">...</g>\` へ徹底的に描き込んでください。
+出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}l2-\` 始まり）と \`<g id="s3-l-detail">...</g>\` のみ。解説やマークダウン枠は不要。`;
+
+              const resL2 = await callGeminiStageJS(redoL2Prompt, resL1.model, 85000, 512, (raw) => {
+                const m = mergeStageOutputJS(workingSvg, raw, `${refUniqueTag}l2-`, [
+                  { id: 's3-l-detail', beforeLayers: ['layer-m-subjects', 's4-m-detail', 's5-atmosphere-fx', 's5final-paper-finish'] }
+                ]);
+                return (m && countSvgVectors(m) > l1Vec + 10) ? m : null;
+              });
+              if (resL2 && resL2.svg) workingSvg = resL2.svg;
+
+              const finalVec = countSvgVectors(workingSvg);
+              const elapsed = Date.now() - refStartMs;
+              state.lastGeneratedSvgCode = workingSvg;
+              mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(workingSvg)}`;
+              usedModelName = `${resL1.model} (大層2段階再実行・主役保持 ${origVecCount}→${finalVec}要素)`;
+              captureDrawingPromptLocal({
+                timestamp: new Date().toISOString(), phase: 'response', mode: 'refine_redo_l',
+                model: usedModelName, title: cleanTitle, cleanElements, feedback, artStyleKey,
+                prompt: redoL1Prompt, svgCode: workingSvg, svgLength: workingSvg.length, vectorCount: finalVec, elapsedMs: elapsed
+              });
+              dismissCanvasError();
+              logDiag(`✅ 大層(大型構成物)2段階再実行完了！(${origVecCount}→${finalVec}要素 / ${(elapsed / 1000).toFixed(1)}秒)`);
+            }
+          } else if (refineScope === 'redo_xl') {
+            // === パターン④：特大層（空・時間帯・背景・床）＋光層のみ3段階再実行（L・M層は100%保持！） ===
+            logDiag(`🎨 [解像度維持・特大層3段階再実行(redo_xl)] 大型要素と主役を100%保持して背景・空間を書き直します: 「${feedback}」`);
+            let workingSvg = removeSvgGroupsByIdJS(origSvgCode, ['layer-xl-outside', 'layer-xl-backdrop', 's2-xl-outside', 's2-xl-detail', 's5-atmosphere-fx', 's5final-paper-finish']);
+            const baseKeepVec = countSvgVectors(workingSvg);
+            renderProgressiveSvgPreview(workingSvg, `🎨 主役・大型要素を保持中（第1/3段階：空間・背景を「${feedback}」で再構築中...）`);
+
+            const redoXl1Prompt = `あなたは美術館品質の情景画を手掛ける【特大・背景空間基盤専門】のSVGアーティストです。
+以下のSVGは、元の絵から【大層（大型構成物）と中層（主役・人物）を100%保持】した状態です（viewBox="0 0 800 600"）。
+【修正指示（絶対最優先）】: ${feedback}
+【情景テーマ】: ${cleanElements}
+【保持された大型構成物・主役SVG（座標・パースの参照用）】:
+${workingSvg}
+
+【ミッション：修正指示を100%反映した特大層 \`<g id="layer-xl-backdrop">\`（必要に応じ \`<g id="layer-xl-outside">\`）の再構築（目標 +110〜150要素）】
+- 大層・中層の背面に挿入されます。画面全体（0,0〜800,600）を隙間なく覆う空・海・遠景・壁・天井・床・地面を多層グラデーションで構築してください。
+- 出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}x1-\` 始まり）と \`<g id="layer-xl-backdrop">...</g>\`（開口部外景があれば \`<g id="layer-xl-outside">...</g>\` も）のみ。解説やマークダウン枠は不要。`;
+
+            const resX1 = await callGeminiStageJS(redoXl1Prompt, null, 85000, 512, (raw) => {
+              const m = mergeStageOutputJS(workingSvg, raw, `${refUniqueTag}x1-`, [
+                { id: 'layer-xl-outside', beforeLayers: ['layer-l-structures', 's3-l-detail', 'layer-m-subjects'] },
+                { id: 'layer-xl-backdrop', beforeLayers: ['layer-l-structures', 's3-l-detail', 'layer-m-subjects'] }
+              ]);
+              return (m && countSvgVectors(m) > baseKeepVec + 10) ? m : null;
+            });
+            if (resX1 && resX1.svg) {
+              workingSvg = resX1.svg;
+              const x1Vec = countSvgVectors(workingSvg);
+              renderProgressiveSvgPreview(workingSvg, `🎨 新しい背景土台が完成（第2/3段階：背景空間を細密化中...）`);
+              const newXlCode = extractBalancedGroupById(workingSvg, 'layer-xl-backdrop') || '';
+              const redoXl2Prompt = `あなたは美術館品質の情景画を手掛ける【特大・背景空間ディテール専門】のSVGアーティストです。
+【修正指示（絶対最優先）】: ${feedback}
+【今回細密化する \`layer-xl-backdrop\` コード抜粋】:
+${newXlCode}
+【ミッション：特大層への超細密描き加え（目標 +110〜150要素）】
+雲の陰影、水面や波、壁・天井の木目、床・地面のパース目地等を \`<g id="s2-xl-detail">...</g>\` へ描き込んでください。
+出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}x2-\` 始まり）と \`<g id="s2-xl-detail">...</g>\` のみ。解説やマークダウン枠は不要。`;
+
+              const resX2 = await callGeminiStageJS(redoXl2Prompt, resX1.model, 80000, 512, (raw) => {
+                const m = mergeStageOutputJS(workingSvg, raw, `${refUniqueTag}x2-`, [
+                  { id: 's2-xl-detail', beforeLayers: ['layer-l-structures', 's3-l-detail', 'layer-m-subjects'] }
+                ]);
+                return (m && countSvgVectors(m) > x1Vec + 8) ? m : null;
+              });
+              if (resX2 && resX2.svg) {
+                workingSvg = resX2.svg;
+                renderProgressiveSvgPreview(workingSvg, `🎨 背景の細密化完了（第3/3段階：光と水彩紙仕上げ中...）`);
               }
-            } catch (rErr) {
-              logDiag(`修正モデル ${mName} エラー: ${rErr.message}`);
+
+              const x2Vec = countSvgVectors(workingSvg);
+              const redoXl3Prompt = `あなたは美術館品質の情景画を手掛ける【光・空気感・水彩エフェクト仕上げ専門】のSVGアーティストです。
+【修正指示（絶対最優先）】: ${feedback}
+【情景テーマ】: ${cleanElements}
+【ミッション：新しい背景・時間帯に調和する最前面の光と空気感（目標 +70〜110要素）】
+不透明な大面積図形や大きな白玉は厳禁。柔らかな斜光・照り返し・小さな光粒・季節モチーフを \`<g id="s5-atmosphere-fx">...</g>\` へ出力してください。
+出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}x3-\` 始まり）と \`<g id="s5-atmosphere-fx">...</g>\` のみ。解説やマークダウン枠は不要。`;
+
+              const resX3 = await callGeminiStageJS(redoXl3Prompt, resX1.model, 75000, 512, (raw) => {
+                const m = mergeStageOutputJS(workingSvg, raw, `${refUniqueTag}x3-`, [
+                  { id: 's5-atmosphere-fx', beforeLayers: null }
+                ]);
+                return (m && countSvgVectors(m) > x2Vec + 5) ? m : null;
+              });
+              if (resX3 && resX3.svg) {
+                workingSvg = resX3.svg;
+              }
+              workingSvg = injectWatercolorPaperFinishJS(workingSvg);
+
+              const finalVec = countSvgVectors(workingSvg);
+              const elapsed = Date.now() - refStartMs;
+              state.lastGeneratedSvgCode = workingSvg;
+              mediaDataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(workingSvg)}`;
+              usedModelName = `${resX1.model} (特大層3段階再実行・主役保持 ${origVecCount}→${finalVec}要素)`;
+              captureDrawingPromptLocal({
+                timestamp: new Date().toISOString(), phase: 'response', mode: 'refine_redo_xl',
+                model: usedModelName, title: cleanTitle, cleanElements, feedback, artStyleKey,
+                prompt: redoXl1Prompt, svgCode: workingSvg, svgLength: workingSvg.length, vectorCount: finalVec, elapsedMs: elapsed
+              });
+              dismissCanvasError();
+              logDiag(`✅ 特大層(背景・空間)3段階再実行完了！(${origVecCount}→${finalVec}要素 / ${(elapsed / 1000).toFixed(1)}秒)`);
             }
           }
         } catch (refOuterErr) {
-          logDiag(`SVG修正スキップ（新規高精細描画へフォールバック）: ${refOuterErr.message}`);
+          logDiag(`スケール別リファインエラー（新規6段階描画へフォールバック）: ${refOuterErr.message}`);
         }
       }
 
@@ -5420,258 +5855,10 @@ ${levelRules}
       // =========================================================================
       if (!mediaDataUrl) {
         try {
-          const countSvgVectors = (svgStr) => (String(svgStr || '').match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
-
-          // プログレッシブ先行表示：Stage 1A 完了時点でキャンバスへ表示し、下部コンパクトバーへ退避
-          const renderProgressiveSvgPreview = (svgStr, stageLabel) => {
-            try {
-              if (!svgStr || !dom.memoryImage) return;
-              dom.canvasPlaceholder?.classList.add('hidden');
-              dom.memoryVideo?.classList.add('hidden');
-              if (dom.svgContainer) dom.svgContainer.classList.add('hidden');
-              dom.memoryImage.classList.remove('hidden', 'refreshing');
-              dom.memoryImage.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgStr)}`;
-              dom.drawingOverlay?.classList.add('progressive-mini');
-              if (dom.drawingText && stageLabel) {
-                dom.drawingText.textContent = stageLabel;
-              }
-            } catch (_) {}
-          };
-
           if (dom.drawingSubtext) {
             dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」で大きな背景・空間と大型要素を描いています（第1/6段階）...`;
           }
           logDiag(`AI6段階プログレッシブSVG描画を開始します [面積スケール階層型・完全汎用]: 「${cleanTitle}」 (画風: ${artStyle.name}) - 内容: 「${cleanElements}」`);
-
-          const styleDesc = artStyleKey === 'realistic'
-            ? '写実的でリアルな情景（精密な光と影、被写界深度、立体感）'
-            : artStyleKey === 'oil_painting'
-              ? '重厚な油絵風（力強い筆跡、深い陰影）'
-              : artStyleKey === 'colored_pencil'
-                ? '素朴で繊細な色鉛筆スケッチ風'
-                : '温かい水彩画風';
-
-          const refinementNote = (isRefinement && feedback)
-            ? `\n【最重要：ユーザーからの絵の修正・変更指示（絶対厳守！）】\nユーザーは直前の絵に対して「${feedback}」という明確な修正を求めています。必ずこの修正指示を最優先で上書き・反映してください！\n`
-            : '';
-
-          // ④登場人物・⑤見えたもの（様子）を情景メモまたはテキストから自動抽出し、重点描き込み指示を生成
-          const extractLabeledField = (srcText, labelPattern) => {
-            const m = String(srcText || '').match(labelPattern);
-            return m && m[1] ? m[1].trim() : '';
-          };
-          const focusPeopleText = (
-            (state.sceneCollector && state.sceneCollector.people) ||
-            extractLabeledField(cleanElements, /(?:【④[^】]*】|④\s*登場人物[^\s:：]*)\s*[:：]\s*([^\/\n]+)/) ||
-            ''
-          ).trim();
-          const focusDetailsText = (
-            (state.sceneCollector && state.sceneCollector.details && state.sceneCollector.details.size > 0
-              ? Array.from(state.sceneCollector.details).join('、')
-              : '') ||
-            extractLabeledField(cleanElements, /(?:【⑤[^】]*】|⑤\s*見えたもの[^\s:：]*)\s*[:：]\s*([^\/\n]+)/) ||
-            ''
-          ).trim();
-          const visibleItemsPriorityNote = focusDetailsText
-            ? `\n【重要・漏れなく細かく描く対象（ご本人が語った「見えたもの・様子」）】:\n${focusDetailsText}\n→ ここに挙げられた事物・様子は1つも省略せず、質感・輪郭・陰影・模様・立体感まで丁寧に細かく描き込んでください。\n`
-            : `\n【重要・見えたものの細密描写】:\n情景テーマに含まれる具体的な事物・小物・自然・様子は1つも省略せず、質感・輪郭・陰影・模様まで丁寧に細かく描き込んでください。\n`;
-          const peopleUltraDetailNote = focusPeopleText
-            ? `\n【最優先・更に細かく超細密に描く対象（ご本人が語った「登場人物」）】:\n${focusPeopleText}\n→ 登場人物は絵の魂です。他の要素よりも一段高い解像度（1人につき40〜60要素以上）で、表情（眉・瞳のハイライト・柔らかな笑顔・頬の赤み）、髪の毛流れと艶、衣服の襟・袖・柄・ボタンや帯・布の皺、自然な手足と持ち物・接地影まで徹底的に細かく描き込んでください。\n`
-            : `\n【最優先・登場人物がいる場合の超細密描写】:\n情景に登場人物（や動物）が含まれる場合は、絵の魂として他の要素よりも一段高い解像度（1人につき40〜60要素以上）で、表情・瞳のハイライト・髪の毛流れと艶・衣服の柄や皺・手元の小物・接地影まで徹底的に細かく描き込んでください。\n`;
-
-          // 入れ子 <g> があっても途中で切れずに完全抽出するタグ深さカウントヘルパー
-          const extractBalancedGroupById = (xmlStr, targetId) => {
-            const escapedId = String(targetId).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            const startRe = new RegExp(`<g\\b[^>]*id=["']${escapedId}["'][^>]*>`, 'i');
-            const m = startRe.exec(xmlStr);
-            if (!m) return null;
-            const startIdx = m.index;
-            const tagRe = /<(\/?)g\b[^>]*>/gi;
-            tagRe.lastIndex = startIdx;
-            let depth = 0;
-            let tm;
-            while ((tm = tagRe.exec(xmlStr)) !== null) {
-              const fullTag = tm[0];
-              if (fullTag.endsWith('/>')) continue;
-              if (tm[1] === '/') {
-                depth--;
-                if (depth === 0) {
-                  return xmlStr.slice(startIdx, tm.index + fullTag.length);
-                }
-              } else {
-                depth++;
-              }
-            }
-            return null;
-          };
-
-          // ステージごとの <defs> / 要素 ID 衝突を防ぐ名前空間分離ヘルパー
-          const namespaceStageIdsJS = (fragment, prefix, keepGroupIds) => {
-            const idsFound = new Set();
-            const idRe = /\bid=["']([^"']+)["']/g;
-            let im;
-            while ((im = idRe.exec(fragment)) !== null) {
-              idsFound.add(im[1]);
-            }
-            const remap = [];
-            for (const oldId of idsFound) {
-              if (keepGroupIds.has(oldId) || oldId.startsWith(prefix)) continue;
-              remap.push([oldId, `${prefix}${oldId}`]);
-            }
-            remap.sort((a, b) => b[0].length - a[0].length);
-            let out = fragment;
-            for (const [oldId, newId] of remap) {
-              const esc = oldId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-              out = out.replace(new RegExp(`\\bid=(["'])${esc}\\1`, 'g'), `id=$1${newId}$1`);
-              out = out.split(`url(#${oldId})`).join(`url(#${newId})`);
-              out = out.split(`href="#${oldId}"`).join(`href="#${newId}"`);
-              out = out.split(`href='#${oldId}'`).join(`href='#${newId}'`);
-            }
-            return out;
-          };
-
-          const insertBeforeLayerJS = (svgStr, layerIds, groupXml, comment) => {
-            const joined = layerIds.map(id => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-            const pat = new RegExp(`(<g\\b[^>]*id=["'](?:${joined})["'][^>]*>)`, 'i');
-            if (pat.test(svgStr)) {
-              return svgStr.replace(pat, `<!-- ${comment} -->\n  ${groupXml}\n  $1`);
-            }
-            return svgStr.replace(/<\/svg\s*>/i, `\n  <!-- ${comment} -->\n  ${groupXml}\n</svg>`);
-          };
-
-          // 多段階ステージ出力マージ用ヘルパー（Z順スロット挿入・ID分離・全安全策適用）
-          const mergeStageOutputJS = (baseSvgStr, rawStageOut, stagePrefix, groupSpecs) => {
-            let cleaned = String(rawStageOut || '').trim()
-              .replace(/^```[a-zA-Z]*\s*/, '')
-              .replace(/\s*```$/, '')
-              .trim();
-            if (!cleaned) return null;
-            cleaned = sanitizeSvgFragmentJS(cleaned);
-
-            const keepIds = new Set(groupSpecs.map(spec => spec.id));
-            cleaned = namespaceStageIdsJS(cleaned, stagePrefix, keepIds);
-
-            const defsMatch = cleaned.match(/<defs[^>]*>([\s\S]*?)<\/defs>/i);
-            const extraDefs = defsMatch ? defsMatch[1].trim() : '';
-            const withoutDefs = cleaned.replace(/<defs[^>]*>[\s\S]*?<\/defs>/gi, '').trim();
-
-            let merged = baseSvgStr;
-            if (extraDefs) {
-              if (/<\/defs>/i.test(merged)) {
-                merged = merged.replace(/<\/defs>/i, `\n  <!-- ${stagePrefix} Extra Defs -->\n  ${extraDefs}\n</defs>`);
-              } else {
-                merged = merged.replace(/(<svg[^>]*>)/i, `$1\n<defs>\n  ${extraDefs}\n</defs>`);
-              }
-            }
-
-            let matchedAny = false;
-            for (const spec of groupSpecs) {
-              const gXml = extractBalancedGroupById(withoutDefs, spec.id);
-              if (gXml) {
-                matchedAny = true;
-                if (spec.beforeLayers && spec.beforeLayers.length > 0) {
-                  merged = insertBeforeLayerJS(merged, spec.beforeLayers, gXml, `${stagePrefix} ${spec.id}`);
-                } else {
-                  merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- ${stagePrefix} ${spec.id} -->\n  ${gXml}\n</svg>`);
-                }
-              }
-            }
-
-            if (!matchedAny) {
-              const firstG = withoutDefs.indexOf('<g');
-              const lastGEnd = withoutDefs.lastIndexOf('</g>');
-              if (firstG === -1 || lastGEnd === -1 || lastGEnd <= firstG) return null;
-              const fallbackG = withoutDefs.slice(firstG, lastGEnd + 4);
-              const defaultBefore = groupSpecs[0] && groupSpecs[0].beforeLayers;
-              if (defaultBefore && defaultBefore.length > 0) {
-                merged = insertBeforeLayerJS(merged, defaultBefore, fallbackG, `${stagePrefix} fallback`);
-              } else {
-                merged = merged.replace(/<\/svg\s*>/i, `\n  <!-- ${stagePrefix} fallback -->\n  ${fallbackG}\n</svg>`);
-              }
-            }
-            return repairAndValidateSvgJS(merged);
-          };
-
-          // Stage 5 最終水彩紙テクスチャ＆温かなビネット合成ヘルパー
-          const injectWatercolorPaperFinishJS = (svgStr) => {
-            const paperDefs = `
-  <!-- Stage 5 Watercolor Paper Material Defs -->
-  <filter id="s5final-paper-texture" x="0%" y="0%" width="100%" height="100%">
-    <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" seed="7" result="grain"/>
-    <feColorMatrix type="matrix" values="0 0 0 0 0.52  0 0 0 0 0.43  0 0 0 0 0.32  0 0 0 0.045 0" in="grain" result="warmGrain"/>
-  </filter>
-  <radialGradient id="s5final-warm-vignette" cx="50%" cy="50%" r="72%">
-    <stop offset="68%" stop-color="#fff8ee" stop-opacity="0"/>
-    <stop offset="100%" stop-color="#d8bfa0" stop-opacity="0.14"/>
-  </radialGradient>`;
-            const paperOverlay = `
-  <!-- Stage 5 Watercolor Paper & Edge Softening Overlay -->
-  <g id="s5final-paper-finish" pointer-events="none">
-    <rect x="0" y="0" width="800" height="600" filter="url(#s5final-paper-texture)" opacity="0.82"/>
-    <rect x="0" y="0" width="800" height="600" fill="url(#s5final-warm-vignette)"/>
-  </g>`;
-            let out = svgStr;
-            if (/<\/defs>/i.test(out)) {
-              out = out.replace(/<\/defs>/i, `${paperDefs}\n</defs>`);
-            } else {
-              out = out.replace(/(<svg[^>]*>)/i, `$1\n<defs>${paperDefs}\n</defs>`);
-            }
-            out = out.replace(/<\/svg\s*>/i, `${paperOverlay}\n</svg>`);
-            return repairAndValidateSvgJS(out) || svgStr;
-          };
-
-          // 候補モデル（404となる gemini-2.5-flash は除外し、安定高速モデルを優先）
-          const candidateModels = ['gemini-3.5-flash-lite', 'gemini-3-flash-preview', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'];
-          const modelAttemptLogs = [];
-
-          const callGeminiStageJS = async (promptText, preferredModel, timeoutMs, thinkingBudget, validatorFn) => {
-            const ordered = preferredModel
-              ? [preferredModel, ...candidateModels.filter(m => m !== preferredModel)]
-              : candidateModels;
-            for (const modelName of ordered) {
-              try {
-                const genConfig = { temperature: 0.35, maxOutputTokens: 32768 };
-                if (modelName === 'gemini-3-flash-preview' && thinkingBudget > 0) {
-                  genConfig.thinkingConfig = { thinkingBudget };
-                }
-                const t0 = Date.now();
-                const res = await fetch(
-                  `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
-                  {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      contents: [{ parts: [{ text: promptText }] }],
-                      generationConfig: genConfig
-                    }),
-                    signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined
-                  }
-                );
-                recordApiCall(res.headers, res.status);
-                if (res.ok) {
-                  const data = await res.json();
-                  const parts = data?.candidates?.[0]?.content?.parts || [];
-                  const rawText = parts.filter(p => !p.thought && typeof p.text === 'string').map(p => p.text).join('\n');
-                  const validated = validatorFn(rawText);
-                  if (validated) {
-                    return { svg: validated, model: modelName, elapsedMs: Date.now() - t0 };
-                  }
-                  modelAttemptLogs.push(`❌ ${modelName}: SVG検証エラー(要素不足/破損)`);
-                  logDiag(`⚠️ モデル ${modelName} のSVG出力が検証を通過しませんでした (raw=${rawText.length}文字)。次を試行します。`);
-                } else {
-                  if (modelName === 'gemini-3.5-flash' && res.status === 503) {
-                    state.gemini35Flash503At = Date.now();
-                  }
-                  modelAttemptLogs.push(`❌ ${modelName}: HTTP ${res.status}`);
-                  logDiag(`モデル ${modelName} 応答ステータス: ${res.status}。次を試行します。`);
-                }
-              } catch (mErr) {
-                modelAttemptLogs.push(`❌ ${modelName}: ${mErr.name === 'TimeoutError' ? 'タイムアウト' : mErr.message}`);
-                logDiag(`モデル ${modelName} エラー: ${mErr.message}。次を試行します。`);
-              }
-            }
-            return null;
-          };
 
           // --- Stage 1A プロンプト（特大 50〜100%：背景・空間 ＋ 大 15〜50%：大型構成物の精密土台） ---
           // 事前辞書によるテーマ判定を行わず、キャンバス占有面積の大きい要素から階層分解して構築する
