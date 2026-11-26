@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261126_01';
+  const APP_VERSION = 'v20261126_02';
   const APP_VERSION_TITLE = '2026-11-24 プロンプト履歴の自動保存＆読み込み・編集・再描画メニュー追加';
 
   function escapeHtml(str) {
@@ -2588,7 +2588,7 @@ ${levelRules}
   }
 
   function zSortSvgLayerChildrenJS(doc) {
-    const targetIds = ['layer-people', 'layer-people-and-pet', 's4-characters-detail'];
+    const targetIds = ['layer-people', 'layer-people-and-pet', 's4-characters-detail', 'layer-m-subjects', 's4-m-detail'];
     let changed = false;
     for (const lid of targetIds) {
       const layer = doc.getElementById(lid);
@@ -5344,22 +5344,17 @@ ${levelRules}
       }
 
       // =========================================================================
-      // 2. 6段階・プログレッシブ超細密オーダーメイドSVG情景画生成
-      //    Stage 1A (空間・建築・背景・全面下地畳) → Stage 1B (主役・人物・家具)
-      //    → Stage 2 (窓外/建築細密・Z順分離) → Stage 3 (自然・床・静物)
-      //    → Stage 4 (人物・ペット専門集中) → Stage 5 (光・季節モチーフ・水彩紙仕上げ)
+      // 2. 6段階・辞書ゼロ「面積スケール階層型」プログレッシブ超細密SVG情景画生成
+      //    事前キーワード辞書を使わず、キャンバス占有面積（特大→大→中→極小）の順に階層分解して描画
+      //    Stage 1A (特大50〜100%: 大背景・空間 + 大15〜50%: 大型構成物)
+      //    → Stage 1B (中5〜25%: 主役オブジェクト)
+      //    → Stage 2 (特大層への超細密描き加え + 窓外背面分離)
+      //    → Stage 3 (大層への超細密描き加え)
+      //    → Stage 4 (中層・主役への集中超細密描き加え + 自動Z順ソート)
+      //    → Stage 5 (極小1%未満: 光・空気感・水彩紙仕上げ)
       // =========================================================================
       if (!mediaDataUrl) {
         try {
-          const sceneTextForDetect = `${cleanTitle} ${cleanElements}`;
-          const hasJapaneseRoomHint = /(?:和室|座敷|畳|炬燵|こたつ|襖|ふすま|障子|縁側|床の間|茶の間)/.test(sceneTextForDetect);
-          const hasOtherIndoorHint = /(?:部屋|室内|家の中|居間|台所|キッチン|喫茶店|カフェ|店内|教室|体育館|廊下|病院|リビング|ダイニング|寝室|書斎|レストラン|食堂|電車の中|車内|お店の中)/.test(sceneTextForDetect);
-          const hasStrongOutdoorMain = /(?:校庭|通学路|並木道|校門|公園|海辺|海岸|砂浜|山頂|登山|畑|田んぼ|川原|河川敷|運動会|商店街|駅前|神社|お寺の境内|花畑|牧場|遊園地|動物園|お祭り|花火|港|漁港|湖|渓谷|森林|雪山)/.test(sceneTextForDetect);
-          const isJapaneseRoom = hasJapaneseRoomHint && !hasStrongOutdoorMain;
-          const isOtherIndoor = !isJapaneseRoom && hasOtherIndoorHint && !hasStrongOutdoorMain;
-          const isIndoorScene = isJapaneseRoom || isOtherIndoor;
-          const sceneLayoutLabel = isJapaneseRoom ? '和室レイアウト' : (isOtherIndoor ? '一般室内レイアウト' : '屋外・風景レイアウト');
-
           const countSvgVectors = (svgStr) => (String(svgStr || '').match(/<(?:path|polygon|polyline|rect|circle|ellipse|line)\b/gi) || []).length;
 
           // プログレッシブ先行表示：Stage 1A 完了時点でキャンバスへ表示し、下部コンパクトバーへ退避
@@ -5379,9 +5374,9 @@ ${levelRules}
           };
 
           if (dom.drawingSubtext) {
-            dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」で空間と背景の土台を描いています（第1/6段階）...`;
+            dom.drawingSubtext.textContent = `AI画家が「${artStyle.name}」で大きな背景・空間と大型要素を描いています（第1/6段階）...`;
           }
-          logDiag(`AI6段階プログレッシブSVG描画を開始します [${sceneLayoutLabel}]: 「${cleanTitle}」 (画風: ${artStyle.name}) - 内容: 「${cleanElements}」`);
+          logDiag(`AI6段階プログレッシブSVG描画を開始します [面積スケール階層型・完全汎用]: 「${cleanTitle}」 (画風: ${artStyle.name}) - 内容: 「${cleanElements}」`);
 
           const styleDesc = artStyleKey === 'realistic'
             ? '写実的でリアルな情景（精密な光と影、被写界深度、立体感）'
@@ -5589,55 +5584,25 @@ ${levelRules}
             return null;
           };
 
-          // --- Stage 1A プロンプト（空間・建築・背景・床/地面/水面の精密土台：全テーマ汎用対応） ---
-          const stage1aLayout = isJapaneseRoom
-            ? `【第1A段階ミッション：和室空間・建築・窓外の景色・床面の精密土台（目標 110〜150要素）】
-※ この段階では **人物・ペット・中央の主要家具（テーブル・炬燵等）は一切描かないでください**（次の第1B段階で精密に造形します）。
-※ 【描く情景・ユーザーの言葉】に書かれた場所・季節・時間帯・様子に100%忠実に描くこと（語られていない要素を勝手に固定で描かないこと）。
+          // --- Stage 1A プロンプト（特大 50〜100%：背景・空間 ＋ 大 15〜50%：大型構成物の精密土台） ---
+          // 事前辞書によるテーマ判定を行わず、キャンバス占有面積の大きい要素から階層分解して構築する
+          const stage1aLayout = `【第1A段階ミッション：キャンバス占有面積が大きい要素（特大50〜100% ＋ 大15〜50%）の精密土台（目標 110〜150要素）】
+※ 事前テンプレートや決め打ちは一切使わず、【描く情景・ユーザーの言葉】に書かれた内容だけを、**キャンバス（800×600）に占める面積が大きい順**に以下のレイヤーへ分類して描いてください。
+※ この段階では **中規模の主役（面積5〜25%程度：人物・動物・中型の家具や小物・象徴的な近景モチーフ等）はまだ描かないでください**（次の第1B段階で精密に造形するため、主役が美しく収まるスペースを確保すること）。
 
-【必須レイヤー構造と精細造形ルール】
-- 12個以上の \`<linearGradient>\` / \`<radialGradient>\` を活用し、情景の雰囲気と時間帯に合う豊かな色彩にすること。
-- 天井や部屋の上部に青空を直接描くことは厳禁。天井板・長押・鴨居・柱・壁で温かく囲まれた自然な和室空間にすること。
-1. \`<g id="layer-outside-view">\`（右側 x=505〜760, y=105〜358 の開いた障子や窓の向こう側に見える外の景色）：
-   - 情景の季節・時間帯に合った空・雲・庭木や花・風景を、正円だけでなく優雅なベジェ曲線 \`<path>\` で描写すること。
-2. \`<g id="layer-room-shell">\`（室内の骨格・建築・建具）：
-   - 画面上部 y=0〜108：パースの効いた天井板と竿縁、部屋に合う照明（襖の中央には垂らさないこと）
-   - 左右端（x=0〜50, x=750〜800）：立体感のある柱と温かな壁（白い塗り残し厳禁）
-   - 長押・鴨居は y=105〜122 に、敷居は y=352〜364 に通すこと。
-   - 左〜中央奥（x=55〜485, y=120〜354）：情景に合う襖・床の間・壁・棚などの背景建具
-   - 右側（x=495〜750, y=120〜354）：開いた障子戸や縁側窓枠（開口部から外の景色がしっかり見えるようにすること）
-3. \`<g id="layer-floor">\`（奥行きのある畳敷き・床面 y=354〜600）：
-   - **【隙間防止・絶対厳守】** \`<g id="layer-floor">\` の**最初の要素**として必ず \`<rect x="0" y="352" width="800" height="248" fill="url(#floorBaseGrad)" />\` の全面下地矩形を敷き、白い三角の隙間が絶対に発生しないようにすること！
-   - その上に一点透視パースの畳・畳縁・縁側板張り等を重ね、中央エリア（x=220〜580, y=395〜555）は次段階の主役配置用に綺麗に空けておくこと。`
-            : isOtherIndoor
-              ? `【第1A段階ミッション：室内空間・建築・窓外の景色・床面の精密土台（目標 110〜150要素）】
-※ この段階では **人物・ペット・中央の主要家具（テーブル・椅子等）は一切描かないでください**（次の第1B段階で精密に造形します）。
-※ 【描く情景・ユーザーの言葉】に書かれた場所（喫茶店・洋室・教室・食堂・車内・リビング等）・季節・時間帯に100%忠実に描くこと！
-
-【必須レイヤー構造と精細造形ルール】
-- 12個以上の \`<linearGradient>\` / \`<radialGradient>\` を活用し、情景の雰囲気と時間帯に合う豊かな色彩にすること。
-- 天井や部屋の上部に青空を直接描くことは厳禁。天井・梁・照明・壁面・窓枠で自然に囲まれた室内空間にすること。
-1. \`<g id="layer-outside-view">\`（窓の向こう側に見える外の景色）：
-   - 情景の季節・時間帯・場所に合った空・街並み・自然風景を優雅なベジェ曲線 \`<path>\` で描写すること。
-2. \`<g id="layer-room-shell">\`（室内の骨格・建築・壁面・建具）：
-   - 画面上部 y=0〜108：パースの効いた天井・照明器具
-   - 左右端・奥の壁面：情景に合う壁紙・木パネル・棚・黒板・カウンター・カーテン・窓枠（白い塗り残し厳禁）
-3. \`<g id="layer-floor">\`（奥行きのある床面 y=354〜600）：
-   - **【隙間防止・絶対厳守】** \`<g id="layer-floor">\` の**最初の要素**として必ず \`<rect x="0" y="352" width="800" height="248" fill="url(#floorBaseGrad)" />\` の全面下地矩形を敷き、白い隙間が絶対に発生しないようにすること！
-   - その上に一点透視パースのフローリング・タイル・絨毯等を重ね、中央エリアは次段階の主役配置用に綺麗に空けておくこと。`
-              : `【第1A段階ミッション：屋外・風景空間（空・遠景・中景・地面/水面）の精密土台（目標 110〜150要素）】
-※ この段階では **手前の主役（人物・動物・主役の乗り物や船・象徴的な近景モチーフ等）は一切描かないでください**（次の第1B段階で精密に造形します）。
-※ 【描く情景・ユーザーの言葉】に書かれたテーマ（海辺・山・花畑・公園・校舎・街並み・お祭り・川・神社・夕日・夜景など）に100%忠実に描くこと！語られていない校舎や建物を勝手に出さないこと。
-
-【必須レイヤー構造と精細造形ルール（簡易図形・正円の木・平面的な箱を厳禁！）】
-- 12個以上の \`<linearGradient>\` / \`<radialGradient>\` を活用し、季節と時間帯（朝・昼・夕焼け・夜）を豊かに表現すること。
-1. \`<g id="layer-sky">\`（遠景・空 y=0〜270）：季節と時間帯に合った多層グラデーションの空、柔らかいベジェ曲線の雲、遠くの霞んだ山並み・稜線・太陽/月/星・水平線
-2. \`<g id="layer-mid-buildings">\`（中景の主要背景 y=115〜380）：情景に含まれる建物・街並み・橋・鳥居・灯台・校舎・屋台・遠景の海や湖面・山肌・森林など。屋根勾配・陰影・立体感を持って配置し、手前（y=380〜600）に広い空間を確保すること。
-3. \`<g id="layer-mid-trees">\`（左右や中景の自然物・樹木・花群・岩場・構造物）：**正円や単純な楕円だけで樹冠や花を描かないこと！** 根元から枝分かれする曲線幹 \`<path>\` と不規則に波打つ有機的な葉群・花群・岩や波のレイヤーを何層も重ねて表現すること。
-4. \`<g id="layer-ground">\`（近景の地面・水面・砂浜・花畑・道 y=365〜600）：奥へ吸い込まれる一点透視の道・芝生・砂浜・波打ち際・花壇・広場・水面など。必ず全面を隙間なく塗りつぶし、主役が配置される手前エリア（y=410〜580）を美しく確保すること。`;
+【必須レイヤー構造（大きい順＝奥から手前へ）】
+- 12個以上の \`<linearGradient>\` / \`<radialGradient>\` を活用し、季節・時間帯・雰囲気を豊かに表現すること。
+- **白い塗り残し・隙間は完全厳禁！** 画面全体（0,0〜800,600）を必ず背景・床・地面・水面等で隙間なく覆うこと。
+1. \`<g id="layer-xl-outside">\`（**開口部の向こう側の外景・任意**）：
+   - 室内・車内・門やアーチ越しなど「枠や開口部の奥に別の景色が見える構図」のときだけ、その開口部の向こうに見える空や景色をここに描くこと（開口部がない構図では空の \`<g id="layer-xl-outside"></g>\` のままで可）。
+2. \`<g id="layer-xl-backdrop">\`（**特大・面積 50〜100%：キャンバス全体を覆う大背景・空間基盤**）：
+   - 屋外なら空・遠景・海・地面/水面/砂浜/道など、室内なら天井・壁・柱・窓枠・全面下地付きの床面（最初の要素として全面下地 \`<rect>\` を敷き隙間をゼロにする）、テーブル上の静物画なら背景とテーブル面など、画面の大半を占める基盤空間を奥→手前の順に立体的に描くこと。
+   - 室内シーンで天井や壁の上部に青空を直接描くことは厳禁（外景は必ず \`layer-xl-outside\` 側へ分離すること）。
+3. \`<g id="layer-l-structures">\`（**大・面積 15〜50%：画面の大きな面積を占める大型構成物・大景観**）：
+   - 情景に含まれる大きな塊（例：建物・山並み/山肌・大きな樹木や並木・船や電車・大きなテーブルや炬燵・花畑の群生・岩場・屋台群・大きな器や背景調度など、キャンバス内で15〜50%の面積を占める主要構造物）を、**正円や単純な箱ではなく有機的なベジェ曲線 \`<path>\` と多層グラデーション**で立体的に造形すること。`;
 
           const stage1aPrompt = customRawSvgPrompt || `あなたは高齢者・回想法ケアのための情景画専門アーティスト（${artStyle.svgRoleInstruction}）です。
-ユーザーの思い出の情景を描くため、まず【第1A段階：空間・背景・建築・風景の精密土台】となる【${styleDesc}】SVG（viewBox="0 0 800 600"）を作成してください。
+ユーザーの思い出の情景を描くため、まず【第1A段階：キャンバスに占める面積が大きい要素（特大・大）の精密土台】となる【${styleDesc}】SVG（viewBox="0 0 800 600"）を作成してください。
 
 【描く情景・ユーザーの言葉（最優先遵守）】:
 ${cleanElements}
@@ -5660,12 +5625,12 @@ ${stage1aLayout}
             cleanElements,
             feedback,
             artStyleKey,
-            isIndoorScene,
+            layoutMode: 'scale_hierarchy',
             prompt: stage1aPrompt
           });
 
           // === Stage 1A 実行 ===
-          logDiag(`AI6段階SVG描画 [Stage 1A/6: 空間・背景土台] を試行中...`);
+          logDiag(`AI6段階SVG描画 [Stage 1A/6: 特大・大要素（空間・背景・大型構成物）土台] を試行中...`);
           const res1a = await callGeminiStageJS(stage1aPrompt, null, 90000, 768, repairAndValidateSvgJS);
 
           if (res1a && res1a.svg) {
@@ -5679,25 +5644,14 @@ ${stage1aLayout}
 
             if (!skipPass2) {
               // Stage 1A 完了時点でキャンバスへ先行表示（プログレッシブ）
-              renderProgressiveSvgPreview(currentSvg, `🎨 空間の下絵が完成（第2/6段階：主役を描き込んでいます...）`);
+              renderProgressiveSvgPreview(currentSvg, `🎨 大きな背景と構図が完成（第2/6段階：中規模の主役を造形中...）`);
               if (dom.drawingSubtext) {
-                dom.drawingSubtext.textContent = `人物・ペット・主要家具を丁寧に造形しています（第2/6段階）...`;
+                dom.drawingSubtext.textContent = `中規模の主役（人物・動物・中心モチーフ）を造形しています（第2/6段階）...`;
               }
 
-              // === Stage 1B 実行：主役（人物・ペット・主要家具・テーマの象徴モチーフ）の精密ベース造形 ===
-              const stage1bSpec = isIndoorScene
-                ? `以下の2つの \`<g>\` グループに分けて、**合計110〜150個以上の有機的なベクトル要素**で情景の主役（家具・静物・人物・ペット）を絵画品質で造形してください：
-1. \`<g id="layer-main-furniture">\`（部屋中央のテーブル・炬燵・椅子・カウンター・卓上の料理や食器・花瓶など情景に合う主要家具と静物）：パースに合った自然な立体感と布のドレープ、接地影。
-2. \`<g id="layer-people-and-pet">\`（情景に登場する人物・ペット。人物やペットがいない静物・室内風景テーマの場合は、手前の象徴的な小物・花・観葉植物・調度品を精細に造形）：
-   - 人物・ペットを描く場合は **こけし型・棒人形・正円＋三角だけの簡易造形を厳禁！** 必ず滑らかなベジェ曲線（\`<path d="M... C...">\`）で自然な頭身・髪型・横顔・衣服・動物の骨格と四肢を造形すること。
-   - **1人（1体）ずつ独立した \`<g>\`** に分け、**奥（足元 y が小さい）を先に、手前（足元 y が大きい）を後に**配置すること。`
-                : `\`<g id="layer-people">\` の中に、**合計110〜150個以上の有機的なベクトル要素**を使って、この情景テーマの主役となる対象を絵画品質の自然なプロポーションで造形してください：
-- **人物や動物が登場するテーマの場合**：**棒人間・正円頭・四角い胴体・1本の棒脚（\`<line>\`）を完全厳禁！** ベジェ曲線 \`<path>\` で自然な頭身・髪型・肩と腕・衣服・脚と靴・動物の毛並みや四肢・接地影まで丁寧に造形すること。必ず **1人（1体）ずつ独立した \`<g>\`** に分け、**奥（足元 y が小さい）を先に、手前（足元 y が大きい）を後に**記述し、奥の人物が手前の顔に被らないようX座標をずらすこと。
-- **人物が登場しない風景・自然・乗り物・花畑テーマの場合**：情景の主役となる近景〜中景モチーフ（例：手前の大輪の花群・漁船やヨット・電車や蒸気機関車・屋台・大樹・ベンチ・鳥や蝶・桟橋・灯籠など、【情景テーマ】に最もふさわしい主役）を 110〜150要素以上で立体的・有機的に造形すること！（空のまま終わらせないこと）
-- 人物や主役は背景の建物・山・水平線に不自然にめり込まない位置（手前の道・広場・砂浜・水面・花畑 y=390〜575 等）へ美しく配置すること。`;
-
+              // === Stage 1B 実行：中規模・主役オブジェクト（面積 5〜25%）の精密ベース造形 ===
               const stage1bPrompt = `あなたは高齢者・回想法ケアのための情景画専門アーティスト（水彩絵本・主役造形専門）です。
-以下は第1A段階で描かれた【空間・背景・遠景・床/地面の精密土台SVG】（viewBox="0 0 800 600"）です。
+以下は第1A段階で描かれた【特大・大要素（背景・空間・大型構成物）の精密土台SVG】（viewBox="0 0 800 600"）です。
 
 【情景テーマ（最優先遵守）】:
 ${cleanElements}
@@ -5705,21 +5659,22 @@ ${cleanElements}
 【画風】:
 ${styleDesc}（${artStyle.promptModifier}）
 
-【第1A段階 空間・背景SVG（座標・パース・色調の参照用）】:
+【第1A段階 空間・大型構成物SVG（座標・パース・色調の参照用）】:
 ${currentSvg}
 
-【第1B段階ミッション：主役（人物・ペット・主要家具・テーマの象徴モチーフ）の精密ベース造形（目標 +110〜150要素）】
+【第1B段階ミッション：中規模の主役オブジェクト（面積 5〜25%）の精密ベース造形（目標 +110〜150要素）】
 - **ドロップシャドウ用の \`<filter>\` は使わず**、影は半透明の \`<ellipse>\` や \`<path>\` で直接描くこと。
-${stage1bSpec}
+- \`<g id="layer-m-subjects">\` の中に、**合計110〜150個以上の有機的なベクトル要素**を使って、この情景の中心となる**中規模の主役オブジェクト**を第1A段階のパース・座標に合わせて立体的に造形してください：
+  - 人物・動物/ペットが登場するテーマなら：棒人間・こけし型・正円頭＋棒脚を完全厳禁！滑らかなベジェ曲線 \`<path>\` で自然な頭身・髪型・衣服・四肢・接地影を造形すること。
+  - 人物が登場しない風景・静物・乗り物・花畑テーマなら：情景の主役となる中規模オブジェクト（例：大輪の花群、船・ヨット、電車、卓上の料理・食器・花瓶、ベンチ、灯籠、鳥や動物、象徴的な近景モチーフ等）を 110〜150要素以上で有機的に造形すること（空のまま終わらせないこと！）。
+- **前後関係（Z順）と重なり防止を絶対厳守**：必ず **1体（1オブジェクト）ずつ独立した \`<g>\`** に分け、**奥（足元/下端 y が小さい）を先に、手前（下端 y が大きい）を後に**記述し、奥の主役が手前の主役の顔や中心部に不自然に被らないよう配置すること。
 
 【出力形式（絶対厳守）】
-出力は \`<defs>...</defs>\`（IDは必ず \`s1b-\` で始めること）と指定の \`<g id="...">...</g>\` のみを出力してください。\`<svg>\` タグや解説文・マークダウン枠（\`\`\`）は一切不要です。`;
+出力は \`<defs>...</defs>\`（IDは必ず \`s1b-\` で始めること）と \`<g id="layer-m-subjects">...</g>\` のみを出力してください。\`<svg>\` タグや解説文・マークダウン枠（\`\`\`）は一切不要です。`;
 
-              const s1bSpecs = isIndoorScene
-                ? [{ id: 'layer-main-furniture', beforeLayers: null }, { id: 'layer-people-and-pet', beforeLayers: null }]
-                : [{ id: 'layer-people', beforeLayers: null }];
+              const s1bSpecs = [{ id: 'layer-m-subjects', beforeLayers: null }];
 
-              logDiag(`AI6段階SVG描画 [Stage 1B/6: 主役・人物・家具ベース] を試行中...`);
+              logDiag(`AI6段階SVG描画 [Stage 1B/6: 中規模・主役オブジェクト造形] を試行中...`);
               const prev1aVec = countSvgVectors(currentSvg);
               const res1b = await callGeminiStageJS(stage1bPrompt, primaryModel, 85000, 512, (raw) => {
                 const m = mergeStageOutputJS(currentSvg, raw, 's1b-', s1bSpecs);
@@ -5731,118 +5686,103 @@ ${stage1bSpec}
                 finalVecCount = countSvgVectors(currentSvg);
                 completedStages = 2;
                 logDiag(`✅ [Stage 1B/6 完了] (${res1b.model}): +${finalVecCount - prev1aVec}要素 → 合計${finalVecCount}要素 (${(res1b.elapsedMs / 1000).toFixed(1)}秒)`);
-                renderProgressiveSvgPreview(currentSvg, `🎨 主役の造形が完了（第3/6段階：背景と建築を細密化中...）`);
+                renderProgressiveSvgPreview(currentSvg, `🎨 主役の造形が完了（第3/6段階：特大・背景層を細密化中...）`);
               }
 
-              // Stage 2〜5 は「Stage 1A+1B 精密ベースSVG」を参照して順次Z順合成
+              // Stage 2〜5 は「Stage 1A+1B で実際に描かれた各面積スケール層」を実コード抜粋で参照し、順次Z順合成
               const baseFoundationSvg = currentSvg;
-              const peopleLayerId = isIndoorScene ? 'layer-people-and-pet' : 'layer-people';
-              const extractedPeopleCode = extractBalancedGroupById(baseFoundationSvg, peopleLayerId) || '（ベースSVG内の人物・ペット要素を参照）';
+              const extractedXlOutside = extractBalancedGroupById(baseFoundationSvg, 'layer-xl-outside') || '';
+              const hasRealOutsideLayer = !!(extractedXlOutside && countSvgVectors(extractedXlOutside) > 0);
+              const extractedXlBackdrop = extractBalancedGroupById(baseFoundationSvg, 'layer-xl-backdrop') || '（ベースSVG内の特大・背景空間要素を参照）';
+              const extractedLStructures = extractBalancedGroupById(baseFoundationSvg, 'layer-l-structures') || '（ベースSVG内の大型構成物要素を参照）';
+              const extractedMSubjects = extractBalancedGroupById(baseFoundationSvg, 'layer-m-subjects') || '（ベースSVG内の中規模・主役要素を参照）';
 
               const detailStages = [
                 {
                   num: 3,
-                  label: isIndoorScene ? '背景・室内建築・窓外の細密化' : '遠景・空・背景構造の細密化',
+                  label: '特大層（背景・空間・床/空）の細密描き加え',
                   prefix: 's2-',
-                  specs: isIndoorScene
+                  specs: hasRealOutsideLayer
                     ? [
-                        { id: 's2-outside-detail', beforeLayers: ['layer-room-shell'] },
-                        { id: 's2-arch-bg', beforeLayers: ['layer-floor', 'layer-main-furniture', 'layer-people-and-pet'] }
+                        { id: 's2-xl-outside', beforeLayers: ['layer-xl-backdrop', 'layer-l-structures', 'layer-m-subjects'] },
+                        { id: 's2-xl-detail', beforeLayers: ['layer-l-structures', 'layer-m-subjects'] }
                       ]
-                    : [{ id: 's2-arch-bg', beforeLayers: ['layer-mid-trees', 'layer-ground', 'layer-people'] }],
-                  prompt: isIndoorScene
-                    ? `あなたは美術館品質の情景画を手掛ける【背景・建築・窓外景色ディテール専門】のSVGアーティストです。
-以下は精密ベースSVG（viewBox="0 0 800 600"）です。
+                    : [{ id: 's2-xl-detail', beforeLayers: ['layer-l-structures', 'layer-m-subjects'] }],
+                  prompt: `あなたは美術館品質の情景画を手掛ける【特大・背景空間ディテール専門】のSVGアーティストです。
+以下は第1A・1B段階で描かれた精密ベースSVG（viewBox="0 0 800 600"）です。
 
 【情景テーマ（最優先遵守）】:
 ${cleanElements}
 
-【精密ベースSVG（座標・色調の参照用）】:
+【今回描き加える対象：第1A段階の特大層コード抜粋（この実在要素と座標に1pxのズレもなく重ねること！）】:
+${hasRealOutsideLayer ? `${extractedXlOutside}\n${extractedXlBackdrop}` : extractedXlBackdrop}
+
+【全体構図の参照（精密ベースSVG）】:
 ${baseFoundationSvg}
 
-【ミッション：背景・室内建築・窓外景色の超細密描き込み（目標 +110〜150要素）】
-室内と窓外の奥行き（Z順）を完全に分離するため、必ず以下の**2つの \`<g>\` グループ**に分けて出力してください：
-1. \`<g id="s2-outside-detail">\`（**窓・開いた障子の向こう側の外の景色専用**：\`layer-room-shell\` の背面に挿入されます）
-   - 開口部の外に見える情景テーマに合った空・雲・庭木・花・街並み・遠景の細密描写（部屋の内側に入り込まないよう必ずこのグループへ入れること！）
-2. \`<g id="s2-arch-bg">\`（**室内建築・壁面・建具専用**：床・家具・人物の背面に挿入されます）
-   - ${isJapaneseRoom ? '天井板の木目と竿縁、左右柱の木目と陰影、長押・鴨居（y=105〜122のみ。襖の中央を横切る不要な水平線は絶対禁止！）、襖の本画と引手、障子戸の繊細な組子桟と和紙の繊維感' : '天井・照明の光沢、壁面の質感・木目・レンガ・ポスターや額縁・棚の小物・カーテンのひだ・窓サッシの立体感と反射光'}
-出力は \`<defs>...</defs>\`（IDは必ず \`s2-\` 始まり）と \`<g id="s2-outside-detail">...</g>\` および \`<g id="s2-arch-bg">...</g>\` のみ。\`<svg>\` や解説文・マークダウン枠は一切不要です。`
-                    : `あなたは美術館品質の情景画を手掛ける【遠景・空・背景建築/自然構造ディテール専門】のSVGアーティストです。
-以下は精密ベースSVG（viewBox="0 0 800 600"）です。
-
-【情景テーマ（最優先遵守）】:
-${cleanElements}
-
-【精密ベースSVG（座標・色調の参照用）】:
-${baseFoundationSvg}
-
-【ミッション：遠景・空・背景構造の超細密描き込み（目標 +110〜150要素）】
-ベースSVGの座標に1pxのズレもなく重なるよう、【情景テーマ】に即した遠景と背景の細部を \`<g id="s2-arch-bg">...</g>\` へ徹底的に描き込んでください（手前の自然物・地面・主役の背面に挿入されます）：
-- 建物・街並み・橋・鳥居・灯台・校舎等がある場合：屋根瓦・庇の影・外壁目地・窓サッシと反射光・看板・提灯・欄干・門柱
-- 海・山・川・森・花畑・夕焼け・夜景等の自然風景の場合：重なり合う雲の立体陰影、遠景の山稜・森林のシルエット層、水平線の輝き、波頭・水面のきらめき、遠くの船影や灯り、星空や月の光輪
-出力は \`<defs>...</defs>\`（IDは必ず \`s2-\` 始まり）と \`<g id="s2-arch-bg">...</g>\` のみ。\`<svg>\` や解説文・マークダウン枠は一切不要です。`
+【ミッション：特大層（背景・空間基盤）への超細密描き加え（目標 +110〜150要素）】
+上記の特大層に実際に描かれている要素（空・雲・海・水平線・天井・壁・建具・床面・地面・砂浜・机面等）の質感・陰影・パース目地・奥行きを徹底的に描き加えてください。
+${hasRealOutsideLayer
+  ? `※ 開口部の外景と手前の空間のZ順を完全に分離するため、必ず以下の**2つの \`<g>\` グループ**に分けて出力してください：
+1. \`<g id="s2-xl-outside">\`（\`layer-xl-outside\` の外景ディテール専用：\`layer-xl-backdrop\` の背面に挿入されるため、壁や枠の内側へはみ出さない）
+2. \`<g id="s2-xl-detail">\`（\`layer-xl-backdrop\` の背景・壁・天井・床・地面ディテール専用：\`layer-l-structures\` の背面に挿入されます）
+出力は \`<defs>...</defs>\`（IDは必ず \`s2-\` 始まり）と \`<g id="s2-xl-outside">...</g>\` および \`<g id="s2-xl-detail">...</g>\` のみ。解説やマークダウン枠は一切不要です。`
+  : `出力は \`<defs>...</defs>\`（IDは必ず \`s2-\` 始まり）と \`<g id="s2-xl-detail">...</g>\`（\`layer-l-structures\` の背面に挿入されます）のみ。\`<svg>\` や解説文・マークダウン枠は一切不要です。`}`
                 },
                 {
                   num: 4,
-                  label: isIndoorScene ? '床面・家具・静物小物の描き込み' : '自然・地面・水面・季節感の描き込み',
+                  label: '大層（大型構成物・自然・大家具）の細密描き加え',
                   prefix: 's3-',
-                  specs: isIndoorScene
-                    ? [
-                        { id: 's3-floor-detail', beforeLayers: ['layer-main-furniture', 'layer-people-and-pet'] },
-                        { id: 's3-props-detail', beforeLayers: ['layer-people-and-pet'] }
-                      ]
-                    : [
-                        { id: 's3-trees-detail', beforeLayers: ['layer-ground', 'layer-people'] },
-                        { id: 's3-ground-detail', beforeLayers: ['layer-people'] }
-                      ],
-                  prompt: isIndoorScene
-                    ? `あなたは美術館品質の情景画を手掛ける【床面・家具・静物ディテール専門】のSVGアーティストです。
+                  specs: [{ id: 's3-l-detail', beforeLayers: ['layer-m-subjects'] }],
+                  prompt: `あなたは美術館品質の情景画を手掛ける【大型構成物・景観ディテール専門】のSVGアーティストです。
 【情景テーマ（最優先遵守）】: ${cleanElements}
-【精密ベースSVG】: ${baseFoundationSvg}
-【ミッション（目標 +110〜150要素）】以下の2グループに分けて出力してください：
-1. \`<g id="s3-floor-detail">\`（床面専用・家具の背面）：${isJapaneseRoom ? 'パースに沿った畳の繊細な織り目、畳縁の文様、縁側板張りの木目と光沢' : 'パースに沿ったフローリングの木目やタイルの目地、絨毯の織り模様、窓光の床反射'}。
-2. \`<g id="s3-props-detail">\`（家具・静物専用・人物の背面）：情景テーマに登場する家具の質感・布の柄や皺・木目・卓上の食器や飲み物・料理・花瓶・本などの細密ディテール。**天板の上の静物が柄で潰れないよう、布模様と天板・小物を明確に描き分けること！**
-出力は \`<defs>...</defs>\`（IDは \`s3-\` 始まり）と \`<g id="s3-floor-detail">...</g>\` および \`<g id="s3-props-detail">...</g>\` のみ。解説やマークダウン枠は不要。`
-                    : `あなたは美術館品質の情景画を手掛ける【自然・地面・水面・周囲の小物ディテール専門】のSVGアーティストです。
-【情景テーマ（最優先遵守）】: ${cleanElements}
-【精密ベースSVG】: ${baseFoundationSvg}
-【ミッション（目標 +110〜150要素）】以下の2グループに分けて出力してください：
-1. \`<g id="s3-trees-detail">\`（中景の自然物・植生・構造物専用・地面/主役の背面）：テーマに即した樹木の樹皮と無数の葉の重なり、花畑の繊細な花びらと茎葉、岩肌の陰影、屋台や柵・欄干の細部など（\`<defs>\`＋\`<use>\` 展開も歓迎）。
-2. \`<g id="s3-ground-detail">\`（近景の地面・水面・砂浜・道専用・主役の背面）：テーマに即した石畳目地・縁石・砂浜の波紋と貝殻・打ち寄せる白い波しぶき・水面の揺らぎ反射・芝生の草穂・花びらや落ち葉・木漏れ日のまだら影。
-出力は \`<defs>...</defs>\`（IDは \`s3-\` 始まり）と \`<g id="s3-trees-detail">...</g>\` および \`<g id="s3-ground-detail">...</g>\` のみ。解説やマークダウン枠は不要。`
+
+【今回描き加える対象：第1A段階の大層 \`layer-l-structures\` コード抜粋（この実在要素と座標に1pxのズレもなく重ねること！）】:
+${extractedLStructures}
+
+【全体構図の参照（精密ベースSVG）】:
+${baseFoundationSvg}
+
+【ミッション：大層（大型構成物・大景観）への超細密描き加え（目標 +110〜150要素）】
+上記の \`layer-l-structures\` に実際に描かれている大型要素（建物なら屋根瓦・窓・外壁目地・看板、樹木なら樹皮と無数の葉の重なり、山や岩なら稜線と陰影、家具なら木目や布の柄・皺、花畑なら無数の花びらと茎葉、船や電車なら構造ライン等）の細部と立体感を \`<g id="s3-l-detail">...</g>\` へ徹底的に描き加えてください（\`layer-m-subjects\` の背面に挿入されます）。
+**重要：机や天板の上に小物が乗る場合、布模様などで天板や主役を塗り潰さずクリアに見せること。**
+出力は \`<defs>...</defs>\`（IDは \`s3-\` 始まり）と \`<g id="s3-l-detail">...</g>\` のみ。解説やマークダウン枠は不要。`
                 },
                 {
                   num: 5,
-                  label: '主役（人物・動物・中心モチーフ）の集中細密化',
+                  label: '中層（主役オブジェクト）の集中超細密描き加え',
                   prefix: 's4-',
-                  specs: [{ id: 's4-characters-detail', beforeLayers: null }],
-                  prompt: `あなたは美術館品質の情景画を手掛ける【主役モチーフ・人物・動物表現専門】のSVGアーティストです。
+                  specs: [{ id: 's4-m-detail', beforeLayers: null }],
+                  prompt: `あなたは美術館品質の情景画を手掛ける【主役オブジェクト超細密表現専門】のSVGアーティストです。
 【情景テーマ（最優先遵守）】: ${cleanElements}
-【注目すべき第1B段階の \`${peopleLayerId}\` コード抜粋（この座標に1pxのズレもなく合わせること！）】:
-${extractedPeopleCode}
+
+【今回描き加える対象：第1B段階の中層 \`layer-m-subjects\` コード抜粋（この実在要素と座標に1pxのズレもなく重ねること！）】:
+${extractedMSubjects}
+
 【全体構図の参照（精密ベースSVG）】:
 ${baseFoundationSvg}
-【ミッション：主役の集中超細密描き込み（目標 +110〜150要素）】
-\`<g id="s4-characters-detail">\` の中に、第1B段階で配置した主役を徹底的に超細密化してください：
-- 人物・動物がいる場合：**1人（1体）ずつ独立した \`<g>\` で奥（y小）→手前（y大）の順に**、衣装の柄・襟やボタン・布の皺・髪の毛流れと艶・優しい表情・動物の毛並みと目鼻・手元の小物・接地影を描き込むこと。
-- 人物がいない風景・花畑・乗り物・静物テーマの場合：画面の主役モチーフ（大輪の花びらと雄しべ、船体や帆・窓のディテール、電車の車体ラインと車輪、屋台の暖簾や商品、大樹の枝葉と光沢等）の質感・陰影・ハイライトを 110〜150要素以上で徹底的に描き込むこと！
+
+【ミッション：中層（主役オブジェクト）の集中超細密描き加え（目標 +110〜150要素）】
+\`<g id="s4-m-detail">\` の中に、上記の \`layer-m-subjects\` に描かれた主役を **1体（1オブジェクト）ずつ独立した \`<g>\` で奥（y小）→手前（y大）の順に** 徹底的に超細密化してください：
+- 人物・動物なら：衣装の柄・襟やボタン・布の皺・髪の毛流れと艶・優しい表情・動物の毛並みと目鼻・手元の小物・接地影。
+- 花・乗り物・料理・家具・静物等の主役なら：花びらの脈と雄しべ、車体や船体の細部と反射光、器や料理の艶・質感・陰影。
 - ドロップシャドウ用 \`<filter>\` は使用禁止。
-出力は \`<defs>...</defs>\`（IDは \`s4-\` 始まり）と \`<g id="s4-characters-detail">...</g>\` のみ。解説やマークダウン枠は不要。`
+出力は \`<defs>...</defs>\`（IDは \`s4-\` 始まり）と \`<g id="s4-m-detail">...</g>\` のみ。解説やマークダウン枠は不要。`
                 },
                 {
                   num: 6,
-                  label: '光・空気感・季節エフェクト・水彩紙仕上げ',
+                  label: '極小要素・光・空気感・水彩紙仕上げ',
                   prefix: 's5-',
                   specs: [{ id: 's5-atmosphere-fx', beforeLayers: null }],
-                  prompt: `あなたは美術館品質の情景画を手掛ける【光・空気感・水彩エフェクト最終仕上げ専門】のSVGアーティストです。
+                  prompt: `あなたは美術館品質の情景画を手掛ける【極小モチーフ・光・空気感・水彩エフェクト最終仕上げ専門】のSVGアーティストです。
 【情景テーマ（最優先遵守）】: ${cleanElements}
 【全体構図の参照（精密ベースSVG）】:
 ${baseFoundationSvg}
-【ミッション：光と空気感・季節/時間帯モチーフの最終仕上げ（目標 +70〜110要素）】
+【ミッション：極小要素（面積1%未満）と光・空気感の最終仕上げ（目標 +70〜110要素）】
 最前面に重ねる \`<g id="s5-atmosphere-fx">...</g>\` を出力してください。
 【最重要ルール（主役を邪魔しない上品な演出）】
 - 不透明な大面積図形や、画面全体に散らばりすぎる大きな白い丸玉（ボケ玉）は厳禁！
-- 情景の時間帯（朝・昼・夕焼け・夜）と季節・雰囲気に完全連動した柔らかな斜光や夕日の照り返し（\`opacity="0.05"〜"0.14"\`）、光の帯の中に控えめに浮かぶ小さな光粒（12〜18個程度、\`opacity="0.18"〜"0.35"\`）、テーマに合う舞う花びら・落ち葉・雪・波しぶき・ホタル・湯気・鳥影やリムライト、極薄の水彩にじみ調和で感動的に仕上げてください。
+- 情景の時間帯（朝・昼・夕焼け・夜）と季節・雰囲気に完全連動した柔らかな斜光や照り返し（\`opacity="0.05"〜"0.14"\`）、光の帯の中に控えめに浮かぶ小さな光粒（12〜18個程度、\`opacity="0.18"〜"0.35"\`）、テーマに合う極小モチーフ（舞う花びら・落ち葉・雪・波しぶき・ホタル・湯気・鳥影・星屑等）やリムライト、極薄の水彩にじみ調和で感動的に仕上げてください。
 出力は \`<defs>...</defs>\`（IDは \`s5-\` 始まり）と \`<g id="s5-atmosphere-fx">...</g>\` のみ。解説やマークダウン枠は不要。`
                 }
               ];
@@ -5886,7 +5826,7 @@ ${baseFoundationSvg}
               cleanElements,
               feedback,
               artStyleKey,
-              isIndoorScene,
+              layoutMode: 'scale_hierarchy',
               prompt: stage1aPrompt,
               svgCode: currentSvg,
               svgLength: currentSvg.length,
