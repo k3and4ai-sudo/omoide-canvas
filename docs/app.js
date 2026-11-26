@@ -17,7 +17,7 @@
   // ============================================================================
   // バージョン管理 ＆ キャッシュバスター確実反映
   // ============================================================================
-  const APP_VERSION = 'v20261127_01';
+  const APP_VERSION = 'v20261127_02';
   const APP_VERSION_TITLE = '2026-11-24 プロンプト履歴の自動保存＆読み込み・編集・再描画メニュー追加';
 
   function escapeHtml(str) {
@@ -2723,14 +2723,30 @@ ${levelRules}
   }
 
   function zSortSvgLayerChildrenJS(doc) {
-    const targetIds = ['layer-people', 'layer-people-and-pet', 's4-characters-detail', 'layer-m-subjects', 's4-m-detail'];
+    const targetIds = [
+      'layer-l-structures', 's3-l-detail',
+      'layer-people', 'layer-people-and-pet', 's4-characters-detail',
+      'layer-m-subjects', 's4-m-detail'
+    ];
     let changed = false;
+
+    const getSafeDepthY = (gEl) => {
+      // 全画面背景カバー（width>=760 かつ height>=500 の rect 等）が混入していた場合は最背面(-1000)扱い
+      const rects = gEl.querySelectorAll('rect');
+      for (const r of rects) {
+        const w = parseFloat(r.getAttribute('width') || '0') || 0;
+        const h = parseFloat(r.getAttribute('height') || '0') || 0;
+        if (w >= 760 && h >= 500) return -1000;
+      }
+      return estimateSvgGroupMaxYJS(gEl);
+    };
+
     for (const lid of targetIds) {
       const layer = doc.getElementById(lid);
       if (!layer) continue;
       const children = Array.from(layer.children);
       if (children.length >= 2 && children.every(ch => (ch.localName || ch.tagName || '').toLowerCase() === 'g')) {
-        const scored = children.map((ch, idx) => ({ ch, idx, maxY: estimateSvgGroupMaxYJS(ch) }));
+        const scored = children.map((ch, idx) => ({ ch, idx, maxY: getSafeDepthY(ch) }));
         const sorted = [...scored].sort((a, b) => (a.maxY - b.maxY) || (a.idx - b.idx));
         const orderChanged = sorted.some((item, i) => item.idx !== i);
         if (orderChanged) {
@@ -2741,6 +2757,46 @@ ${levelRules}
         }
       }
     }
+
+    // 【Z方向逆転の根本防止：ベース層＋ディテール層の奥行き統合インターリーブ】
+    // 例: layer-l-structures 内の「手前のテント(maxY=430)」の上に、s3-l-detail 内の「奥の校舎の入口(maxY=380)」が
+    // レイヤー分割のせいで覆いかぶさる現象を防ぐため、両方の子が独立した<g>群なら奥(maxY小)→手前(maxY大)へ統合整列する。
+    // 同一奥行き帯（12px以内）では常にベース(0)→ディテール(1)の順を維持し、自分のディテールは自分の上に乗る。
+    const pairedLayers = [
+      ['layer-l-structures', 's3-l-detail'],
+      ['layer-m-subjects', 's4-m-detail']
+    ];
+    for (const [baseId, detailId] of pairedLayers) {
+      const baseLayer = doc.getElementById(baseId);
+      const detailLayer = doc.getElementById(detailId);
+      if (!baseLayer || !detailLayer) continue;
+      const baseChildren = Array.from(baseLayer.children);
+      const detailChildren = Array.from(detailLayer.children);
+      if (baseChildren.length < 2 || detailChildren.length < 1) continue;
+      const allBaseAreG = baseChildren.every(ch => (ch.localName || ch.tagName || '').toLowerCase() === 'g');
+      const allDetailAreG = detailChildren.every(ch => (ch.localName || ch.tagName || '').toLowerCase() === 'g');
+      if (!allBaseAreG || !allDetailAreG) continue;
+
+      const baseItems = baseChildren.map((ch, idx) => ({ ch, idx, isDetail: 0, maxY: getSafeDepthY(ch) }));
+      const detailItems = detailChildren.map((ch, idx) => ({ ch, idx, isDetail: 1, maxY: getSafeDepthY(ch) }));
+      const maxBaseY = Math.max(...baseItems.map(x => x.maxY));
+      const minDetailY = Math.min(...detailItems.map(x => x.maxY));
+      // 奥のディテールが手前のベースオブジェクトより明らかに後ろ（14px以上奥）にある場合のみインターリーブを発動
+      if (minDetailY < maxBaseY - 14) {
+        const combined = [...baseItems, ...detailItems].sort((a, b) => {
+          const bandA = Math.round(a.maxY / 12);
+          const bandB = Math.round(b.maxY / 12);
+          if (bandA !== bandB) return bandA - bandB;
+          if (a.isDetail !== b.isDetail) return a.isDetail - b.isDetail;
+          return (a.maxY - b.maxY) || (a.idx - b.idx);
+        });
+        for (const item of combined) {
+          baseLayer.appendChild(item.ch);
+        }
+        changed = true;
+      }
+    }
+
     return changed;
   }
 
@@ -5645,9 +5701,9 @@ ${levelRules}
           let refineScope = 'add';
           try {
             const classifyPrompt = `ユーザーの絵の修正指示を、最も適切な1つのコードに分類してください（JSONや解説不要、コード1単語のみ出力）：
-- add : 前の絵を消さずに新しい要素を描き加える・増やす・細部を足すだけで実現できる（例：花を足して、鳥を増やして、笑顔にして、小物を置いて）
-- redo_m : 中規模の主役（人物・動物・ペット・卓上小物・ボート等）の位置・ポーズ・服装・色・削除など主役層の書き直しが必要
-- redo_l : 大型構成物（建物・山・大きな木・大きな家具・花畑の塊・船や電車等）の書き直し・削除・差し替えが必要
+- add : 前の絵の既存物を消さずに新しい要素を描き加える・増やす・細部を足すだけで実現できる（例：テントを追加して、花を足して、鳥を増やして、木を追加して、笑顔にして、小物を置いて）
+- redo_m : 中規模の主役（人物・動物・ペット・卓上小物・ボート等）の位置変更・ポーズ変更・服装変更・色変更・削除など主役層の書き直しが必要
+- redo_l : 既存の大型構成物（建物・山・大きな木・大きな家具・花畑の塊・船や電車等）自体の形や色の書き直し・削除・差し替えが必要
 - redo_xl : 特大の空間・背景（空の色・夕焼け/夜/昼・天気・海・床・壁・天井等）の書き直しが必要
 - redo_all : 絵のテーマや構図全体を別物に一から描き直す必要がある
 
@@ -5695,22 +5751,27 @@ ${levelRules}
             }
             logDiag(`🎨 [解像度維持・描き加え(add)] 元絵(${origVecCount}要素)を100%保持して「${feedback}」を追加します`);
             const refGroupId = `refinement-layer-${refUniqueTag}`;
+            const refBehindMId = `${refGroupId}-behind-m`;
             const addPrompt = `あなたは美術館品質の情景画を手掛けるSVGアーティストです。
 以下は、ご本人の大切な思い出を描いた既存の超細密SVG（${origVecCount}要素・viewBox="0 0 800 600"）です。
-**元の絵の要素は1つも消さず100%そのまま残し**、ご本人からの追加要望：「${feedback}」だけを高精細に重ねて描き加える \`<g id="${refGroupId}">...</g>\` を出力してください。
+**元の絵の要素は1つも消さず100%そのまま残し**、ご本人からの追加要望：「${feedback}」だけを高精細に重ねて描き加えてください。
 ${peopleUltraDetailNote}${visibleItemsPriorityNote}
 【元のSVGコード（座標・構図・色調の参照用）】:
 ${origSvgCode}
 
-【ミッション：前の絵に馴染む高精細な描き加え（目標 +70〜130要素）】
-1. 元の絵のパース・光の色・画風（${styleDesc}）に1pxのズレもなく自然に馴染ませること。
-2. 既存の建物や主役の顔に不自然に被らない位置へ配置し、登場人物を追加する場合は1人につき40要素以上の有機的ベジェ曲線（表情・髪・衣服・接地影）で描くこと。
-3. ドロップシャドウ用 \`<filter>\` は使用禁止。
-4. 出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}-\` 始まり）と \`<g id="${refGroupId}">...</g>\` のみ。解説やマークダウン枠は不要。`;
+【ミッション：正しい前後関係（Z方向オクルージョン）を守った高精細な描き加え（目標 +70〜130要素）】
+1. 元の絵のパース・光の色・画風（${styleDesc}）に1pxのズレもなく自然に馴染ませ、接地影を必ず描くこと。
+2. **【前後位置関係（Z順）の絶対厳守】**：
+   - 追加する要素が「既存の建物（校舎・入口・壁・家等）の手前」かつ「人物・主役（\`layer-m-subjects\`）の奥」にある場合（例：校舎の前にテント・ベンチ・看板・樹木を置く等）は、**\`<g id="${refBehindMId}">...</g>\`** に描くこと（自動で既存建物の前面、かつ人物の背面に配置されます）。
+   - 追加する要素が「人物・主役と同じかそれより手前」にある場合（例：手前の人物・ペット・花・小物等）は、**\`<g id="${refGroupId}">...</g>\`** に描くこと（自動で人物の前面に配置されます）。
+   - 手前に置く物体（テント等）は**不透明な塗り（fill-opacity="1"）で奥の建物（入口や壁）をしっかり隠す正しい遠近法で描くこと**。奥の建物に隠れて不自然に欠けさせたり透けさせたりしてはならない。
+3. 登場人物を追加する場合は1人につき40要素以上の有機的ベジェ曲線（表情・髪・衣服・接地影）で描くこと。ドロップシャドウ用 \`<filter>\` は使用禁止。
+4. 出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}-\` 始まり）と、必要なグループ（\`<g id="${refBehindMId}">...</g>\` および／または \`<g id="${refGroupId}">...</g>\`）のみ。解説やマークダウン枠は不要。`;
 
             const addRes = await callGeminiStageJS(addPrompt, null, 85000, 512, (raw) => {
               const m = mergeStageOutputJS(origSvgCode, raw, `${refUniqueTag}-`, [
-                { id: refGroupId, beforeLayers: ['s5final-paper-finish'] }
+                { id: refBehindMId, beforeLayers: ['layer-m-subjects', 's4-m-detail', 's5-atmosphere-fx', 's5final-paper-finish'] },
+                { id: refGroupId, beforeLayers: ['s5-atmosphere-fx', 's5final-paper-finish'] }
               ]);
               return (m && countSvgVectors(m) > origVecCount + 5) ? m : null;
             });
@@ -5806,7 +5867,8 @@ ${visibleItemsPriorityNote}
 ${workingSvg}
 
 【ミッション：修正指示を100%反映した大層 \`<g id="layer-l-structures">\` の精密造形（目標 +110〜150要素）】
-- 主役（\`layer-m-subjects\`）の背面に挿入されます。既存の主役や背景と美しく調和する座標で、建物・山・樹木・大家具・花畑・乗り物等の大型要素を有機的ベジェ曲線で造形してください。
+- 主役（\`layer-m-subjects\`）の背面に挿入されます。既存の主役や背景と美しく調和する座標で、建物・テント・山・樹木・大家具・花畑・乗り物等の大型要素を有機的ベジェ曲線で造形してください。
+- **【Z順・前後位置関係の厳守】**：1オブジェクト（校舎、テント、樹木、門など）につき必ず1つの独立した \`<g>\` にまとめ、**奥にあるもの（接地面Y座標が小さい＝校舎等）を先に、手前にあるもの（接地面Y座標が大きい＝校舎前のテント等）を後に**記述すること。手前の物体は不透明に塗り、奥の建物（入口や壁）をしっかり隠す正しい遠近法を守ること。
 - 出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}l1-\` 始まり）と \`<g id="layer-l-structures">...</g>\` のみ。解説やマークダウン枠は不要。`;
 
             const resL1 = await callGeminiStageJS(redoL1Prompt, null, 85000, 512, (raw) => {
@@ -5827,7 +5889,8 @@ ${visibleItemsPriorityNote}
 【今回細密化する \`layer-l-structures\` コード抜粋（座標に1pxのズレもなく重ねること！）】:
 ${newLCode}
 【ミッション：大層への超細密描き加え（目標 +130〜170要素）】
-屋根瓦・窓・外壁・樹皮と無数の葉・山肌・家具の木目や布柄・花びら等を \`<g id="s3-l-detail">...</g>\` へ徹底的に描き込んでください。
+- 屋根瓦・窓・外壁・入口・テントの布皺や支柱・樹皮と無数の葉・山肌・家具の木目や布柄・花びら等を \`<g id="s3-l-detail">...</g>\` へ徹底的に描き込んでください。
+- **【Z順・前後位置関係の厳守】**：必ず1オブジェクトにつき1つの独立した \`<g>\` で奥（接地面Y小）→手前（接地面Y大）の順に出力し、**手前の物体（テントや樹木等）に隠れている奥の建物の入口・壁・窓を上から描き潰さないこと**。
 出力は \`<defs>...</defs>\`（IDは \`${refUniqueTag}l2-\` 始まり）と \`<g id="s3-l-detail">...</g>\` のみ。解説やマークダウン枠は不要。`;
 
               const resL2 = await callGeminiStageJS(redoL2Prompt, resL1.model, 85000, 512, (raw) => {
@@ -6162,6 +6225,7 @@ ${baseFoundationSvg}
 
 【ミッション：大層（大型構成物・大景観）と「見えたもの」への超細密描き加え（目標 +130〜170要素）】
 上記の \`layer-l-structures\` に実際に描かれている大型要素（建物なら屋根瓦・窓・外壁目地・看板、樹木なら樹皮と無数の葉の重なり、山や岩なら稜線と陰影、家具なら木目や布の柄・皺、花畑なら無数の花びらと茎葉、船や電車なら構造ライン等）および、ご本人が語った「見えたもの・様子」に該当する景観要素の細部と立体感を \`<g id="s3-l-detail">...</g>\` へ徹底的に細かく描き加えてください（\`layer-m-subjects\` の背面に挿入されます）。
+必ず1オブジェクトにつき1つの独立した \`<g>\` で奥（接地面Y小）→手前（接地面Y大）の順に描き、手前の物体に隠れている奥の建物の入口・壁を上描きしないこと。
 **重要：机や天板の上に小物が乗る場合、布模様などで天板や主役を塗り潰さずクリアに見せること。**
 出力は \`<defs>...</defs>\`（IDは \`s3-\` 始まり）と \`<g id="s3-l-detail">...</g>\` のみ。解説やマークダウン枠は不要。`
                 },
